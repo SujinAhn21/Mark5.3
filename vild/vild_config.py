@@ -1,0 +1,545 @@
+# vild_config.py
+# 뭐가 많아질수록 힘들구나.  
+# [12:41]
+
+import math
+import torch
+from sentence_transformers import SentenceTransformer
+import os
+
+SHARED_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared_vild"))
+# [변경] append -> insert(0): prompt_bank 등 공용 모듈이 vild/ 등 다른 경로보다 항상 우선
+# 해석되도록 shared_vild를 sys.path 앞쪽에 둔다. (구버전 vild/prompt_bank.py shadow 방지)
+if SHARED_DIR not in os.sys.path:
+    os.sys.path.insert(0, SHARED_DIR)
+
+from prompt_bank import get_class_synonyms, get_prompt_templates, get_prompt_texts_for_class
+
+class AudioViLDConfig:
+    def __init__(self, mark_version="mark5.0"):
+        self.mark_version = mark_version
+
+        # ==============================================================================
+        # 1. 클래스 설정 (Mark Version 별)
+        # ==============================================================================
+        if self.mark_version == "mark4.1":
+            self.classes = ["heavy_impact", "others"]
+        elif self.mark_version == "mark4.2":
+            self.classes = ["dragging", "others"] 
+        elif self.mark_version == "mark4.3":
+            self.classes = ["construction", "others"] 
+        elif self.mark_version == "mark4.4":
+            self.classes = ["machine_noise", "others"]
+        elif self.mark_version == "mark4.5":
+            self.classes = ["media_talking", "others"]
+        elif self.mark_version == "mark4.6":
+            self.classes = ["water_toilet", "others"]
+        elif self.mark_version == "mark4.7":
+            self.classes = ["water_shower", "others"]
+        elif self.mark_version == "mark4.8":
+            self.classes = ["dog_bark", "others"]
+        elif self.mark_version == "mark5.0":
+            # [변경] 'dummy_label' 제거. mark5 학습/평가 경로는 load_and_segment_with_metadata만
+            # 사용하고 unlabeled는 label=-1로 처리되어 dummy_label이 실제로 쓰이지 않음(잔재).
+            # student 출력/loss는 아래 9개 클래스로 고정한다.
+            self.classes = [
+                "heavy_impact", "dragging", "construction", "machine_noise",
+                "media_talking", "water_toilet", "water_shower", "dog_bark",
+                "others",
+            ]
+        else:
+            raise ValueError(
+                f"[Error] Unknown or unsupported mark_version: '{self.mark_version}'.\n"
+                f"지원되는 값: ['mark4.1', 'mark4.2', 'mark4.3', 'mark4.4', 'mark4.5', 'mark4.6', 'mark4.7', 'mark4.8', 'mark5.0']"
+            )
+
+        # === 기존 속성 유지 ===
+        # labeled_classes는 이제 파서가 사용할 모든 클래스를 의미하게 됨
+        self.labeled_classes = self.classes
+        self.unlabeled_class_identifier = "unlabeled"
+        self.num_distinct_labeled_classes = len(self.labeled_classes)
+
+
+        # ==============================================================================
+        # 2. 오디오 및 모델 공통 파라미터
+        # ==============================================================================
+        # === 오디오 파라미터 ===
+        self.sample_rate = 16000
+        self.segment_duration = 1.0
+        self.segment_samples = int(self.sample_rate * self.segment_duration)
+        self.fft_size = 1024
+        self.hop_length = 160
+        self.n_mels = 64
+
+        # === Segment 단위 처리 ===
+        self.segment_length = 101   # Mel spectrogram time frame 수
+        self.segment_hop = 50       # Segment 간 stride
+        self.max_segments = 5       # Teacher가 사용할 최대 segment 수
+
+        # === 모델 파라미터 ===
+        self.embedding_dim = 384
+        self.use_background_embedding = True
+        # [추가] background embedding 보조 loss 가중치 (use_background_embedding=True일 때만 의미 있음)
+        self.background_embedding_weight = 0.1
+        # [신설 2026-08-22] 평가에서 others 로짓에 background embedding 을 max 로 덮어쓸지 여부.
+        # False 가 기본이다(=덮어쓰지 않는다).
+        #
+        # 1차 학습(val 430) 결과에서 accuracy 0.1209 인데 ROC AUC 는 0.8871 이 나와 원인을 추적한
+        # 결과 이 override 였다. prediction_details CSV 실측: 430클립 중 417개(97.0%)에서 others 가
+        # 1등이었고, others 가 아닌 383개 중 316개(82.5%)는 정답이 정확히 2등이었다. others 열을
+        # 빼고 argmax 만 다시 계산하면 8클래스 정확도가 0.859 였다. 즉 모델은 제대로 배웠는데
+        # others 하나가 모든 클립 위에 일률적으로 얹혀 있었다(Prob_others 평균 0.81, 정답이
+        # others 인 클립 0.95 와 거의 차이가 없음).
+        #
+        # 구조상 그럴 수밖에 없다. 학습(train_mark5.py:533)은 background 를 others 샘플 feature 의
+        # 평균 방향으로 당기는 보조 loss 만 걸고 **분류 로짓에는 넣지 않는다.** 그런데 평가만
+        # others_logit = max(text_logit, cos(feature, bg)/logit_temperature) 로 덮었다. max 라
+        # others 를 올리기만 하고 내리지는 못하는데다, 같은 인코더가 뽑은 feature 라 다른 클래스도
+        # bg 와 방향이 겹치고, logit_temperature(0.07)로 나누면서 14.3배로 증폭된다.
+        # (학습 종료 시 bg_loss 0.1040 = cos(others feature, bg) 약 0.896.)
+        #
+        # mark4.8 이 2026-07-12 에 잡은 background embedding override 와 같은 물건이다. 다만
+        # 거기서는 Hard loss 가 랜덤 근처에서 안 움직여 "학습부터 꺼야 한다"는 결론이었고,
+        # mark5 는 override 가 평가에만 있어 Hard loss 가 1.396->0.495 로 정상 수렴했다.
+        # 그래서 재학습 없이 평가만 다시 돌리면 된다.
+        #
+        # 보조 loss 자체(use_background_embedding)는 끄지 않는다. others feature 를 한 방향으로
+        # 모으는 것은 해롭지 않고, 파괴적인 것은 평가 시점의 max 덮어쓰기뿐이다.
+        self.use_background_override_at_eval = False
+        self.use_text_aligned_student = True
+        self.use_feature_kd = True
+        self.feature_kd_weight = 0.3
+        self.feature_kd_loss_type = "cosine_l1"
+
+        # === DKD (Decoupled Knowledge Distillation, Zhao et al. 2022) ===
+        # [신설 2026-08-09] soft loss 계산 방식을 vanilla KD <-> DKD 로 갈아끼우는 스위치.
+        # False 면 기존 경로(단일 KL divergence)를 그대로 타므로 지금까지의 학습과 동일하다.
+        #
+        # 왜 mark5 에서야 넣는가: DKD 는 KD 손실을 TCKD(타겟 vs 비타겟 이진 분포)와
+        # NCKD(비타겟 클래스들끼리의 분포)로 분해한다. mark4.x 는 2-class 라 비타겟이 1개뿐이라
+        # NCKD 가 항상 0 이고 DKD 가 vanilla 의 상수배(no-op)였다(2026-07-15 확인). 9-class 인
+        # mark5 에서 처음으로 의미를 갖는다.
+        #
+        # ⚠타겟 클래스는 **teacher 앙상블의 argmax** 를 쓴다. 원논문은 supervised 세팅이라
+        # ground-truth 라벨로 타겟을 정하는데, mark5 의 KD 는 unlabeled 에 걸리므로 정답이 없다.
+        # 이미 teacher 의 판정을 믿고 배우는 구조라 신뢰 구조가 새로 나빠지지는 않지만,
+        # **원논문 그대로가 아닌 변형**이므로 논문에 밝혀야 한다.
+        #
+        # beta=1.0 인 이유: vanilla KD 를 분해하면 KD = TCKD + (1 - p_t)·NCKD 라서 teacher 가
+        # 확신할수록(p_t -> 1) NCKD 가 눌린다. beta=1.0 은 "그 눌림만 푼다"는 뜻이고 그 이상
+        # 증폭하지 않는다. 원논문 권장값(CIFAR-100 beta=8, ImageNet beta=2)은 클래스가 100~1000개
+        # 일 때의 값이라, 9-class 인 여기서는 정보가 아니라 노이즈를 키울 위험이 크다.
+        self.use_dkd = False
+        self.dkd_alpha = 1.0
+        self.dkd_beta = 1.0
+        self.visual_view_type = "mel_delta"
+        self.segment_selection_mode = "salient_topk"
+        self.max_visual_segments = self.max_segments
+        self.logit_temperature = 0.07
+        self.segment_aggregation_mode = "confidence_saliency"
+        self.segment_confidence_power = 2.0
+        self.segment_saliency_power = 1.0
+        # === [신설 2026-08-22] others 결정 방식 ===
+        # "direct"     : Prob_others >= others_direct_threshold 이면 others (기본)
+        # "confidence" : 옛 방식 — top_conf/margin/entropy 세 조건 중 하나라도 걸리면 others 로 강제
+        #
+        # 옛 방식은 "모르겠으면 others" 라서 모델의 전반적인 확신도에 결과가 휘둘린다.
+        # pseudo-label CE 로 student 확신도가 0.4384 -> 0.8047 로 오르자 같은 임계값에서
+        # 강제 건수가 204 -> 22 로 줄며 others recall 이 0.574 -> 0.191 로 무너졌는데,
+        # 정작 others 단독 AUC 는 0.9754 -> 0.9871 로 올라 있었다. 규칙이 정보를 못 꺼낸 것이다.
+        # 근거 실측과 스윕표는 vild/postprocess_utils.py 의 apply_others_calibration docstring 참조.
+        self.others_decision_mode = "direct"
+        # [갱신 2026-08-23] 0.14 -> 0.09. 최종 채택 모델이 mark5.0_PL_SA(SpecAugment 포함)로
+        # 바뀌면서 확률 분포가 이동해 val 430클립 스윕을 다시 돌린 값이다
+        # (SA 모델: thr 0.09 -> acc 0.8814 / macroF1 0.8820. thr 0.14 였다면 0.8674/0.8667).
+        # 0.14 는 SpecAugment 없는 mark5.0_PL 의 최적값이었다.
+        # ⚠ val 에서 고른 값이라 낙관 편향이 있고, 재학습하면 반드시 다시 스윕한다(모델 종속).
+        self.others_direct_threshold = 0.09
+        # === [신설 2026-09-07 / Mark5_EXP2] others 임계값을 어떻게 정하나 ===
+        # 2026-09-06 까지는 위 0.09(반지도 모델 하나의 val 로 고른 값)를 바닥(u0)·천장(ceil)·데이터효율
+        # 30회 전부에 고정해 썼다. 그런데 진짜 others 라벨로 배운 지도학습 student 는 Prob_others 가
+        # 정상적으로 올라와서 0.09 로는 타겟 클립까지 others 로 쏟아졌다(천장 5회 others 정밀도 0.27~0.44,
+        # media_talking 재현율 0.08~0.63). 조건마다 val 에서 고른 값은 u0 0.18~0.20 · ceil 0.18~0.24 ·
+        # u2000 0.06~0.11 로 갈렸다(2026-09-07 실측, Mark5_EXP model/reselect_others_threshold.py).
+        # 운영점은 모델(조건)마다 val 에서 고르는 것이 비교의 전제라, 회차마다 자동으로 고른다.
+        #   "val_select" (기본): eval.py --split val 이 아래 격자를 훑어 val Macro F1 최대값을 골라
+        #                 plots/others_threshold_<run_tag>.json 에 저장하고, --split test 는 그 파일을 읽는다.
+        #                 run_experiments.py 가 학습 -> val -> test 순서로 돌리므로 따로 할 일은 없다.
+        #   "fixed"     : 위 others_direct_threshold 를 그대로 쓴다(옛 동작 재현용).
+        self.others_threshold_mode = "val_select"
+        self.others_threshold_grid = (0.02, 0.95, 0.01)     # (시작, 끝, 간격). 끝 포함
+        self.others_threshold_criterion = "macro_f1"        # val 에서 최대화할 지표(현재 macro_f1 만 지원)
+        # 아래 셋은 others_decision_mode="confidence" 일 때만 쓰인다.
+        self.others_confidence_threshold = 0.45
+        self.others_margin_threshold = 0.05
+        # [삭제 2026-07-11] others_entropy_threshold 하드코딩(0.82) 제거, 아래 property로 대체.
+        # mark4_refactored에서 발견: 이 값이 클래스 수와 무관한 절대값으로 고정돼 있으면,
+        # 클래스 수가 다른 mark_version 사이에서 confidence_threshold와 어긋난 엄격도로 작동함
+        # (mark4.x 2-class에서 confusion matrix 완전 붕괴의 근본 원인이었음, 자세한 내용은
+        # mark4_refactored/vild/vild_config.py의 동일 property 주석 참조).
+        # mark5(9-class)는 기존 하드코딩값(0.82)이 우연히 confidence_threshold(0.45)와 거의
+        # 같은 엄격도(top_conf≈0.47 지점)였어서 이 변경으로도 동작이 거의 그대로 유지된다.
+        # [비활성 2026-08-21] class-pair 보정을 끈다(빈 dict = 아무 짝도 손대지 않음).
+        # 이 보정은 두 클래스의 확률 격차가 threshold(0.03) 미만이면 둘을 평균내 동점으로
+        # 만드는데, 동점은 margin=0 이라 바로 뒤 others 보정(margin<0.05 면 others 강제,
+        # postprocess_utils.py:38)에 반드시 걸린다. 즉 이 보정이 예측을 실제로 바꾸는 경우
+        # (그 짝이 top-2 인 경우)마다 그 결정이 others 로 덮여, 결정 기구로서는 죽어 있었다.
+        # 게다가 동점을 argmax 로 풀면 클래스 목록에서 인덱스가 앞선 쪽(construction,
+        # water_toilet)이 항상 이기는데, 이건 측정으로 정한 우선순위가 아니라 코드에 적힌 순서다.
+        # 끄는 결정적 이유는 스윕 오염이다. 보정이 걸린 클립은 prediction_details CSV 의
+        # Raw Margin 이 실제 값(0.03 미만의 어떤 값)이 아니라 인위적인 0 으로 기록되어,
+        # 나중에 others margin 임계값을 0~0.03 구간에서 스윕할 때 정작 제일 궁금한 짝 클래스
+        # 구간의 숫자를 믿을 수 없게 된다. 빈 dict 면 apply_class_pair_calibration 이
+        # 루프를 한 번도 안 돌고 입력을 그대로 반환한다.
+        self.class_pair_margin_overrides = {}
+        self.enable_temporal_smoothing = True
+        self.temporal_smoothing_alpha = 0.65
+        self.enable_abstention = False
+        self.abstention_confidence_threshold = 0.40
+        # [추가] eval 시 supervised_features 로짓과 distill_features 로짓을 섞는 비중.
+        # 0=supervised만, 1=distill만, 0.5=평균
+        self.distill_branch_eval_weight = 0.5
+        self.explain_topk_segments = 3
+        # [변경 2026-08-30 / Mark5_EXP] True -> False.
+        # 이 저장소는 반복실험(5 seed x 5 unlabeled 조건 = 25회)을 돌리는 곳이다.
+        # 설명 PNG 는 계보 하나당 67~133MB 라 25회면 2~3GB 가 쌓이는데, 논문의 표·곡선에는
+        # 쓰이지 않는다(클립별 세그먼트 기여도를 눈으로 보는 진단용). 필요하면 최종 조건
+        # 1회만 True 로 바꿔 따로 뽑으면 된다. 원본 Mark5 저장소는 True 그대로 두었다.
+        self.save_visual_explanations = False
+        self.encoder_type = "cnn"
+        # [추가 2026-08-17] mark4.x teacher 8개는 2026-07-13 teacher 강화 이후 4블록
+        # TeacherAudioEncoder(약 49만 파라미터)로 학습돼 있다. mark5 의 EnsembleTeacher 가
+        # 그 .pth 를 읽을 때 같은 구조로 만들어야 하므로 True 로 둔다.
+        # False 로 두면 student 용 SimpleAudioEncoder(3블록)를 만들어 state_dict 가 안 맞는다.
+        # (student 자신의 인코더는 encoder_type 이 정하고 이 값의 영향을 받지 않는다.)
+        self.use_large_teacher_encoder = True
+
+        # === 학습 파라미터 ===
+        self.batch_size = 16
+        self.num_epochs = 80
+        self.learning_rate = 1e-4
+        # [추가 2026-08-17] mark4.x 와 학습 절차를 같게 맞추기 위한 값들.
+        # mark4.x 는 weight_decay 가 없어 val best 를 이른 에폭에 찍고 곧장 과적합하던 것을
+        # 실측하고 1e-4 를 넣었다. early stopping patience 10 도 mark4.x 와 같은 값이다.
+        self.weight_decay = 1e-4
+        self.early_stopping_patience = 10
+        # [추가 2026-08-17] KD 하이퍼파라미터. 값은 컨퍼런스 코드(mark3.2)에서 검증한 0.7 / 4.0 그대로이고,
+        # train_mark5.py 에 하드코딩돼 있던 것을 config 로 뺀 것뿐이다.
+        # mark4.x 의 0.3 / 2.0 은 같은 샘플에 hard·soft 를 함께 거는 구조에서 나온 값이라 옮겨오지 않는다.
+        # [변경 2026-08-22] 0.7 -> 0.3. 아래 use_pseudo_label_ce 로 unlabeled 신호가
+        # "teacher 분포 따라하기(KL)" 에서 "teacher 가 고른 정답으로 CE" 로 바뀌면서
+        # alpha 의 의미가 달라졌다. 이제 두 항이 모두 CE 이고, unlabeled 쪽 정답은
+        # 사람 라벨이 아니라 정확도 0.894 짜리 pseudo-label 이다. 정확도가 낮은 쪽이
+        # 사람 라벨보다 2.33 배 무거우면 안 되므로, mark4.x 와 같은 0.3 으로 내린다.
+        self.distill_alpha = 0.3
+        self.distill_temperature = 4.0
+        # [추가 2026-08-18] teacher fusion 의 others 칸 조립 규칙: "min" | "mean" | "max".
+        # fusion_score_mode 가 "raw" 일 때만 쓰인다("margin" 이면 others 칸이 -max(margin) 로
+        # 정해져 이 값이 무시된다). 실측 근거는 vild/teacher_fusion.py docstring 참조.
+        self.fusion_others_rule = "min"
+
+        # === [신설 2026-08-22] teacher 조립 방식과 pseudo-label 학습 ===
+        # 배경: 1차 학습 뒤 실측에서 (a) fused teacher 자신의 val 정확도가 0.7488 로
+        # student(0.8395)보다 낮고, (b) T=4.0 에서 soft target 의 정규화 엔트로피가 0.9704 로
+        # 거의 균등분포라 KL 이 나르는 정보가 0.0113 nats 뿐이고, (c) 그런데도 teacher 의
+        # argmax 는 non-others 에서 0.8940 로 꽤 맞는다는 것이 확인됐다.
+        # 결론: teacher 에게서 분포를 받지 말고 **정답만** 받는다. 그게 mark3.0.0 의 원래
+        # hybrid(soft label 의 argmax 를 hard label 로 쓰는 방식)이기도 하다.
+
+        # 담당 칸에 target 로짓 원본을 넣을지(raw) margin(target-others)을 넣을지(margin).
+        # margin 이 전문가별 스케일 차이(평균 2.07, 표준편차 3.8배)를 상쇄한다.
+        self.fusion_score_mode = "margin"
+        # unlabeled 손실을 KL(분포 따라하기) 대신 pseudo-label CE 로 건다.
+        self.use_pseudo_label_ce = True
+        # pseudo-label 채택 임계값. 담당 전문가의 "내 클래스" 확률(specialist positive weight)
+        # 최대값이 이 값 미만이면 그 샘플은 학습에서 통째로 뺀다. 8명 중 아무도 확신하지 못한
+        # 클립에 억지로 정답을 붙이면 그 오답이 그대로 student 에게 주입되기 때문이다.
+        # 0.5 는 "적어도 한 명은 자기 것이라고 말한다"는 뜻이다.
+        self.pseudo_label_min_confidence = 0.5
+        # 채택된 샘플에 per-sample 가중치를 준다. 가중치는 그 최대 확률값 자체.
+        # 확신이 0.95 인 클립과 0.52 인 클립을 같은 무게로 배우지 않게 한다.
+        self.pseudo_label_confidence_weighting = True
+        # distill branch 에도 분류 손실(pseudo CE)을 건다.
+        # 지금까지 이 갈래는 feature KD 만 받아 분류를 배운 적이 없는데, eval 에서는
+        # distill_branch_eval_weight=0.5 로 최종 확률의 절반을 차지하고 있었다.
+        self.distill_branch_classify = True
+        # distill branch 마지막 ReLU. 기본은 뺀다(근거는 vild/vild_head.py docstring).
+        self.distill_branch_final_relu = False
+
+        # === [신설 2026-08-22] 분포 정렬 (distribution alignment) ===
+        # pseudo-label 의 클래스 분포가 균등에서 벗어난 것을 학습 단계에서 잡는다.
+        # 실측(unlabeled 300클립 1500세그먼트): construction 19.2% / others 2.4% (균등 11.1%).
+        # 그 편향이 test 혼동행렬에 그대로 — construction FP 21건(precision 0.687),
+        # others recall 0.660. test 에서 클래스 가중치를 직접 최적화하면 acc 0.9000 까지 오르고
+        # 그때 필요한 가중치가 construction 0.25 / others 2.2 로 이 편향의 역수 방향이다.
+        #
+        # ⚠사후 보정은 이미 실패했다 — val 430클립으로 클래스 가중치를 맞추니 val 은
+        # 0.8814 -> 0.9023 인데 test 는 0.8581 -> 0.8581 로 전혀 안 움직였다(파라미터 10개를
+        # 430샘플로 맞춰 과적합). 그래서 학습 단계에서 고친다. 여기서는 unlabeled 세그먼트
+        # 10,000개 위에서 분포를 추정하므로 표본이 23배 크고 추정·적용 대상이 같다.
+        # ★[결론 2026-08-23] 끈다. 재학습으로 검증한 결과 student 성능이 개선되지 않았다.
+        #
+        # 1) teacher 는 확실히 좋아졌다. val 430클립에 teacher 를 통과시킨 스윕
+        #    (model/sweep_dist_align.py):
+        #      tau    off     0.25    0.5     0.75    1.0
+        #      acc    0.8744  0.8860  0.8860  0.8930  0.8977   (+2.33%p)
+        #      othR   0.362   0.404   0.404   0.426   0.447    (+8.5%p)
+        #      균등L1  0.1736  0.1550  0.1550  0.1354  0.1261
+        #    실측 편향(teacher 관측 분포, 균등 = 0.1111):
+        #      construction 0.1479(x0.75) · machine_noise 0.1479(x0.75) · others 0.0539(x2.06)
+        #
+        # 2) 그런데 tau=1.0 으로 재학습한 student 는 나아지지 않았다. 각자의 최적 others
+        #    임계값에서 공정 비교한 val 430 결과:
+        #      PL       acc 0.8814 / macroF1 0.8807  (thr 0.14)
+        #      PL+DA1   acc 0.8791 / macroF1 0.8772  (thr 0.11)
+        #    차이가 1클립이고, 정답이 top-2 안에 드는 비율은 0.9442 로 **완전히 같다**.
+        #    바뀐 것은 클래스 배분뿐이다 — others +0.128(0.787->0.915) 를 얻고
+        #    machine_noise -0.083(0.750->0.667) 을 잃어 총합이 상쇄됐다.
+        #
+        # 3) 왜 전달되지 않았나: student 가 이미 teacher 와 같은 수준이었다
+        #    (student 0.8814 vs teacher 0.8744). 선생이 좋아져도 학생이 이미 그만큼 하고 있으면
+        #    배울 것이 없다. 게다가 teacher 신호는 alpha=0.3 으로 가중되고 나머지 0.7 은
+        #    labeled hard CE 다. 같은 이유로 DKD 도 접었다(2026-08-23).
+        #
+        # 코드는 남겨둔다. teacher 와 student 의 격차가 큰 상황(예: labeled 를 크게 줄인
+        # 저라벨 실험)에서는 다시 의미가 생길 수 있고, 그때 True 로 켜면 된다.
+        self.use_distribution_alignment = False
+        # 보정 강도. 0=no-op, 1=관측 분포를 목표 분포로 완전 정렬.
+        # 1.0 은 위 스윕에서 teacher 품질이 최고였던 값이라 켤 때의 기본값으로 남겨둔다.
+        self.dist_align_tau = 1.0
+        # 관측 분포 EMA. 0.999 면 최근 수천 배치의 분포에 수렴한다.
+        self.dist_align_momentum = 0.999
+
+        # === [신설 2026-08-23] SpecAugment (학습 시 온라인 증강) ===
+        # mel 배치의 주파수 대역·시간 구간을 무작위로 가린다. 학습 루프에서만 걸리고
+        # (Dataset 은 파싱 결과를 초기화 때 고정하므로 파서에 넣으면 epoch 마다 같은 마스크가
+        # 나와 증강이 아니게 된다), val 루프와 eval.py 는 원본을 그대로 본다.
+        #
+        # 왜: (1) 클래스당 학습 클립이 222개뿐이라 결정 경계가 얇다 — test 에서 오답의
+        # 대부분(53클립)이 "정답이 2위"였다. 마스킹은 한 가지 단서에 매달리는 지름길을 막아
+        # 그 경계를 두껍게 만드는 표준 기법이다(SpecAugment, Park et al. 2019).
+        # (2) 증강이 없으면 teacher 가 같은 입력에 늘 같은 값을 내므로 online KD 가
+        # offline 과 수치적으로 동일했다(train_mark5.py 의 캐시 주석이 스스로 밝히던 사실).
+        # 증강이 들어가면 매 epoch 다른 view 가 teacher 에 들어가 실시간 재계산이 실제로
+        # 의미를 갖는다.
+        self.use_spec_augment = True
+        # 보수적인 표준 강도. 64 mel 중 최대 8칸짜리 주파수 마스크 2개,
+        # 101 프레임 중 최대 16칸짜리 시간 마스크 2개.
+        self.spec_augment_freq_mask_param = 8
+        self.spec_augment_num_freq_masks = 2
+        self.spec_augment_time_mask_param = 16
+        self.spec_augment_num_time_masks = 2
+        # teacher 가 어느 view 를 보는가.
+        #   "augmented" : student 와 같은 증강 view (기본) — 진짜 online. 증강마다 pseudo-label 이
+        #                 재계산되고, 가려진 view 에서 앙상블 합의가 깨지는 클립은 선별
+        #                 (pseudo_label_min_confidence)이 걸러낸다.
+        #   "clean"     : teacher 는 원본, student 만 증강 view (FixMatch 식 일관성 정규화) —
+        #                 pseudo-label 품질(0.894)이 보존되는 안전한 대안.
+        self.spec_augment_teacher_view = "augmented"
+
+        # ==============================================================================
+        # [신설 2026-08-30 / Mark5_EXP 전용] 반복실험 설정
+        # ==============================================================================
+        # 2026-08-24 랩미팅 피드백 1·2·8번을 위한 값들이다. 세 값 모두 CLI 인자로 덮어쓰며,
+        # 아무 인자도 안 주면 기존 Mark5 와 완전히 같은 동작이 된다(기본값이 옛 동작).
+        #
+        #   experiment_seed : 이 학습에 쓴 seed. run_tag 에 반영돼 산출물이 안 덮인다.
+        #                     None = 인자 미지정(seed 42 사용, 태그 없음).
+        #   unlabeled_n     : unlabeled 를 몇 개만 쓸지(데이터효율곡선용).
+        #                     None = 전량 사용(태그 없음). 0 이면 지식증류가 통째로 꺼진다.
+        #   cudnn_deterministic : 같은 seed 로 돌렸을 때 GPU 연산 순서까지 고정할지.
+        #                     True 면 학습이 10~20% 느려지는 대신 결과가 완전히 재현된다.
+        #                     seed 를 매번 바꾸는 것과 충돌하지 않는다 — "seed 마다 다른 결과,
+        #                     각 seed 는 재현 가능"이 되어 논문에 seed 목록을 적을 수 있다.
+        self.experiment_seed = None
+        self.unlabeled_n = None
+        self.cudnn_deterministic = True
+        # [신설 2026-09-06 / Mark5_EXP] 천장(upper bound) 조건.
+        #   True 면 unlabeled 2,000개에 가려 두었던 진짜 라벨(data_provenance target_class)을
+        #   붙여 **지도학습**으로 돈다. teacher 는 부르지 않는다. Cances et al. (2022) 의
+        #   "Supervised, 라벨 100%" 기준선이며, run_tag 에 _ceil 이 붙는다(_u<n> 대신).
+        #   이 조건으로 학습한 모델은 제안 모델이 아니라 상한을 재는 기준선이다.
+        self.ceiling = False
+
+        self.text_loss_weight = 1.0
+        self.image_loss_weight = 1.0
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        # === 데이터 경로 ===
+        self.audio_dir = os.path.join("data_wav")
+        self.prompt_bank_path = os.path.join(SHARED_DIR, "resources", "prompt_bank.json")
+
+        # === 내부 캐시 ===
+        self._text_emb = None
+        self._eval_text_emb = None # 평가용 텍스트 임베딩 캐시 추가
+        self._prompt_texts = None
+        self.prompt_templates = get_prompt_templates(self.prompt_bank_path)
+        self.class_synonyms = get_class_synonyms(self.prompt_bank_path)
+
+
+    # ==============================================================================
+    # 3. 클래스 및 텍스트 관련 메서드
+    # ==============================================================================
+    def get_class_index(self, class_name: str) -> int:
+        """주어진 클래스 이름의 인덱스를 반환. Unlabeled의 경우 -1을 반환."""
+        if class_name in self.labeled_classes:
+            return self.labeled_classes.index(class_name)
+        elif class_name == self.unlabeled_class_identifier:
+            return -1
+        else:
+            raise ValueError(
+                f"[Config Error] '{class_name}'는 mark_version '{self.mark_version}'에 등록되지 않은 클래스입니다.\n"
+                f"=> 현재 사용 가능한 클래스: {self.labeled_classes}"
+            )
+
+    def get_classes_for_parser(self) -> list:
+        """
+        데이터 파싱 시 유효한 모든 레이블 목록을 반환. (dummy_label 포함)
+        학습 데이터셋 구성 시 사용됨.
+        """
+        return self.labeled_classes
+
+    def get_classes_for_text_prompts(self) -> list:
+        """
+        [기존 호환성 유지] 텍스트 프롬프트 생성에 사용될 클래스 목록을 반환.
+        기본적으로 파서용 클래스 목록과 동일하게 동작함.
+        """
+        return self.labeled_classes
+    
+    def get_classes_for_evaluation(self) -> list:
+        """
+        [추가된 메서드] 모델 성능 평가에 사용될 실제 타겟 클래스 목록을 반환.
+        'dummy_label'과 같이 평가에 사용되지 않는 레이블은 제외됨.
+        """
+        # self.classes 리스트에서 'dummy_label'을 필터링하여 반환
+        return [cls for cls in self.classes if cls != 'dummy_label']
+
+    def get_target_label_map(self) -> dict:
+        """
+        [수정] 평가용 클래스 목록을 기준으로 라벨-인덱스 맵을 생성함.
+        모델의 최종 출력과 매칭시킬 때 사용됨.
+        """
+        # 평가용 클래스 목록을 사용하도록 변경
+        return {class_name: i for i, class_name in enumerate(self.get_classes_for_evaluation())}
+
+    @property
+    def run_tag(self) -> str:
+        """[신설 2026-08-21 / 확장 2026-08-22] 산출물 파일명에 붙일 실행 태그.
+
+        서로 다른 학습 설정이 같은 이름으로 저장돼 앞선 결과를 덮는 것을 막는다.
+        붙는 순서는 아래 코드 그대로이고, 조합되면 이어붙는다(예: mark5.0_PL_DKD).
+
+            (없음) : 1차 학습과 완전히 같은 설정 — vanilla KD, raw 조립
+            _PL    : use_pseudo_label_ce=True  (unlabeled 를 KL 대신 pseudo-label CE 로)
+            _RAW   : fusion_score_mode="raw"   (PL 을 쓰면서 옛 조립으로 되돌린 경우만)
+            _SA    : use_spec_augment=True     (학습 시 SpecAugment 온라인 증강)
+            _DA<t> : use_distribution_alignment=True (t = tau 를 소수점 없이, 예: tau 0.5 -> _DA05)
+            _DKD   : use_dkd=True
+            _u<n>  : unlabeled_n 이 지정됨 (데이터효율곡선 조건, 예: _u500 · _u0)
+            _ceil  : ceiling=True (천장 조건 — unlabeled 에 진짜 라벨을 붙인 지도학습, _u<n> 대신 붙음)
+            _s<k>  : experiment_seed 가 지정됨 (반복실험 seed, 예: _s1)
+
+        [확장 2026-08-30 / Mark5_EXP] 뒤의 두 태그가 이 저장소에서 추가됐다.
+        25회(5조건 x 5seed)를 돌리는데 이게 없으면 산출물 9종이 전부 같은 이름이라
+        앞 결과를 덮는다. 예: mark5.0_PL_SA_u2000_s1 · mark5.0_PL_SA_u0_s3
+        인자를 안 주면 둘 다 안 붙어 기존 Mark5 와 파일명이 완전히 같다.
+
+        태그가 갈리는 산출물: student 체크포인트 · 손실곡선 PNG · loss_history CSV ·
+        혼동행렬 · ROC · performance_summary · calibration_details ·
+        prediction_details · 설명 PNG 폴더.
+
+        일부러 태그를 안 붙이는 것: cache/{mark_version}/ 의 teacher feature 캐시,
+        resources/ 의 teacher .pth, dataset_*.csv 인덱스.
+
+        ⚠ eval.py 도 이 태그로 체크포인트를 찾으므로, 학습과 평가의 config 가 같아야 한다.
+        """
+        tag = self.mark_version
+        if getattr(self, "use_pseudo_label_ce", False):
+            tag += "_PL"
+            if getattr(self, "fusion_score_mode", "margin") == "raw":
+                tag += "_RAW"
+        if getattr(self, "use_spec_augment", False):
+            tag += "_SA"
+        if getattr(self, "use_distribution_alignment", False):
+            # tau 를 태그에 넣는다. tau 를 바꿔가며 돌릴 때 산출물이 서로를 덮지 않게.
+            _t = getattr(self, "dist_align_tau", 0.5)
+            tag += "_DA" + f"{_t:g}".replace(".", "")
+        if self.use_dkd:
+            tag += "_DKD"
+        # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그.
+        # None 이면 안 붙는다(= 인자 미지정 = 기존 Mark5 와 같은 파일명).
+        # 0 도 유효한 조건이므로 "is not None" 으로 판정한다("if n:" 이면 0 이 빠진다).
+        # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil 이 들어간다.
+        #   mark5.0_PL_SA_ceil_s1 처럼 되며, 기존 25회(_u2000_s1 등)와 절대 겹치지 않는다.
+        #   집계(aggregate_results.py)는 이 접미사를 보고 천장 행으로 따로 모은다.
+        if getattr(self, "ceiling", False):
+            tag += "_ceil"
+        else:
+            _n = getattr(self, "unlabeled_n", None)
+            if _n is not None:
+                tag += f"_u{int(_n)}"
+        _s = getattr(self, "experiment_seed", None)
+        if _s is not None:
+            tag += f"_s{int(_s)}"
+        return tag
+
+    @property
+    def others_entropy_threshold(self) -> float:
+        """
+        [추가 2026-07-11] others_confidence_threshold와 "같은 엄격도(같은 top_conf 지점)"가
+        되도록 클래스 수 기반으로 자동 역산한다. top_conf=confidence_threshold이고 나머지
+        확률이 (클래스수-1)개에 균등분산되는 최악의 경우를 가정해 그때의 정규화 entropy를
+        threshold로 삼는다. 클래스 수가 다른 mark_version 사이에서 entropy 조건이
+        confidence 조건보다 부당하게 엄격/느슨해지는 것을 방지한다.
+        """
+        p = self.others_confidence_threshold
+        n = self.num_distinct_labeled_classes
+        if n <= 1:
+            return 1.0
+        rest = 1.0 - p
+        probs = [p] + [rest / (n - 1)] * (n - 1)
+        entropy = -sum(x * math.log(x, 2) for x in probs if x > 1e-12)
+        return entropy / math.log2(n)
+
+    @property
+    def num_input_channels(self) -> int:
+        if self.visual_view_type == "mel":
+            return 1
+        if self.visual_view_type == "mel_delta":
+            return 3
+        if self.visual_view_type == "mel_energy":
+            return 2
+        return 1
+
+    def get_prompt_texts_for_class(self, class_name: str) -> list:
+        return get_prompt_texts_for_class(class_name, self.prompt_bank_path)
+
+    def get_class_text_embeddings(self, for_evaluation: bool = False) -> torch.Tensor:
+        """
+        클래스 이름에 대한 텍스트 임베딩을 생성하여 반환함.
+        :param for_evaluation: True일 경우, 평가용 클래스 목록을 사용하여 임베딩을 생성함.
+        """
+        if for_evaluation:
+            # 평가용 임베딩 생성 및 캐싱
+            if self._eval_text_emb is None:
+                classes = self.get_classes_for_evaluation()
+                model = SentenceTransformer('all-MiniLM-L6-v2', device=self.device)
+                aggregated = []
+                for class_name in classes:
+                    prompts = self.get_prompt_texts_for_class(class_name)
+                    emb = model.encode(prompts, convert_to_tensor=True).to(self.device)
+                    aggregated.append(emb.mean(dim=0))
+                self._eval_text_emb = torch.stack(aggregated, dim=0)
+            return self._eval_text_emb
+        else:
+            # 학습용(기존) 임베딩 생성 및 캐싱
+            if self._text_emb is None:
+                classes = self.get_classes_for_text_prompts()
+                model = SentenceTransformer('all-MiniLM-L6-v2', device=self.device)
+                aggregated = []
+                for class_name in classes:
+                    prompts = self.get_prompt_texts_for_class(class_name)
+                    emb = model.encode(prompts, convert_to_tensor=True).to(self.device)
+                    aggregated.append(emb.mean(dim=0))
+                self._text_emb = torch.stack(aggregated, dim=0)
+            return self._text_emb

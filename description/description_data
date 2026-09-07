@@ -1,0 +1,8 @@
+일단 데이터 이름이 레이블 데이터의 경우 
+construction_drill_1.wav, construction_hammer_1.wav, 
+human_voice1.wav, others_1.wav, shower1.wav, 
+thumping1.wav, toiletFlush1.wav 
+
+언라벨데이터의 경우 unlabeled_set_1.wav 이런식으로 ..
+
+vild_config.py 에 어떻게 설정..

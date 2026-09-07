@@ -1,0 +1,12 @@
+# [변경 2026-08-09] Mark4.x 와 같은 방침으로 통일 — 오디오 원본만 깃에서 빼고 나머지는 전부 커밋한다.
+# (2026-08-02 에 Mark4.1~4.8 여덟 저장소를 이 두 줄로 통일했고, Mark5 만 옛 상태로 남아 있었다.)
+# 원본 오디오는 구글 드라이브에 있고, plots·모델·인덱스·라벨·logFiles 는 전부 저장소에 올린다.
+data_source_labeled/
+data_source_unlabeled/
+data_source_val/
+data_source_test/
+data_labeled/
+data_unlabeled/
+data_val/
+data_test/
+*.wav

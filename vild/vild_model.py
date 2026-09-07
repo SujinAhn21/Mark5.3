@@ -1,0 +1,246 @@
+# vild_model.py
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SimpleAudioEncoder(nn.Module):
+    """
+    Mel-Spectrogram 입력을 고정된 차원의 임베딩으로 변환하는 CNN 기반 오디오 인코더
+
+    특징:
+    - Dropout 추가로 과적합 방지
+    - AdaptiveAvgPool + LayerNorm 구조로 소형 모델에서도 안정성 확보
+    - 최소 입력 크기 추론을 위한 get_min_input_shape() 제공
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        in_channels = getattr(config, 'num_input_channels', 1)
+        self.conv_block1 = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+
+        self.conv_block2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+
+        # [추가 2026-07-12 / 가설2] conv 2블록(32->64ch, 약 4.5만 파라미터)에서는 train hard
+        # loss가 랜덤 근처(~0.60)에 고착되어 훈련 데이터조차 못 맞추는 과소적합이 관찰됨.
+        # 용량 한계인지 진단하기 위해 3블록(32->64->128ch, 약 14.4만 파라미터)으로 확장.
+        # 여전히 엣지 배포 가능한 초경량 수준. 입력 64x101 -> 3회 MaxPool 후 8x12.
+        # 주의: 이 변경으로 기존 .pth 체크포인트와는 구조가 안 맞으므로 전체 재학습 필요.
+        #
+        # [Mark5 로 가져옴 2026-08-17] mark4.x 는 위 진단 뒤 3블록으로 갔는데 mark5 만 2블록으로
+        # 남아 있었다. mark5 는 2-class 가 아니라 9-class 라 더 어려운 문제인데 더 작은 인코더로
+        # 배우려던 셈이고, 효율성 표의 student 도 8개 버전과 다른 모델이 된다. 그래서 맞췄다.
+        self.conv_block3 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.LayerNorm(128),
+            nn.Dropout(0.3),
+            nn.Linear(128, config.embedding_dim)
+        )
+
+        self.model = nn.Sequential(
+            self.conv_block1,
+            self.conv_block2,
+            self.conv_block3,
+            self.head
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x (Tensor): [B, C, 64, 101] 형태의 visualized audio tensor
+
+        Returns:
+            Tensor: [B, embedding_dim] 형태의 오디오 임베딩 벡터
+        """
+        return self.model(x)
+
+    @staticmethod
+    def get_min_input_shape(config=None):
+        """
+        모델 구조를 기반으로 한 최소 입력 크기 반환
+
+        Returns:
+            Tuple[int, int, int, int]: (B, C, H, W)
+        """
+        h = getattr(config, 'n_mels', 64) if config else 64
+        w = getattr(config, 'min_time_frames', 101) if config else 101
+        c = getattr(config, 'num_input_channels', 1) if config else 1
+        return (1, c, h, w)
+
+
+class ResidualAudioEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        in_channels = getattr(config, "num_input_channels", 1)
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+        )
+        self.block1 = nn.Sequential(
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+        )
+        self.downsample = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+        )
+        self.block2 = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+        )
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.LayerNorm(64),
+            nn.Dropout(0.3),
+            nn.Linear(64, config.embedding_dim),
+        )
+
+    def forward(self, x):
+        x = self.stem(x)
+        residual = x
+        x = self.block1(x)
+        x = F.relu(x + residual)
+        x = self.downsample(x)
+        residual = x
+        x = self.block2(x)
+        x = F.relu(x + residual)
+        return self.head(x)
+
+
+class TeacherAudioEncoder(nn.Module):
+    """
+    [추가 2026-07-13 / teacher 강화] teacher 전용 대형 인코더.
+
+    배경: 기존 teacher는 student와 완전히 같은 SimpleAudioEncoder(약 14.3만 파라미터)를 써서
+    KD인데도 teacher의 용량 우위가 전혀 없었음(teacher val loss가 가장 약한 고리였던 구조적 원인).
+    teacher는 엣지에 배포되지 않고 오프라인 soft label 생성에만 쓰이므로 크기 제약이 없다.
+
+    구조: conv 4블록(32->64->128->256) + 같은 head 구성. 약 49만 파라미터(student의 약 3.4배).
+    입력/출력 인터페이스는 SimpleAudioEncoder와 동일([B, C, 64, 101] -> [B, embedding_dim])이라
+    ViLDTextHead·Feature KD(384차원)와 그대로 호환된다. 입력 64x101 -> 4회 MaxPool 후 4x6.
+    주의: 기존 teacher .pth와 구조가 안 맞으므로 teacher부터 전체 재학습 필요.
+
+    [Mark5 로 가져옴 2026-08-17] Mark4.5/vild/vild_model.py:85 의 정의를 글자 그대로 복사한 것이다.
+    mark5 의 EnsembleTeacher 가 mark4.x teacher .pth 8개를 로드하는데, mark5 에는 이 클래스가
+    없어서 student 용 SimpleAudioEncoder 에 4블록 가중치를 넣으려다 실패했다
+    ("Missing key(s) conv_block1.* / Unexpected key(s) model.3.*"). 구조가 한 곳이라도
+    달라지면 다시 안 맞으므로 Mark4.5 원본과 동일하게 유지해야 한다.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        in_channels = getattr(config, "num_input_channels", 1)
+
+        def block(cin, cout):
+            return nn.Sequential(
+                nn.Conv2d(cin, cout, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(cout),
+                nn.ReLU(),
+                nn.MaxPool2d(kernel_size=2, stride=2),
+            )
+
+        self.model = nn.Sequential(
+            block(in_channels, 32),
+            block(32, 64),
+            block(64, 128),
+            block(128, 256),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.LayerNorm(256),
+            nn.Dropout(0.3),
+            nn.Linear(256, config.embedding_dim),
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+
+def build_teacher_encoder(config):
+    """teacher 인코더 선택 지점(단일 스위치). teacher_train.py와 extract_soft_labels.py가
+    반드시 같은 함수를 써야 체크포인트 구조가 일치한다.
+    config.use_large_teacher_encoder=False(또는 없음)면 기존 동작(SimpleAudioEncoder) 그대로."""
+    if getattr(config, "use_large_teacher_encoder", False):
+        return TeacherAudioEncoder(config)
+    return SimpleAudioEncoder(config)
+
+
+class ViLDTextHead(nn.Module):
+    """
+    region embedding과 텍스트 임베딩 간 cosine similarity 로짓을 계산하는 헤드 모듈
+
+    특징:
+    - Temperature scaling 적용
+    - background class는 사용하지 않음 (ex. binary 분류나 multi-class 분류 시 직접 사용)
+    - CrossEntropyLoss 또는 soft label 학습 시 softmax 적용은 외부에서 처리
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.temperature = getattr(config, 'logit_temperature', 0.07)
+
+    def forward(self, region_embeddings, class_text_embeddings):
+        """
+        Args:
+            region_embeddings (Tensor): [B, D], student or teacher region embeddings
+            class_text_embeddings (Tensor): [C, D], 사전 학습된 텍스트 임베딩
+
+        Returns:
+            Tensor: [B, C] 형태의 로짓 벡터 (softmax 적용 전)
+        """
+        region_norm = F.normalize(region_embeddings, dim=1)
+        text_norm = F.normalize(class_text_embeddings, dim=1)
+
+        logits = torch.matmul(region_norm, text_norm.T)  # [B, C]
+        logits = logits / self.temperature
+        return logits
+
+
+class LearnableBackgroundEmbedding(nn.Module):
+    """
+    'others'(배경) 클래스를 위한 학습형 임베딩.
+
+    ViLDTextHead가 계산하는 cosine similarity 로짓 공간과 동일한 embedding_dim을 사용하며,
+    eval 시 'others' 로짓을 max-override 방식으로 보정하는 데 쓰인다.
+    """
+
+    def __init__(self, embedding_dim):
+        super().__init__()
+        self.background_emb = nn.Parameter(torch.randn(embedding_dim) * 0.01)
+
+    def forward(self):
+        return self.background_emb
+
+
+def build_audio_encoder(config):
+    encoder_type = getattr(config, "encoder_type", "cnn")
+    if encoder_type == "residual_cnn":
+        return ResidualAudioEncoder(config)
+    return SimpleAudioEncoder(config)
+    

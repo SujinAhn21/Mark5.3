@@ -1,0 +1,510 @@
+import os
+import sys
+import csv
+import argparse
+import hashlib
+import time
+import json
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import torch
+import torch.nn.functional as F
+from sklearn.metrics import (
+    accuracy_score,
+    auc,
+    classification_report,
+    confusion_matrix,
+    precision_recall_fscore_support,
+    roc_auc_score,
+    roc_curve,
+)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
+UTILS_DIR = os.path.join(PROJECT_ROOT, "utils")
+VILD_DIR = os.path.join(PROJECT_ROOT, "vild")
+for p in (PROJECT_ROOT, UTILS_DIR, VILD_DIR):
+    if p not in sys.path:
+        sys.path.append(p)
+
+from postprocess_utils import (
+    aggregate_segment_probs,
+    apply_abstention,
+    apply_class_pair_calibration,
+    apply_others_calibration,
+    apply_temporal_smoothing,
+    save_visual_explanation,
+    select_others_threshold,
+)
+from vild_config import AudioViLDConfig
+from vild_model import LearnableBackgroundEmbedding, ViLDTextHead, build_audio_encoder
+from vild_head import DualBranchStudentHead
+from vild_parser_teacher import AudioParser
+SHARED_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "shared_vild"))
+if SHARED_DIR not in sys.path:
+    sys.path.append(SHARED_DIR)
+from checkpoint_utils import load_checkpoint, resolve_state_dict
+
+
+def _resolve_dataset_csv_path(split: str):
+    """[변경 2026-08-17] test 고정이었던 것을 split 인자로 일반화했다.
+
+    mark4.x 는 eval.py --split val 로 val 을 따로 평가해 운영점(threshold)을 고르고
+    test 는 마지막에 한 번만 썼는데, mark5 에는 그 경로가 없어서 val 을 평가할 수단이
+    아예 없었다(dataset_test.csv 만 읽었음).
+    """
+    filename = f"dataset_{split}.csv"
+    candidates = [
+        os.path.join(PROJECT_ROOT, filename),
+        os.path.join(BASE_DIR, filename),
+        os.path.join(PROJECT_ROOT, "preprocessing", filename),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError(f"[ERROR] {split} 인덱스 파일을 찾을 수 없습니다: {candidates}")
+
+
+def _keep_topk_segments(segment_records, segment_probs, seg_weights, config):
+    """save_visual_explanation 이 실제로 그리는 상위 k 세그먼트만 남긴다(가중치 순서는 보존)."""
+    k = int(getattr(config, "explain_topk_segments", 3))
+    order = np.argsort(np.asarray(seg_weights))[::-1][:k]
+    keep = sorted(int(i) for i in order)
+    return ([segment_records[i] for i in keep], [segment_probs[i] for i in keep],
+            np.asarray(seg_weights)[keep])
+
+
+def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_n=None, ceiling=False,
+             others_threshold=None):
+    """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
+
+    eval 은 학습을 하지 않지만 **run_tag 로 체크포인트를 찾기 때문에** 학습과 같은 조건을
+    넘겨줘야 한다. 예를 들어 --seed 3 --unlabeled_n 500 으로 학습했다면 체크포인트가
+    student_model_mark5.0_PL_SA_u500_s3.pth 이므로, eval 에도 같은 인자를 줘야 그 파일을 읽는다.
+    안 주면 예전처럼 태그 없는 이름을 찾는다(기존 동작 보존).
+    """
+    config = AudioViLDConfig(mark_version=mark_version)
+    config.experiment_seed = seed_value
+    # [신설 2026-09-06] 천장 조건은 태그가 _ceil 이라 --ceiling 을 같이 줘야 그 체크포인트를 찾는다.
+    if ceiling and unlabeled_n not in (None, 0):
+        # [리뷰 반영] 학습 쪽(train_mark5.py)과 같은 규칙 — 조용히 한쪽을 버리지 않는다.
+        raise ValueError(f"[ERROR] --ceiling 과 --unlabeled_n={unlabeled_n} 을 함께 줄 수 없습니다(천장은 unlabeled 를 쓰지 않음).")
+    config.ceiling = bool(ceiling)
+    config.unlabeled_n = None if ceiling else unlabeled_n
+    device = config.device
+    parser = AudioParser(config, segment_mode=True)
+
+    # [추가 2026-08-17] split 이 test 가 아니면 결과 파일명에 _{split} 을 붙여
+    # test 결과를 덮어쓰지 않게 한다(mark4.x eval.py 의 out_tag 규칙과 동일).
+    out_tag = config.run_tag if split == "test" else f"{config.run_tag}_{split}"
+
+    csv_path = _resolve_dataset_csv_path(split)
+    print(f"[INFO] 평가 대상: split={split} · 인덱스={csv_path}")
+    test_files = list(csv.DictReader(open(csv_path, newline="", encoding="utf-8")))
+    model_path = os.path.join(BASE_DIR, f"student_model_{config.run_tag}.pth")
+    checkpoint = load_checkpoint(model_path, map_location=device)
+    # [신설 2026-09-07] 체크포인트 지문. val 이 고른 임계값 json 에 적어 두고 test 가 대조한다
+    # (재학습 뒤 옛 json 을 조용히 읽는 사고 방지 — code-reviewer 지적 3).
+    with open(model_path, "rb") as _f:
+        _ckpt_sha = hashlib.sha256(_f.read()).hexdigest()
+    ckpt_fingerprint = {"file": os.path.basename(model_path), "size": os.path.getsize(model_path),
+                        "mtime": os.path.getmtime(model_path), "sha256": _ckpt_sha}
+
+    encoder = build_audio_encoder(config).to(device)
+    encoder.load_state_dict(resolve_state_dict(checkpoint, "model_state_dict", "encoder_state_dict", "model"))
+    # [변경 2026-08-22] 학습 때와 같은 구조로 만들어야 branch state_dict 가 맞는다.
+    branch_head = DualBranchStudentHead(
+        config.embedding_dim,
+        distill_final_relu=getattr(config, "distill_branch_final_relu", False),
+    ).to(device)
+    # [수정 2026-08-17] resolve_state_dict 는 아는 키가 하나도 없으면 KeyError 를 던지므로,
+    # 아래 else 의 경고는 도달할 수 없는 코드였다(구버전 .pth 를 넣으면 경고 대신 죽었다).
+    # 직접 get 으로 받아 경고 분기가 실제로 살아나게 한다.
+    branch_state = (
+        checkpoint.get("branch_state_dict")
+        or checkpoint.get("head_state_dict")
+        or checkpoint.get("head")
+    )
+    if branch_state is not None:
+        branch_head.load_state_dict(branch_state, strict=False)
+    else:
+        print("[WARN] branch_state_dict가 없어 기본 branch head로 평가합니다. 새 모델 재학습이 권장됩니다.")
+    text_head = ViLDTextHead(config).to(device)
+    text_emb = config.get_class_text_embeddings(for_evaluation=True).to(device)
+
+    # [추가] 학습형 background(others) 임베딩 로드. use_background_embedding=False거나
+    # 체크포인트에 없으면(구버전 호환) None으로 두고 아래 max-override 로직을 건너뜀.
+    background_embedding = None
+    if config.use_background_embedding:
+        bg_state = checkpoint.get("background_state_dict")
+        if bg_state is not None:
+            background_embedding = LearnableBackgroundEmbedding(config.embedding_dim).to(device)
+            background_embedding.load_state_dict(bg_state)
+            background_embedding.eval()
+        else:
+            print("[WARN] background_state_dict가 없어 background embedding 없이 평가합니다. 새 모델 재학습이 권장됩니다.")
+
+    # [신설 2026-08-22] background embedding 을 others 로짓에 max 로 덮을지 여부.
+    # 기본 False. 켜져 있던 1차 평가에서 430클립 중 417개가 others 로 쏠렸다(자세한 근거는
+    # vild_config.py 의 use_background_override_at_eval 주석).
+    use_bg_override = getattr(config, "use_background_override_at_eval", False)
+    if background_embedding is not None:
+        print(f"[INFO] background override: {'적용' if use_bg_override else '미적용'} "
+              f"(others 로짓을 background embedding 으로 max 덮어쓰기)")
+    # [추가 2026-08-22] others 결정 방식을 로그에 남긴다. 이 값이 결과를 크게 가른다.
+    # [변경 2026-09-07 / Mark5_EXP2] direct 모드의 임계값은 회차마다 val 에서 고른다(아래 "임계값 결정" 참조).
+    _od_mode = getattr(config, "others_decision_mode", "direct")
+    _thr_mode = "fixed" if others_threshold is not None else getattr(config, "others_threshold_mode", "val_select")
+    if _od_mode in ("direct", "argmax"):
+        print(f"[INFO] others 결정 규칙 정하는 법 = {_thr_mode}"
+              + (f" (--others_threshold {others_threshold})" if others_threshold is not None else "")
+              + " · 후보 = argmax(9클래스) + direct(Prob_others >= 임계값이면 others) 격자")
+    else:
+        if others_threshold is not None:
+            print(f"[WARN] others_decision_mode={_od_mode!r} 라 --others_threshold {others_threshold} 는 쓰이지 않습니다.")
+        print(f"[INFO] others 결정: confidence — top_conf<{config.others_confidence_threshold} 또는 "
+              f"margin<{config.others_margin_threshold} 또는 entropy>{config.others_entropy_threshold:.3f} 이면 others 강제")
+
+    encoder.eval()
+    branch_head.eval()
+    text_head.eval()
+
+    class_names = config.get_classes_for_evaluation()
+    label_map = config.get_target_label_map()
+    plot_dir = os.path.join(PROJECT_ROOT, "plots")
+    os.makedirs(plot_dir, exist_ok=True)
+
+    all_labels, all_preds, all_probs = [], [], []
+    all_raw_probs = []
+    calibration_rows = []
+    prediction_rows = []   # [추가 2026-08-17] 샘플별 확률까지 남기는 행(운영점 재계산용)
+    clip_records = []      # [변경 2026-09-07] 1차 통과: 클립마다 others 보정 전 확률만 모은다(임계값은 그 뒤에 정한다)
+    skipped_label_counter = {}
+    for row in test_files:
+        path = row["path"]
+        label = row["label"]
+        if label not in label_map:
+            # [추가] 9-class 밖 라벨은 조용히 넘기지 않고 집계
+            skipped_label_counter[label] = skipped_label_counter.get(label, 0) + 1
+            continue
+        segment_records = parser.load_and_segment_with_metadata(path)
+        if not segment_records:
+            continue
+
+        segment_probs = []
+        saliency_scores = [record["saliency"] for record in segment_records]
+        with torch.no_grad():
+            for record in segment_records:
+                seg = record["tensor"]
+                if seg.ndim == 3:
+                    seg = seg.unsqueeze(0)
+                seg = seg.to(device)
+                base_features = encoder(seg)
+                supervised_features, distill_features = branch_head(base_features)
+                sup_logits = text_head(supervised_features, text_emb)
+                distill_logits = text_head(distill_features, text_emb)
+
+                if background_embedding is not None and use_bg_override:
+                    others_idx = class_names.index("others")
+                    bg_norm = F.normalize(background_embedding(), dim=0)
+
+                    sup_norm = F.normalize(supervised_features, dim=1)
+                    sup_bg_logit = (sup_norm @ bg_norm) / text_head.temperature
+                    sup_logits = sup_logits.clone()
+                    sup_logits[:, others_idx] = torch.maximum(sup_logits[:, others_idx], sup_bg_logit)
+
+                    distill_norm = F.normalize(distill_features, dim=1)
+                    distill_bg_logit = (distill_norm @ bg_norm) / text_head.temperature
+                    distill_logits = distill_logits.clone()
+                    distill_logits[:, others_idx] = torch.maximum(distill_logits[:, others_idx], distill_bg_logit)
+
+                w = getattr(config, "distill_branch_eval_weight", 0.5)
+                prob = (
+                    (1 - w) * torch.softmax(sup_logits, dim=-1)
+                    + w * torch.softmax(distill_logits, dim=-1)
+                ).squeeze(0).cpu().numpy()
+                segment_probs.append(prob)
+
+        if config.enable_temporal_smoothing:
+            segment_probs = apply_temporal_smoothing(segment_probs, config.temporal_smoothing_alpha)
+
+        aggregated, seg_weights = aggregate_segment_probs(segment_probs, saliency_scores, config)
+        calibrated_prob = apply_class_pair_calibration(aggregated, class_names, config)
+        # [추가 2026-08-17] others 보정 전 확률과 그 argmax 를 남긴다.
+        # 이 두 가지가 있어야 others_confidence/margin/entropy 를 바꿨을 때의 결과를
+        # 모델 재실행 없이 CSV 만으로 다시 계산할 수 있다(mark4.x 의 threshold 스윕과 같은 원리).
+        # [변경 2026-09-07] others 판정은 임계값을 정한 뒤 2차 통과에서 한다. 여기서는 모아만 둔다.
+        clip_records.append({
+            "path": path, "label": label, "raw_prob": calibrated_prob.copy(),
+            # 시각화가 켜져 있을 때만, 그것도 상위 k 세그먼트만 남긴다(전부 들고 있으면 430클립에 약 160MB — 리뷰 지적 12).
+            "vis": _keep_topk_segments(segment_records, segment_probs, seg_weights, config)
+                   if config.save_visual_explanations else None,
+        })
+
+    # [변경 2026-09-07] 라벨 경고와 "샘플 0개" 검사를 임계값 결정보다 앞에 둔다(리뷰 지적 21).
+    if skipped_label_counter:
+        print(
+            f"[WARN] 9-class 밖 라벨로 건너뛴 {split} 파일: {skipped_label_counter} "
+            f"(허용 클래스: {sorted(label_map.keys())})"
+        )
+    if len(clip_records) == 0:
+        raise ValueError(
+            f"[ERROR] 평가 가능한 {split} 샘플이 0개입니다. 건너뛴 라벨: {skipped_label_counter}. "
+            f"dataset_{split}.csv 라벨이 9-class와 일치하는지 확인하세요."
+        )
+
+    # ------------------------------------------------------------------
+    # [신설 2026-09-07 / Mark5_EXP2] others 판정 규칙(운영점) 결정
+    #   fixed      : --others_threshold 로 준 값("argmax" 또는 실수). 없으면 config 의 direct/others_direct_threshold.
+    #   val_select : split=val 이면 지금 모은 확률로 후보(argmax + direct 격자)를 훑어 val Macro F1 최대를 고르고
+    #                json 에 저장(체크포인트 지문 포함), split=test 면 그 json 을 읽고 지문이 맞을 때만 쓴다.
+    # ------------------------------------------------------------------
+    thr_json = os.path.join(plot_dir, f"others_threshold_{config.run_tag}.json")
+    thr_info = {"mode": _thr_mode}
+    if _od_mode not in ("direct", "argmax"):
+        pass                                   # 옛 confidence 규칙은 임계값 개념이 다르다. 그대로 둔다.
+    elif _thr_mode == "fixed":
+        if others_threshold is not None:
+            if str(others_threshold).strip().lower() == "argmax":
+                config.others_decision_mode = "argmax"
+            else:
+                config.others_decision_mode = "direct"
+                config.others_direct_threshold = float(others_threshold)
+        thr_info.update({"rule": config.others_decision_mode,
+                         "threshold": float(config.others_direct_threshold) if config.others_decision_mode == "direct" else None})
+    elif _thr_mode == "val_select":
+        if split == "val":
+            _raw = np.stack([r["raw_prob"] for r in clip_records])
+            _lab = [label_map[r["label"]] for r in clip_records]
+            rule, best_thr, best_f1, curve = select_others_threshold(_raw, _lab, class_names, config)
+            config.others_decision_mode = rule
+            if rule == "direct":
+                config.others_direct_threshold = best_thr
+            g = getattr(config, "others_threshold_grid", (0.02, 0.95, 0.01))
+            thr_info.update({"rule": rule, "threshold": best_thr, "val_macro_f1_at_threshold": best_f1,
+                             "criterion": getattr(config, "others_threshold_criterion", "macro_f1"),
+                             "grid": [float(g[0]), float(g[1]), float(g[2])], "n_val_clips": len(clip_records),
+                             "candidates": "argmax + direct grid", "curve": curve, "run_tag": config.run_tag,
+                             "checkpoint": ckpt_fingerprint, "selected_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+            with open(thr_json, "w", encoding="utf-8") as f:
+                json.dump(thr_info, f, ensure_ascii=False, indent=2)
+            _shown = f"direct thr {best_thr:.2f}" if rule == "direct" else "argmax"
+            print(f"[INFO] others 규칙 val 선택: {_shown} (val Macro F1 {best_f1:.4f}) -> {thr_json}")
+        else:
+            if not os.path.exists(thr_json):
+                raise FileNotFoundError(
+                    f"[ERROR] {thr_json} 이 없습니다. others_threshold_mode=val_select 에서는 --split val 을 먼저 돌려 "
+                    f"규칙을 골라야 test 를 평가할 수 있습니다(run_experiments.py 는 이 순서로 돕니다). "
+                    f"옛 고정값으로 보려면 --others_threshold 0.09 를 주십시오.")
+            with open(thr_json, encoding="utf-8") as f:
+                saved = json.load(f)
+            _fp = saved.get("checkpoint") or {}
+            if saved.get("run_tag") != config.run_tag or _fp.get("sha256") != ckpt_fingerprint["sha256"]:
+                raise RuntimeError(
+                    f"[ERROR] {thr_json} 은 지금 체크포인트로 고른 값이 아닙니다"
+                    f"(json run_tag={saved.get('run_tag')} sha256={str(_fp.get('sha256'))[:12]} / "
+                    f"지금 {config.run_tag} sha256={ckpt_fingerprint['sha256'][:12]}). "
+                    f"재학습했으면 --split val 을 다시 돌려 규칙을 다시 고르십시오.")
+            rule = saved.get("rule", "direct")
+            config.others_decision_mode = rule
+            if rule == "direct":
+                config.others_direct_threshold = float(saved["threshold"])
+            thr_info.update({"rule": rule, "threshold": saved.get("threshold"), "from": thr_json})
+            _shown = f"direct thr {float(saved['threshold']):.2f}" if rule == "direct" else "argmax"
+            print(f"[INFO] others 규칙: val 에서 고른 {_shown} 사용 ({thr_json}, 체크포인트 지문 일치)")
+    else:
+        raise ValueError(f"[ERROR] others_threshold_mode={_thr_mode!r} 는 모릅니다. 'val_select' 또는 'fixed'.")
+    if config.others_decision_mode == "direct":
+        print(f"[INFO] others 결정: direct — Prob_others >= {config.others_direct_threshold:g} 이면 others")
+    elif config.others_decision_mode == "argmax":
+        print("[INFO] others 결정: argmax — 9클래스 argmax(others 강제 없음)")
+
+    # 2차 통과: 정해진 임계값으로 판정하고, 기존과 같은 행을 만든다.
+    for rec in clip_records:
+        path, label = rec["path"], rec["label"]
+        raw_prob = rec["raw_prob"]
+        raw_pred = int(np.argmax(raw_prob))
+        calibrated_prob, pred, calib_meta = apply_others_calibration(raw_prob.copy(), class_names, config)
+        calibrated_prob, pred, abstained = apply_abstention(calibrated_prob, class_names, config, pred)
+        all_labels.append(label_map[label])
+        all_preds.append(pred)
+        all_probs.append(calibrated_prob)
+        all_raw_probs.append(raw_prob)      # [변경 2026-09-07] ROC AUC 는 규칙 적용 전 확률로 잰다(리뷰 지적 7)
+        prediction_rows.append(
+            {
+                "Filename": os.path.basename(path),
+                "True Label": label,
+                "Raw Predicted Label": class_names[raw_pred],
+                "Predicted Label": class_names[pred],
+                "Forced To Others": calib_meta["forced_to_others"],
+                "Abstained": abstained,
+                "Raw Top Confidence": calib_meta["raw_top_conf"],
+                "Raw Margin": calib_meta["raw_margin"],
+                "Entropy": calib_meta["entropy"],
+                # [추가 2026-08-22] direct 모드가 실제로 보는 값. 스윕을 다시 돌릴 때 쓴다.
+                "Prob Others (raw)": calib_meta.get("prob_others", float("nan")),
+                **{f"Prob_{n}": float(raw_prob[i]) for i, n in enumerate(class_names)},
+            }
+        )
+        calibration_rows.append({
+            "path": path,
+            "true_label": label,
+            "pred_label": class_names[pred],
+            "forced_to_others": calib_meta["forced_to_others"],
+            "abstained": abstained,
+            "raw_top_conf": calib_meta["raw_top_conf"],
+            "raw_margin": calib_meta["raw_margin"],
+            "entropy": calib_meta["entropy"],
+        })
+        if rec["vis"] is not None:
+            segment_records, segment_probs, seg_weights = rec["vis"]
+            save_visual_explanation(path, segment_records, segment_probs, seg_weights, class_names, calibrated_prob, pred, config, plot_dir)
+
+    print(f"[INFO] 유효 {split} 샘플: {len(all_labels)}개")
+
+    report = classification_report(
+        all_labels,
+        all_preds,
+        labels=list(range(len(class_names))),
+        target_names=class_names,
+        digits=4,
+        zero_division=0,
+    )
+    print(report)
+    accuracy = accuracy_score(all_labels, all_preds)
+    print(f"Accuracy: {accuracy:.4f}")
+
+    cm = confusion_matrix(all_labels, all_preds, labels=list(range(len(class_names))))
+    cm_df = pd.DataFrame(cm, index=class_names, columns=class_names)
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(cm_df, annot=True, fmt="d", cmap="Blues", cbar=False, annot_kws={"size": 12})
+    plt.title(f"Confusion Matrix - {out_tag}")
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plot_dir, f"confusion_matrix_{out_tag}.png"))
+    plt.close()
+
+    # [추가] mark4 eval.py와 동일한 형태로 Accuracy/P/R/F1/ROC AUC를 CSV로 저장(기존엔 콘솔 print만 하고 파일에 안 남았음).
+    all_probs_arr = np.array(all_raw_probs)   # [변경 2026-09-07] 규칙 적용 전 확률(운영점과 무관한 AUC)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        all_labels, all_preds, average=None, labels=list(range(len(class_names))), zero_division=0
+    )
+    # [신설 2026-08-30 / Mark5_EXP] macro 집계값. 2026-08-24 랩미팅에서 교수님이
+    # "Precision 과 Recall 이 표에서 빠지면 안 된다"고 하셨다.
+    #
+    # 클래스가 9개라 P/R/F1 도 9개씩 나오는데, 논문 표에는 한 칸씩만 들어가므로 합쳐야 한다.
+    # macro = 9개를 그냥 평균(모든 클래스를 동등하게 봄). weighted 는 샘플 많은 클래스가
+    # 점수를 지배하고, micro 는 다중분류에서 Accuracy 와 같은 값이라 적을 이유가 없다.
+    # 우리 val/test 는 48/48/.../47 로 거의 균형이라 macro 가 맞고, 지금까지 써온 것도 macro 다
+    # (2026-08-23 확정한 test macro F1 0.8744 가 이 값이다).
+    #
+    # 기존에는 이 세 값이 콘솔 classification_report 에만 찍히고 CSV 에 안 남아서,
+    # 25회분 결과를 자동으로 모아 평균·표준편차를 낼 수 없었다.
+    macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(
+        all_labels, all_preds, average="macro", labels=list(range(len(class_names))), zero_division=0
+    )
+    # [수정] labels 명시 + try/except로 방어. 테스트셋에 9-class 중 일부가 아예 없으면
+    # (1) labels 없이는 "열 개수 불일치"로 죽고, (2) labels를 줘도 그 클래스의 OvR 이진화가
+    # "양성 샘플 0개"가 되어 AUC 자체가 수학적으로 정의 불가능해 여전히 ValueError가 난다.
+    # 작은 test set에서는 흔히 벌어질 수 있는 상황이라, 죽이지 않고 NaN 처리 후 경고만 남긴다.
+    try:
+        roc_auc_macro = roc_auc_score(
+            all_labels, all_probs_arr, multi_class="ovr", average="macro",
+            labels=list(range(len(class_names))),
+        )
+        print(f"ROC AUC (macro, one-vs-rest): {roc_auc_macro:.4f}")
+    except ValueError as e:
+        roc_auc_macro = float("nan")
+        print(f"[WARN] ROC AUC 계산 불가(테스트셋에 없는 클래스가 있을 수 있음): {e}")
+
+    # [추가] others FPR: 실제 라벨이 "others"인데 8개 타겟 클래스 중 하나로 오분류된 비율.
+    # = 1 - Recall(others). "조용한 배경음을 소음으로 잘못 경보하는 비율"이라는 실용적 의미를 명시하기 위해 별도 계산.
+    others_idx = class_names.index("others")
+    others_row = cm[others_idx]
+    others_row_sum = int(others_row.sum())
+    others_fpr = float((others_row_sum - others_row[others_idx]) / others_row_sum) if others_row_sum > 0 else float("nan")
+    print(f"[others FPR] 실제 others인데 타겟 클래스로 오분류된 비율: {others_fpr:.4f}")
+
+    # [추가] mark4 eval.py의 roc_curve 저장과 동일한 형태(9-class는 one-vs-rest로 클래스별 곡선).
+    plt.figure(figsize=(7, 6))
+    all_labels_arr = np.array(all_labels)
+    for i, cname in enumerate(class_names):
+        fpr_curve, tpr_curve, _ = roc_curve((all_labels_arr == i).astype(int), all_probs_arr[:, i])
+        auc_i = auc(fpr_curve, tpr_curve)
+        plt.plot(fpr_curve, tpr_curve, label=f"{cname} AUC={auc_i:.3f}")
+    plt.plot([0, 1], [0, 1], "k--")
+    plt.xlim([0, 1])
+    plt.ylim([0, 1.05])
+    plt.xlabel("FPR")
+    plt.ylabel("TPR")
+    plt.title(f"ROC ({out_tag})")
+    plt.legend(loc="lower right", fontsize=8)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plot_dir, f"roc_curve_{out_tag}.png"))
+    plt.close()
+
+    summary_csv = os.path.join(plot_dir, f"performance_summary_{out_tag}.csv")
+    with open(summary_csv, "w", newline="", encoding="utf-8") as f:
+        f.write(f"# Performance Summary for {out_tag}\n\n")
+        # [변경 2026-08-30 / Mark5_EXP] Macro Precision·Recall·F1 세 줄 추가.
+        # 논문 표 1 이 Accuracy · Macro P · Macro R · Macro F1 · ROC AUC 다섯 칸이고,
+        # 25회분을 집계 스크립트가 이 CSV 에서 긁어간다. 행 이름을 바꾸면 집계가 깨진다.
+        # [추가 2026-09-07] 쓰인 others 임계값도 남긴다(aggregate_results 는 METRICS 만 읽으므로 무해).
+        pd.DataFrame({
+            "Metric": ["Accuracy", "Macro Precision", "Macro Recall", "Macro F1",
+                       "ROC AUC (Macro, OvR)", "Others FPR", "Others Threshold", "Others Rule"],
+            "Score": [accuracy, macro_precision, macro_recall, macro_f1,
+                      roc_auc_macro, others_fpr,
+                      float(config.others_direct_threshold) if config.others_decision_mode == "direct" else float("nan"),
+                      str(config.others_decision_mode)],
+        }).to_csv(f, index=False)
+        f.write("\n# Class-wise Metrics\n\n")
+        pd.DataFrame({
+            "Class": class_names, "Precision": precision, "Recall": recall, "F1-Score": f1,
+        }).to_csv(f, index=False)
+    print(f"[INFO] 성능 요약 CSV 저장: {summary_csv}")
+
+    if calibration_rows:
+        pd.DataFrame(calibration_rows).to_csv(
+            os.path.join(plot_dir, f"calibration_details_{out_tag}.csv"),
+            index=False,
+            encoding="utf-8",
+        )
+
+    # [추가 2026-08-17] 샘플별 예측 CSV. 클래스별 확률(others 보정 전)을 담고 있어
+    # 이 파일 하나로 운영점(others_confidence/margin/entropy)을 바꿔가며 재계산할 수 있다.
+    if prediction_rows:
+        pred_csv = os.path.join(plot_dir, f"prediction_details_{out_tag}.csv")
+        pd.DataFrame(prediction_rows).to_csv(pred_csv, index=False, encoding="utf-8")
+        print(f"[INFO] 예측 상세 CSV 저장: {pred_csv}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="학습된 모델의 성능을 평가합니다.")
+    parser.add_argument("--mark_version", type=str, required=True)
+    # [추가 2026-08-17] 평가 split 선택. 기본은 test(기존 동작 그대로).
+    # 운영점은 val 로 고르고 test 는 마지막 확인 한 번만 쓴다(mark4.x 와 같은 원칙).
+    parser.add_argument("--split", type=str, default="test", choices=["test", "val"])
+    # [신설 2026-08-30 / Mark5_EXP] 학습 때 준 것과 **같은 값**을 줘야 그 조건의
+    # 체크포인트를 찾는다(run_tag 가 파일명을 가르기 때문).
+    parser.add_argument("--seed", type=int, default=None,
+                        help="학습 때 쓴 seed. 체크포인트 이름의 _s<k> 를 맞추는 용도.")
+    parser.add_argument("--unlabeled_n", type=int, default=None,
+                        help="학습 때 쓴 unlabeled 개수. 체크포인트 이름의 _u<n> 을 맞추는 용도.")
+    parser.add_argument("--ceiling", action="store_true",
+                        help="천장 조건으로 학습한 체크포인트(_ceil)를 평가할 때 준다.")
+    # [신설 2026-09-07 / Mark5_EXP2] 기본은 val 에서 고른 임계값(config.others_threshold_mode=val_select).
+    # 이 값을 주면 그 값으로 고정해 평가한다(옛 결과 재현·수동 점검용). json 은 건드리지 않는다.
+    parser.add_argument("--others_threshold", type=str, default=None,
+                        help="others 규칙을 고정: 실수(direct 임계값) 또는 'argmax'. 주지 않으면 val 에서 고른 값 사용")
+    args = parser.parse_args()
+    evaluate(mark_version=args.mark_version, split=args.split,
+             seed_value=args.seed, unlabeled_n=args.unlabeled_n, ceiling=args.ceiling,
+             others_threshold=args.others_threshold)
