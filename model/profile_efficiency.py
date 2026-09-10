@@ -102,7 +102,7 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100):
     elapsed = time.perf_counter() - start
 
     ms_per_segment = (elapsed / num_runs) * 1000
-    ms_per_clip = ms_per_segment * config.max_segments  # 5초 클립 = max_segments개 세그먼트
+    ms_per_clip = ms_per_segment * config.max_segments  # 클립 전체 = max_segments개 세그먼트 (1.01초 창을 0.5초 간격으로 겹쳐 약 3초를 덮는다)
 
     result = {
         "mark_version": mark_version,
@@ -110,9 +110,9 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100):
         "model_size_mb": round(model_size_mb, 4),
         "gmacs_per_segment": round(gmacs_per_segment, 6),
         "gflops_per_segment_approx": round(gflops_per_segment, 6),
-        "gflops_per_5s_clip_approx": round(gflops_per_segment * config.max_segments, 6),
+        "gflops_per_clip_approx": round(gflops_per_segment * config.max_segments, 6),
         "cpu_latency_ms_per_segment": round(ms_per_segment, 4),
-        "cpu_latency_ms_per_5s_clip": round(ms_per_clip, 4),
+        "cpu_latency_ms_per_clip": round(ms_per_clip, 4),
         "num_warmup": num_warmup,
         "num_runs": num_runs,
         "note": (

@@ -53,11 +53,18 @@ METRICS = [
     ("ROC AUC (Macro, OvR)", "ROC AUC",   "ROC AUC"),
 ]
 
+# [2026-09-10] 키 이름·열 제목 정정.
+#   실제 입력 클립은 3초인데 "5s_clip" 으로 저장돼 있었다. 세그먼트 5개(1.01초 창을
+#   0.5초 간격으로 겹침)가 약 3초를 덮는 것을 "5초"로 잘못 이름 붙인 것이고 숫자는 맞다.
+#   새 키 이름에는 길이를 넣지 않는다(클립 길이가 바뀌어도 이름이 안 틀리게).
+#   각 항목의 첫 원소가 새 이름이고 그 뒤가 옛 이름이다. 옛 이름으로 저장된 기존 산출물
+#   (aggregate_latency CSV)도 그대로 읽히게 하려는 것이다. 이름을 못 찾으면 그 행이
+#   조용히 사라지는 구조라 대체 이름을 반드시 남겨 둔다.
 LATENCY_ROWS = [
-    ("total_parameters",          "Parameters",             "",   "int"),
-    ("model_size_mb",             "Model size (MB)",        "",   "f3"),
-    ("gflops_per_5s_clip_approx", "GFLOPs / 5-s clip",      "",   "f3"),
-    ("cpu_latency_ms_per_5s_clip", "CPU latency / 5-s clip (ms)", "", "f2"),
+    (("total_parameters",),                                     "Parameters",                  "", "int"),
+    (("model_size_mb",),                                        "Model size (MB)",             "", "f3"),
+    (("gflops_per_clip_approx", "gflops_per_5s_clip_approx"),   "GFLOPs / 3-s clip",           "", "f3"),
+    (("cpu_latency_ms_per_clip", "cpu_latency_ms_per_5s_clip"), "CPU latency / 3-s clip (ms)", "", "f2"),
 ]
 
 
@@ -233,8 +240,9 @@ def build_markdown(raw, lat, tests, rows, top, split, n_seeds, raw_ceil=None, ga
         L.append("")
         L.append("| Item | Value |")
         L.append("|---|---|")
-        for key, label, _u, kind in LATENCY_ROWS:
-            if key not in lat.index:
+        for keys, label, _u, kind in LATENCY_ROWS:
+            key = next((k for k in keys if k in lat.index), None)
+            if key is None:
                 continue
             r = lat.loc[key]
             m, sd = float(r["mean"]), float(r["std"])
@@ -347,8 +355,9 @@ def build_latex(raw, lat, tests, rows, top, split, n_seeds, raw_ceil=None, gap=N
         L.append("\\toprule")
         L.append("Item & Value \\\\")
         L.append("\\midrule")
-        for key, label, _u, kind in LATENCY_ROWS:
-            if key not in lat.index:
+        for keys, label, _u, kind in LATENCY_ROWS:
+            key = next((k for k in keys if k in lat.index), None)
+            if key is None:
                 continue
             r = lat.loc[key]
             m, sd = float(r["mean"]), float(r["std"])
