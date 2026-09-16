@@ -25,7 +25,7 @@
   <out_root>/esc50_manifest.csv   provenance 와 같은 열 이름(+role·esc10·license). 아직 data_provenance.xlsx 에는 넣지 않는다 —
                                   어느 클립을 어느 split 에 배정할지는 다음 단계(데이터 재구성 스크립트)가 정하면서 넣는다.
   out_root 기본값은 ~/workspace/esc50_clips (WSL 홈, aihub_raw 등 원본과 같은 층). 매니페스트 사본은 codes/esc50_clips/ 에 둔다.
-  전문가 8개·Mark5_EXP2 가 같은 풀을 나눠 쓴다. 드라이브(AImodels/codes/experiments/esc50_clips)에는 수진님이 올린다.
+  전문가 8개·Mark5_EXP2 가 같은 풀을 나눠 쓴다. 구글 드라이브(NewProject/codes/experiments/esc50_clips, 2026-09-08 이전 이름 AImodels)에는 수진님이 올린다.
 
 사용:
   python preprocessing/esc50_slicer.py --dry_run
