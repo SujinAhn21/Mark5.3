@@ -158,21 +158,47 @@ def _parse_tag(tag):
       _DA05 3개와 _DKD 3개가 섞이자 경고 없이 N=11, 평균 0.874 -> 0.7655 가 됐다.
       앞부분(설정 태그)까지 잡아내 나중에 혼입을 검사한다.
     """
-    m = re.match(r"^(?P<base>.+?)_u(?P<n>\d+)_s(?P<s>\d+)$", tag)
-    if m:
-        return m.group("base"), int(m.group("n")), int(m.group("s")), "ssl"
-    # [2026-09-06] 천장 조건: _u<n> 자리에 _ceil 이 들어간다(vild_config.run_tag).
-    m = re.match(r"^(?P<base>.+?)_ceil_s(?P<s>\d+)$", tag)
-    if m:
-        return m.group("base"), None, int(m.group("s")), "ceil"
-    return None, None, None, None
+    base, n, s, cond, _l, _sp, _ps = _parse_tag_full(tag)
+    return base, n, s, cond
+
+
+_TAG_RE = re.compile(r"^(?P<base>.+?)(?:_l(?P<l>\d+))?_(?:u(?P<n>\d+)|(?P<ceil>ceil))(?P<sp>_sp)?(?:_ps(?P<ps>[a-z]+))?_s(?P<s>\d+)$")
+
+
+def _parse_tag_full(tag):
+    """[확장 2026-09-17 / 8절] run_tag -> (설정, unlabeled, seed, cond, labeled, spill, pseudo_source).
+    태그 순서는 vild_config.run_tag 그대로: <설정>[_l<n>](_u<n>|_ceil)[_sp][_ps<이름>]_s<k>.
+    labeled None = 전량, spill = 남은 labeled 를 unlabeled 로 합친 회차, pseudo_source None = 전문가 합의."""
+    m = _TAG_RE.match(tag)
+    if not m:
+        return None, None, None, None, None, False, None
+    cond = "ceil" if m.group("ceil") else "ssl"
+    n = None if cond == "ceil" else int(m.group("n"))
+    l = int(m.group("l")) if m.group("l") else None
+    return m.group("base"), n, int(m.group("s")), cond, l, bool(m.group("sp")), m.group("ps")
+
+
+_FULL_LABELED = None
+
+
+def _full_labeled_count():
+    """labeled 전량(태그에 _l 이 없는 회차)의 클립 수. 프로젝트의 dataset_labeled.csv 행 수, 없으면 2000."""
+    global _FULL_LABELED
+    if _FULL_LABELED is None:
+        _FULL_LABELED = 2000
+        for cand in (os.path.join(PROJECT_ROOT, "dataset_labeled.csv"), os.path.join(PROJECT_ROOT, "model", "dataset_labeled.csv")):
+            if os.path.isfile(cand):
+                with open(cand, newline="", encoding="utf-8-sig") as f:
+                    _FULL_LABELED = max(0, sum(1 for _ in f) - 1)
+                break
+    return _FULL_LABELED
 
 
 def collect(mark_version, split, allow_mixed=False):
     """조건별로 결과를 모은다. split='test' 면 태그 없는 파일, 'val' 이면 _val 파일."""
     suffix = "" if split == "test" else f"_{split}"
     patterns = [os.path.join(PLOT_DIR, f"performance_summary_{mark_version}*_u*_s*{suffix}.csv"),
-                os.path.join(PLOT_DIR, f"performance_summary_{mark_version}*_ceil_s*{suffix}.csv")]  # [2026-09-06] 천장
+                os.path.join(PLOT_DIR, f"performance_summary_{mark_version}*_ceil*_s*{suffix}.csv")]  # [2026-09-06] 천장 [2026-09-17] _l 앞 허용
 
     rows, broken = [], []
     seen = set()
@@ -186,7 +212,7 @@ def collect(mark_version, split, allow_mixed=False):
             tag = tag[: -len(suffix)]
         elif not suffix and re.search(r"_(val)$", tag):
             continue                              # test 를 모을 때 _val 파일은 제외
-        base, n, s, cond = _parse_tag(tag)
+        base, n, s, cond, lab, sp, ps = _parse_tag_full(tag)
         if cond is None:
             continue
 
@@ -195,7 +221,10 @@ def collect(mark_version, split, allow_mixed=False):
             broken.append((name, missing))
             continue
 
-        rec = {"config": base, "cond": cond, "unlabeled": n, "seed": s, "run_tag": tag}
+        rec = {"config": base, "cond": cond, "unlabeled": n, "seed": s, "run_tag": tag,
+               # [2026-09-17 / 8절] labeled 축·풀 확장·pseudo 출처. labeled None = 전량(dataset_labeled 행 수).
+               "labeled": lab if lab is not None else _full_labeled_count(),
+               "spill": bool(sp), "pseudo_source": ps if ps else "consensus"}
         rec.update(_read_summary(path))
         rows.append(rec)
 
@@ -215,7 +244,9 @@ def collect(mark_version, split, allow_mixed=False):
         ssl_max = df.loc[df["cond"] == "ssl", "unlabeled"].max()
         df.loc[df["cond"] == "ceil", "unlabeled"] = int(ssl_max) if pd.notna(ssl_max) else 2000
     df["unlabeled"] = df["unlabeled"].astype(int)
-    df = df.sort_values(["cond", "unlabeled", "seed"], ascending=[False, True, True]).reset_index(drop=True)
+    df["labeled"] = df["labeled"].astype(int)
+    df = df.sort_values(["labeled", "spill", "pseudo_source", "cond", "unlabeled", "seed"],
+                        ascending=[False, True, True, False, True, True]).reset_index(drop=True)
 
     # [H3] 설정이 다른 결과가 섞였는지 검사
     configs = sorted(df["config"].unique())
@@ -749,14 +780,129 @@ def collect_latency(mark_version):
     return pd.DataFrame(recs)
 
 
+# ==========================================================================
+# [신설 2026-09-17 / 8절] 라벨 효율 표 · pseudo-label 출처 표 · 비교모델 짝지은 검정
+# ==========================================================================
+def _cond_name(row):
+    if row["cond"] == "ceil":
+        return "upper (true labels)"
+    return "supervised" if int(row["unlabeled"]) == 0 else f"ours (u{int(row['unlabeled'])})"
+
+
+def label_efficiency(df_le):
+    """labeled 200·500·1,000·전량 x {supervised(u0), ours(u<max>), upper(ceil)} 요약표 + 각 labeled 수준에서 u0 vs u<max> 검정.
+    반환: (요약 DataFrame(행 = labeled·조건), 검정 DataFrame)."""
+    if df_le.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    df = df_le.copy()
+    df["condition"] = df.apply(_cond_name, axis=1)
+    present = [m for m in METRICS if m in df.columns]
+    rows = []
+    for (lab, condn), g in df.groupby(["labeled", "condition"]):
+        rec = {"labeled": int(lab), "condition": condn, "N": len(g)}
+        for m in present:
+            v = g[m].dropna().values
+            if len(v) == 0:
+                continue
+            lo, hi, _ = ci95(v)
+            rec[f"{m} (mean)"] = v.mean(); rec[f"{m} (std)"] = v.std(ddof=1) if len(v) > 1 else np.nan
+            rec[f"{m} (ci_low)"] = lo; rec[f"{m} (ci_high)"] = hi; rec[f"{m} (n)"] = len(v)
+        rows.append(rec)
+    summary = pd.DataFrame(rows).sort_values(["labeled", "condition"], ascending=[False, True]).reset_index(drop=True)
+    # 검정: labeled 수준마다 supervised vs ours(최대 unlabeled) — Holm family 는 수준별
+    tests = []
+    for lab, g in df.groupby("labeled"):
+        sup = g[(g["cond"] == "ssl") & (g["unlabeled"] == 0)]
+        ssl = g[g["cond"] == "ssl"]
+        if sup.empty or ssl["unlabeled"].max() == 0:
+            continue
+        umax = int(ssl["unlabeled"].max())
+        ours = ssl[ssl["unlabeled"] == umax]
+        t = _finish_tests(_compare_groups(sup, ours, f"l{int(lab)}: u0 vs u{umax}"))
+        if not t.empty:
+            t.insert(0, "labeled", int(lab)); tests.append(t)
+        ceil = g[g["cond"] == "ceil"]
+        if not ceil.empty:
+            t2 = _finish_tests(_compare_groups(ours, ceil, f"l{int(lab)}: u{umax} vs ceil"))
+            if not t2.empty:
+                t2.insert(0, "labeled", int(lab)); tests.append(t2)
+    return summary, (pd.concat(tests, ignore_index=True) if tests else pd.DataFrame())
+
+
+def plsource_table(df_ps):
+    """pseudo-label 출처 비교(labeled 200 + unlabeled 3,800): consensus / self / gen 요약 + consensus 대비 검정."""
+    if df_ps.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    present = [m for m in METRICS if m in df_ps.columns]
+    order = {"consensus": 0, "self": 1, "gen": 2}
+    rows = []
+    for (lab, ps), g in df_ps.groupby(["labeled", "pseudo_source"]):
+        rec = {"labeled": int(lab), "pseudo_source": ps, "N": len(g)}
+        for m in present:
+            v = g[m].dropna().values
+            if len(v) == 0:
+                continue
+            lo, hi, _ = ci95(v)
+            rec[f"{m} (mean)"] = v.mean(); rec[f"{m} (std)"] = v.std(ddof=1) if len(v) > 1 else np.nan
+            rec[f"{m} (ci_low)"] = lo; rec[f"{m} (ci_high)"] = hi; rec[f"{m} (n)"] = len(v)
+        rows.append(rec)
+    summary = pd.DataFrame(rows)
+    summary["_o"] = summary["pseudo_source"].map(lambda x: order.get(x, 9))
+    summary = summary.sort_values(["labeled", "_o"]).drop(columns="_o").reset_index(drop=True)
+    tests = []
+    for lab, g in df_ps.groupby("labeled"):
+        cons = g[g["pseudo_source"] == "consensus"]
+        if cons.empty:
+            continue
+        for ps in sorted(set(g["pseudo_source"]) - {"consensus"}, key=lambda x: order.get(x, 9)):
+            t = _finish_tests(_compare_groups(g[g["pseudo_source"] == ps], cons, f"l{int(lab)}: {ps} vs consensus"))
+            if not t.empty:
+                t.insert(0, "labeled", int(lab)); tests.append(t)
+    return summary, (pd.concat(tests, ignore_index=True) if tests else pd.DataFrame())
+
+
+def baseline_paired(df_le, baseline_csvs):
+    """Mark5.2 대 비교모델 짝지은 검정. 비교모델 원자료(aggregate_baseline.py 의 plots/aggregate_raw_<model>_<split>.csv,
+    열: model, cond(sup|pl|ceil), seed[, labeled], 지표)를 seed 로 짝지어 같은 labeled 수준·같은 역할끼리 비교한다.
+      supervised : Mark5.2 u0        vs 비교모델 sup
+      ours       : Mark5.2 u<max>    vs 비교모델 pl(+합의 라벨)
+      upper      : Mark5.2 ceil      vs 비교모델 ceil
+    비교모델 CSV 에 labeled 열이 없으면 전량으로 본다."""
+    rows = []
+    for path in baseline_csvs:
+        if not os.path.isfile(path):
+            print(f"[WARN] 비교모델 원자료가 없습니다: {path}"); continue
+        b = pd.read_csv(path)
+        if "labeled" not in b.columns:
+            b["labeled"] = _full_labeled_count()
+        model = str(b["model"].iloc[0]) if "model" in b.columns and len(b) else os.path.basename(path)
+        for lab in sorted(set(b["labeled"].astype(int)) & set(df_le["labeled"].astype(int))):
+            ours = df_le[df_le["labeled"] == lab]
+            bb = b[b["labeled"].astype(int) == lab]
+            umax = int(ours.loc[ours["cond"] == "ssl", "unlabeled"].max()) if (ours["cond"] == "ssl").any() else 0
+            pairs = [("supervised", ours[(ours["cond"] == "ssl") & (ours["unlabeled"] == 0)], bb[bb["cond"] == "sup"]),
+                     ("ours", ours[(ours["cond"] == "ssl") & (ours["unlabeled"] == umax)], bb[bb["cond"] == "pl"]),
+                     ("upper", ours[ours["cond"] == "ceil"], bb[bb["cond"] == "ceil"])]
+            for role, a, c in pairs:
+                if a.empty or c.empty or (role == "ours" and umax == 0):
+                    continue
+                t = _finish_tests(_compare_groups(c, a, f"l{lab} {role}: {model} vs Mark5.2"))
+                if not t.empty:
+                    t.insert(0, "labeled", lab); t.insert(1, "baseline", model); rows.append(t)
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Mark5_EXP 반복실험 결과 집계")
-    ap.add_argument("--mark_version", type=str, default="mark5.0")
+    ap.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     ap.add_argument("--split", type=str, default="test", choices=["test", "val"])
     ap.add_argument("--latency_only", action="store_true")
     ap.add_argument("--no_tests", action="store_true", help="유의성 검정을 건너뛴다")
     ap.add_argument("--allow_mixed_config", action="store_true",
                     help="설정이 다른 실험 결과가 섞여 있어도 진행한다(기본은 중단)")
+    # [신설 2026-09-17 / 8절] 비교모델 원자료(aggregate_baseline.py 산출)로 seed 짝지은 검정.
+    ap.add_argument("--baseline_raw", type=str, nargs="*", default=[],
+                    help="비교모델 plots/aggregate_raw_<model>_<split>.csv 경로들. 주면 Mark5.2 대 비교모델 짝지은 검정을 낸다.")
     args = ap.parse_args()
 
     if not args.latency_only:
@@ -767,6 +913,15 @@ def main():
             print("        run_experiments.py 를 먼저 돌리십시오.")
             sys.exit(1)
         # [2026-09-06] 천장 행은 따로 떼어 둔다. 아래 기존 흐름(요약·검정·곡선)은 반지도 조건(ssl)만 본다.
+        # [2026-09-17 / 8절] 기존 파이프라인(표 1·곡선·천장·검정)은 "labeled 전량 · 풀 확장 없음 · 합의" 회차만 본다.
+        # 라벨 효율 표는 _l<n> 회차까지, pseudo 출처 표는 _sp 회차만 따로 모은다.
+        _main = (df_all["labeled"] == _full_labeled_count()) & (~df_all["spill"]) & (df_all["pseudo_source"] == "consensus")
+        df_le_all = df_all[(~df_all["spill"]) & (df_all["pseudo_source"] == "consensus")].reset_index(drop=True)
+        df_ps_all = df_all[df_all["spill"]].reset_index(drop=True)
+        df_all = df_all[_main].reset_index(drop=True)
+        if df_all.empty:
+            print("[ERROR] labeled 전량 회차(태그에 _l 없음)가 없습니다. 라벨 효율·출처 비교 회차만 있으면 --split 결과의 주 표는 못 만듭니다.")
+            sys.exit(1)
         df = df_all[df_all["cond"] == "ssl"].reset_index(drop=True)
         df_ceil = df_all[df_all["cond"] == "ceil"].reset_index(drop=True)
         if df.empty:
@@ -896,6 +1051,71 @@ def main():
             print("\n[WARN] 조건마다 실행 횟수가 다릅니다:")
             print(counts.to_string())
             print("[WARN] 논문 표에 넣기 전에 부족한 조건을 채우십시오.")
+
+        # ---- [2026-09-17 / 8절] 라벨 효율 표 (labeled 200·500·1,000·전량 x supervised/ours/upper) ----
+        if df_le_all["labeled"].nunique() > 1:
+            le_sum, le_tests = label_efficiency(df_le_all)
+            print("\n" + "=" * 78)
+            print(f" 라벨 효율 표 ({args.split}) — labeled 수준 x 조건, 평균 ± 표본SD (N=회차)")
+            print("=" * 78)
+            show_le = ["labeled", "condition", "N"] + [c for c in le_sum.columns if c.endswith(" (mean)") or c.endswith(" (std)")]
+            with pd.option_context("display.width", 240, "display.float_format", "{:.4f}".format):
+                print(le_sum[show_le].to_string(index=False))
+            le_csv = os.path.join(PLOT_DIR, f"paper_table_label_eff_{args.mark_version}_{args.split}.csv")
+            le_sum.to_csv(le_csv, index=False, encoding=CSV_ENCODING)
+            print(f"[INFO] 라벨 효율 표 : {le_csv}")
+            if not args.no_tests and not le_tests.empty:
+                keyt = le_tests[le_tests["지표"].isin(KEY_METRICS)]
+                with pd.option_context("display.width", 240):
+                    print(keyt[[c for c in ["labeled", "비교", "지표", "평균차", "Cohen's d", "효과크기", "p (paired)", "p (paired, Holm)", "n(짝)"] if c in keyt.columns]].to_string(index=False))
+                le_t_csv = os.path.join(PLOT_DIR, f"aggregate_tests_label_eff_{args.mark_version}_{args.split}.csv")
+                le_tests.to_csv(le_t_csv, index=False, encoding=CSV_ENCODING)
+                print(f"[INFO] 라벨 효율 검정: {le_t_csv}")
+            # labeled 200 의 unlabeled 곡선(중간점 회차가 있으면)
+            for lab in sorted(set(df_le_all["labeled"]) - {_full_labeled_count()}):
+                g = df_le_all[(df_le_all["labeled"] == lab) & (df_le_all["cond"] == "ssl")]
+                if g["unlabeled"].nunique() >= 3:
+                    cs = df_le_all[(df_le_all["labeled"] == lab) & (df_le_all["cond"] == "ceil")]
+                    csum = None
+                    if len(cs):
+                        csum = summarize(cs); csum.index = ["ceiling"] * len(csum); csum.index.name = "unlabeled"
+                    out_png = os.path.join(PLOT_DIR, f"data_efficiency_curve_{args.mark_version}_l{lab}_{args.split}.png")
+                    plot_curve(summarize(g), args.split, out_png, ceiling=csum)
+                    print(f"[INFO] labeled {lab} 곡선: {out_png}")
+        # ---- [2026-09-17 / 8절] pseudo-label 출처 표 ----
+        if len(df_ps_all):
+            ps_sum, ps_tests = plsource_table(df_ps_all)
+            print("\n" + "=" * 78)
+            print(f" pseudo-label 출처 비교 ({args.split}) — labeled + 남은 labeled 를 unlabeled 로 합친 회차(_sp)")
+            print("=" * 78)
+            show_ps = ["labeled", "pseudo_source", "N"] + [c for c in ps_sum.columns if c.endswith(" (mean)") or c.endswith(" (std)")]
+            with pd.option_context("display.width", 240, "display.float_format", "{:.4f}".format):
+                print(ps_sum[show_ps].to_string(index=False))
+            ps_csv = os.path.join(PLOT_DIR, f"paper_table_plsource_{args.mark_version}_{args.split}.csv")
+            ps_sum.to_csv(ps_csv, index=False, encoding=CSV_ENCODING)
+            print(f"[INFO] 출처 비교 표 : {ps_csv}")
+            if not args.no_tests and not ps_tests.empty:
+                keyp = ps_tests[ps_tests["지표"].isin(KEY_METRICS)]
+                with pd.option_context("display.width", 240):
+                    print(keyp[[c for c in ["labeled", "비교", "지표", "평균차", "Cohen's d", "효과크기", "p (paired)", "p (paired, Holm)", "n(짝)"] if c in keyp.columns]].to_string(index=False))
+                ps_t_csv = os.path.join(PLOT_DIR, f"aggregate_tests_plsource_{args.mark_version}_{args.split}.csv")
+                ps_tests.to_csv(ps_t_csv, index=False, encoding=CSV_ENCODING)
+                print(f"[INFO] 출처 비교 검정: {ps_t_csv}")
+        # ---- [2026-09-17 / 8절] 비교모델 짝지은 검정 ----
+        if args.baseline_raw and not args.no_tests:
+            bt = baseline_paired(df_le_all, args.baseline_raw)
+            if bt.empty:
+                print("\n[WARN] 비교모델 짝지은 검정: 짝지을 회차가 없습니다(labeled 수준·cond·seed 가 맞는지 확인).")
+            else:
+                print("\n" + "=" * 78)
+                print(f" Mark5.2 대 비교모델 짝지은 검정 ({args.split}) — seed 로 짝지음, 큰쪽 = Mark5.2")
+                print("=" * 78)
+                keyb = bt[bt["지표"].isin(KEY_METRICS)]
+                with pd.option_context("display.width", 240):
+                    print(keyb[[c for c in ["labeled", "baseline", "비교", "지표", "평균차", "Cohen's d", "효과크기", "p (paired)", "p (paired, Holm)", "n(짝)"] if c in keyb.columns]].to_string(index=False))
+                bt_csv = os.path.join(PLOT_DIR, f"aggregate_tests_vs_baseline_{args.mark_version}_{args.split}.csv")
+                bt.to_csv(bt_csv, index=False, encoding=CSV_ENCODING)
+                print(f"[INFO] 비교모델 검정: {bt_csv}")
 
     # ---- 속도 ----
     lat = collect_latency(args.mark_version)

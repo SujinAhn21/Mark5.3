@@ -112,7 +112,7 @@ def read_provenance(xlsx_path, mark_version):
 
 def main():
     ap = argparse.ArgumentParser(description="unlabeled 2,000개에 진짜 라벨(provenance)을 붙인 천장용 CSV 를 만든다")
-    ap.add_argument("--mark_version", type=str, default="mark5.0")
+    ap.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     ap.add_argument("--provenance", type=str, default=os.path.join(PROJECT_ROOT, "..", "data_provenance.xlsx"))
     ap.add_argument("--unlabeled_csv", type=str, default=os.path.join(BASE_DIR, "dataset_unlabeled.csv"))
     ap.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "ceiling_labels.csv"))

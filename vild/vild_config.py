@@ -47,10 +47,19 @@ class AudioViLDConfig:
                 "media_talking", "water_toilet", "water_shower", "dog_bark",
                 "others",
             ]
+        elif self.mark_version == "mark5.2":
+            # [신설 2026-09-15] Mark5.2 — 데이터 재구성판. media_talking(TV 만) 을 talking(TV + 사람 말소리
+            # 50:50) 으로 바꾸고 others 를 "층간소음이 아닌 먼 소리" 로 다시 정의했다(09-07·09-11·09-15 결정).
+            # 클래스 순서는 mark5.0 과 같다(split 배분·teacher 순서가 이 순서를 따른다).
+            self.classes = [
+                "heavy_impact", "dragging", "construction", "machine_noise",
+                "talking", "water_toilet", "water_shower", "dog_bark",
+                "others",
+            ]
         else:
             raise ValueError(
                 f"[Error] Unknown or unsupported mark_version: '{self.mark_version}'.\n"
-                f"지원되는 값: ['mark4.1', 'mark4.2', 'mark4.3', 'mark4.4', 'mark4.5', 'mark4.6', 'mark4.7', 'mark4.8', 'mark5.0']"
+                f"지원되는 값: ['mark4.1', 'mark4.2', 'mark4.3', 'mark4.4', 'mark4.5', 'mark4.6', 'mark4.7', 'mark4.8', 'mark5.0', 'mark5.2']"
             )
 
         # === 기존 속성 유지 ===
@@ -155,17 +164,14 @@ class AudioViLDConfig:
         # 0.14 는 SpecAugment 없는 mark5.0_PL 의 최적값이었다.
         # ⚠ val 에서 고른 값이라 낙관 편향이 있고, 재학습하면 반드시 다시 스윕한다(모델 종속).
         self.others_direct_threshold = 0.09
-        # === [신설 2026-09-07 / Mark5_EXP2] others 임계값을 어떻게 정하나 ===
-        # 2026-09-06 까지는 위 0.09(반지도 모델 하나의 val 로 고른 값)를 바닥(u0)·천장(ceil)·데이터효율
-        # 30회 전부에 고정해 썼다. 그런데 진짜 others 라벨로 배운 지도학습 student 는 Prob_others 가
-        # 정상적으로 올라와서 0.09 로는 타겟 클립까지 others 로 쏟아졌다(천장 5회 others 정밀도 0.27~0.44,
-        # media_talking 재현율 0.08~0.63). 조건마다 val 에서 고른 값은 u0 0.18~0.20 · ceil 0.18~0.24 ·
-        # u2000 0.06~0.11 로 갈렸다(2026-09-07 실측, Mark5_EXP model/reselect_others_threshold.py).
-        # 운영점은 모델(조건)마다 val 에서 고르는 것이 비교의 전제라, 회차마다 자동으로 고른다.
-        #   "val_select" (기본): eval.py --split val 이 아래 격자를 훑어 val Macro F1 최대값을 골라
-        #                 plots/others_threshold_<run_tag>.json 에 저장하고, --split test 는 그 파일을 읽는다.
-        #                 run_experiments.py 가 학습 -> val -> test 순서로 돌리므로 따로 할 일은 없다.
-        #   "fixed"     : 위 others_direct_threshold 를 그대로 쓴다(옛 동작 재현용).
+        # === [신설 2026-09-16, Mark5_EXP2 2026-09-07 방식 그대로] others 임계값을 어떻게 정하나 ===
+        # 위 0.09 는 2026-08-23 에 mark5.0_PL_SA 하나의 val 로 사람이 고른 값이다. Mark5_EXP2 에서 조건마다
+        # val 에서 고른 값이 u0 0.18~0.20 · ceil 0.18~0.24 · u2000 0.06~0.11 로 갈렸고(2026-09-07 실측),
+        # 운영점은 모델마다 val 에서 고르는 것이 비교의 전제라 회차마다 자동으로 고른다.
+        #   "val_select" (기본): eval.py --split val 이 후보(argmax + direct 격자)를 훑어 val Macro F1 최대값을 골라
+        #                 plots/others_threshold_<run_tag>.json 에 저장(체크포인트 sha256 포함)하고,
+        #                 --split test 는 그 파일을 읽고 지문이 맞을 때만 쓴다. run_all.py 가 val -> test 순서로 돈다.
+        #   "fixed"     : 위 others_direct_threshold 를 그대로 쓴다(옛 결과 재현용). eval.py --others_threshold X 로도 고정 가능.
         self.others_threshold_mode = "val_select"
         self.others_threshold_grid = (0.02, 0.95, 0.01)     # (시작, 끝, 간격). 끝 포함
         self.others_threshold_criterion = "macro_f1"        # val 에서 최대화할 지표(현재 macro_f1 만 지원)
@@ -200,13 +206,22 @@ class AudioViLDConfig:
         # 0=supervised만, 1=distill만, 0.5=평균
         self.distill_branch_eval_weight = 0.5
         self.explain_topk_segments = 3
-        # [변경 2026-08-30 / Mark5_EXP] True -> False.
-        # 이 저장소는 반복실험(5 seed x 5 unlabeled 조건 = 25회)을 돌리는 곳이다.
-        # 설명 PNG 는 계보 하나당 67~133MB 라 25회면 2~3GB 가 쌓이는데, 논문의 표·곡선에는
-        # 쓰이지 않는다(클립별 세그먼트 기여도를 눈으로 보는 진단용). 필요하면 최종 조건
-        # 1회만 True 로 바꿔 따로 뽑으면 된다. 원본 Mark5 저장소는 True 그대로 두었다.
-        self.save_visual_explanations = False
-        self.encoder_type = "cnn"
+        self.save_visual_explanations = False   # [Mark5_EXP2] 반복실험에서는 세그먼트 그림을 안 남긴다
+        # === [변경 2026-09-17 / Mark5.2 6절] student 인코더 선택 ===
+        #   "cnn"  : SimpleAudioEncoder(3층 CNN, mel 64x101 입력) — mark5.0 까지의 인코더. 사전학습 없음.
+        #   "mn10" : Mn10AudioEncoder(EfficientAT mn10, AudioSet 사전학습, 파형 입력) — Mark5.2 기본.
+        # 2026-09-08 결정: 백본은 노벨티와 무관하고 3층 CNN(143,488 파라미터)이 표현 병목이라 비교모델과
+        # 같은 사전학습 백본으로 바꾼다. "0.44M 가볍다" 주장은 접는다(mn10 은 4.2M·17MB 안팎).
+        # 인코더 외(세그먼트 5개·teacher 합의·두 갈래 헤드·텍스트 앵커·others 규칙·SpecAugment·feature KD)는 그대로.
+        self.encoder_type = "mn10" if self.mark_version == "mark5.2" else "cnn"
+        # mn10 세부(encoder_type == "mn10" 일 때만 쓰인다). 규격 자체(32 kHz·128 mel·hop 320)는 사전학습을
+        # 따라야 하므로 vild_model.Mn10AudioEncoder 의 상수이고, 여기서는 가중치·헤드·학습률만 고른다.
+        self.mn10_pretrained_path = None      # None 이면 <저장소>/weights/mn10_as_mAP_471.pt (저장소 릴리스 v0.0.1, MIT)
+        self.mn10_load_pretrained = True      # False 는 "사전학습 없이 같은 구조" 절제 실험용
+        self.mn10_proj_dropout = 0.3          # 풀링 960 -> Dropout -> Linear(embedding_dim). SimpleAudioEncoder 헤드의 0.3 과 같게
+        # 백본 학습률. 비교모델이 2026-09-05 학습률 선정 3회로 고른 5e-5 를 사전학습 백본에 쓰고, 새로 만드는 층
+        # (투영·branch·classifier·background)은 아래 learning_rate(1e-4) 그대로(2026-09-17 결정). None 이면 전부 learning_rate.
+        self.encoder_learning_rate = 5e-5 if self.encoder_type == "mn10" else None
         # [추가 2026-08-17] mark4.x teacher 8개는 2026-07-13 teacher 강화 이후 4블록
         # TeacherAudioEncoder(약 49만 파라미터)로 학습돼 있다. mark5 의 EnsembleTeacher 가
         # 그 .pth 를 읽을 때 같은 구조로 만들어야 하므로 True 로 둔다.
@@ -338,29 +353,30 @@ class AudioViLDConfig:
         self.spec_augment_teacher_view = "augmented"
 
         # ==============================================================================
-        # [신설 2026-08-30 / Mark5_EXP 전용] 반복실험 설정
+        # [신설 2026-08-30 / Mark5_EXP 전용 → 2026-09-17 Mark5.2 코드 기준으로 재정렬] 반복실험 설정
         # ==============================================================================
-        # 2026-08-24 랩미팅 피드백 1·2·8번을 위한 값들이다. 세 값 모두 CLI 인자로 덮어쓰며,
-        # 아무 인자도 안 주면 기존 Mark5 와 완전히 같은 동작이 된다(기본값이 옛 동작).
-        #
-        #   experiment_seed : 이 학습에 쓴 seed. run_tag 에 반영돼 산출물이 안 덮인다.
-        #                     None = 인자 미지정(seed 42 사용, 태그 없음).
-        #   unlabeled_n     : unlabeled 를 몇 개만 쓸지(데이터효율곡선용).
-        #                     None = 전량 사용(태그 없음). 0 이면 지식증류가 통째로 꺼진다.
-        #   cudnn_deterministic : 같은 seed 로 돌렸을 때 GPU 연산 순서까지 고정할지.
-        #                     True 면 학습이 10~20% 느려지는 대신 결과가 완전히 재현된다.
-        #                     seed 를 매번 바꾸는 것과 충돌하지 않는다 — "seed 마다 다른 결과,
-        #                     각 seed 는 재현 가능"이 되어 논문에 seed 목록을 적을 수 있다.
+        # 세 값 모두 CLI 인자로 덮어쓰며, 아무 인자도 안 주면 Mark5.2 본체와 완전히 같은 동작이 된다.
+        #   experiment_seed : 이 학습에 쓴 seed. run_tag 에 반영돼 산출물이 안 덮인다. None = 태그 없음(seed 42).
+        #   unlabeled_n     : unlabeled 를 몇 개만 쓸지(데이터효율곡선). None = 전량. 0 이면 지식증류가 통째로 꺼진다.
+        #   labeled_n       : [신설 2026-09-17 / 8절] labeled 를 몇 클립만 쓸지(라벨 효율 표: 200·500·1,000).
+        #                     None = 전량(2,000). 클래스별로 고르게(n/9 씩, 나머지는 앞 클래스부터 1개씩) seed 로 뽑는다.
+        #                     val·test 는 그대로 430. 태그 _l<n> 이 _u<n> 앞에 붙는다.
+        #   cudnn_deterministic : 같은 seed 로 GPU 연산 순서까지 고정(10~20% 느림, 완전 재현).
         self.experiment_seed = None
         self.unlabeled_n = None
+        self.labeled_n = None
         self.cudnn_deterministic = True
-        # [신설 2026-09-06 / Mark5_EXP] 천장(upper bound) 조건.
-        #   True 면 unlabeled 2,000개에 가려 두었던 진짜 라벨(data_provenance target_class)을
-        #   붙여 **지도학습**으로 돈다. teacher 는 부르지 않는다. Cances et al. (2022) 의
-        #   "Supervised, 라벨 100%" 기준선이며, run_tag 에 _ceil 이 붙는다(_u<n> 대신).
-        #   이 조건으로 학습한 모델은 제안 모델이 아니라 상한을 재는 기준선이다.
+        # [신설 2026-09-17 / 8절 pseudo-label 출처 비교] "왜 하필 이진 전문가들의 합의인가"에 숫자로 답하는 실험.
+        #   pseudo_source : None = 전문가 8개 온라인 합의(우리 방식, 태그 없음)
+        #                   "self" = 라벨 200으로 배운 student 가 스스로 붙인 라벨 CSV / "gen" = 단일 generalist(EfficientAT) CSV
+        #                   CSV 모드에서는 teacher 를 부르지 않고 feature KD 가 없다(teacher 특징이 없으므로). 태그 _ps<이름>.
+        #   spill_labeled : True 면 labeled_n 으로 뽑고 남은 labeled 클립(라벨을 떼고)을 unlabeled 풀에 합친다.
+        #                   labeled 200 이면 unlabeled 2,000 + 1,800 = 3,800(체크리스트 8절 조건). 태그 _sp.
+        self.pseudo_source = None
+        self.spill_labeled = False
+        # [신설 2026-09-06 / Mark5_EXP] 천장(상한) 조건. True 면 unlabeled 에 가려 둔 진짜 라벨을 붙여 지도학습으로 돈다.
+        # teacher 는 부르지 않는다. Cances et al. (2022) 의 "Supervised, 라벨 100%" 기준선. run_tag 에 _ceil(_u<n> 대신).
         self.ceiling = False
-
         self.text_loss_weight = 1.0
         self.image_loss_weight = 1.0
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -435,14 +451,6 @@ class AudioViLDConfig:
             _SA    : use_spec_augment=True     (학습 시 SpecAugment 온라인 증강)
             _DA<t> : use_distribution_alignment=True (t = tau 를 소수점 없이, 예: tau 0.5 -> _DA05)
             _DKD   : use_dkd=True
-            _u<n>  : unlabeled_n 이 지정됨 (데이터효율곡선 조건, 예: _u500 · _u0)
-            _ceil  : ceiling=True (천장 조건 — unlabeled 에 진짜 라벨을 붙인 지도학습, _u<n> 대신 붙음)
-            _s<k>  : experiment_seed 가 지정됨 (반복실험 seed, 예: _s1)
-
-        [확장 2026-08-30 / Mark5_EXP] 뒤의 두 태그가 이 저장소에서 추가됐다.
-        25회(5조건 x 5seed)를 돌리는데 이게 없으면 산출물 9종이 전부 같은 이름이라
-        앞 결과를 덮는다. 예: mark5.0_PL_SA_u2000_s1 · mark5.0_PL_SA_u0_s3
-        인자를 안 주면 둘 다 안 붙어 기존 Mark5 와 파일명이 완전히 같다.
 
         태그가 갈리는 산출물: student 체크포인트 · 손실곡선 PNG · loss_history CSV ·
         혼동행렬 · ROC · performance_summary · calibration_details ·
@@ -466,18 +474,25 @@ class AudioViLDConfig:
             tag += "_DA" + f"{_t:g}".replace(".", "")
         if self.use_dkd:
             tag += "_DKD"
-        # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그.
-        # None 이면 안 붙는다(= 인자 미지정 = 기존 Mark5 와 같은 파일명).
-        # 0 도 유효한 조건이므로 "is not None" 으로 판정한다("if n:" 이면 0 이 빠진다).
-        # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil 이 들어간다.
-        #   mark5.0_PL_SA_ceil_s1 처럼 되며, 기존 25회(_u2000_s1 등)와 절대 겹치지 않는다.
-        #   집계(aggregate_results.py)는 이 접미사를 보고 천장 행으로 따로 모은다.
+        # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그. None 이면 안 붙는다(0 도 유효 조건이라 "is not None").
+        # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil. [추가 2026-09-17] labeled_n 은 _l<n> 으로 그 앞에.
+        #   예: mark5.2_PL_SA_l200_u2000_s1 · mark5.2_PL_SA_l200_ceil_s3 · mark5.2_PL_SA_u0_s2
+        #   집계(aggregate_results.py)는 이 접미사를 보고 조건을 나눈다.
+        _l = getattr(self, "labeled_n", None)
+        if _l is not None:
+            tag += f"_l{int(_l)}"
         if getattr(self, "ceiling", False):
             tag += "_ceil"
         else:
             _n = getattr(self, "unlabeled_n", None)
             if _n is not None:
                 tag += f"_u{int(_n)}"
+        # [추가 2026-09-17 / 8절] unlabeled 풀 확장(_sp)·pseudo-label 출처(_ps<이름>) 태그. _u<n> 뒤, _s<k> 앞.
+        if getattr(self, "spill_labeled", False):
+            tag += "_sp"
+        _ps = getattr(self, "pseudo_source", None)
+        if _ps:
+            tag += f"_ps{_ps}"
         _s = getattr(self, "experiment_seed", None)
         if _s is not None:
             tag += f"_s{int(_s)}"
@@ -500,6 +515,12 @@ class AudioViLDConfig:
         probs = [p] + [rest / (n - 1)] * (n - 1)
         entropy = -sum(x * math.log(x, 2) for x in probs if x > 1e-12)
         return entropy / math.log2(n)
+
+    @property
+    def student_input(self) -> str:
+        """[신설 2026-09-17] student 인코더에 무엇을 넣나 — "waveform"(mn10: 파서가 잘라 준 1.0초 파형) / "mel"(cnn).
+        teacher 8개는 어느 경우든 mel 64x101 을 받는다. 파서는 항상 둘 다 만들고, 학습·평가 루프가 이 값으로 고른다."""
+        return "waveform" if getattr(self, "encoder_type", "cnn") == "mn10" else "mel"
 
     @property
     def num_input_channels(self) -> int:

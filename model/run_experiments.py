@@ -169,14 +169,34 @@ def _summary_is_complete(path):
         return False
 
 
-def _run_tag(mark_version, seed, unlabeled_n, ceiling=False):
+def _run_tag(mark_version, seed, unlabeled_n, ceiling=False, labeled_n=None, spill=False, ps=None):
     """config 의 run_tag 를 그대로 쓴다(파일명 규칙을 두 곳에 적어두면 어긋난다)."""
     from vild_config import AudioViLDConfig
     c = AudioViLDConfig(mark_version=mark_version)
     c.experiment_seed = seed
     c.ceiling = bool(ceiling)
     c.unlabeled_n = None if ceiling else unlabeled_n
+    c.labeled_n = labeled_n          # [신설 2026-09-17 / 8절] _l<n>
+    c.spill_labeled = bool(spill)    # _sp
+    c.pseudo_source = ps             # _ps<이름>
     return c.run_tag
+
+
+# [신설 2026-09-17 / 8절] 논문 회차 계획(체크리스트 8절). (labeled_n, unlabeled_n|"ceil") 조합 x seed.
+#   labeled 2,000(전량) 행 : 하한 u0 · 제안 u2000 · 상한 ceil
+#   labeled 200·500·1,000  : 지도만(u0) · 우리 방식(u2000)
+#   labeled 200 의 unlabeled 곡선 중간점 : u500 · u1000 (u2000 은 위 행과 같은 회차라 중복 제거)
+#   -> 조합 11개 x seed 5 = 55회. (체크리스트의 "60회" 는 labeled 200 곡선의 u2000 을 두 번 센 값)
+PAPER_PLAN = [
+    (None, 0), (None, 2000), (None, "ceil"),
+    (200, 0), (200, 2000), (500, 0), (500, 2000), (1000, 0), (1000, 2000),
+    (200, 500), (200, 1000),
+]
+# [신설 2026-09-17 / 8절] pseudo-label 출처 비교. labeled 200 + unlabeled 3,800(dataset_unlabeled 2,000 + 남은 labeled 1,800,
+# --spill_labeled) 에서 라벨을 붙이는 주체만 바꾼다. 세 조건 모두 같은 풀이어야 공정하므로 합의 조건도 따로 돈다(3 x seed = 15회).
+#   (labeled_n, unlabeled_n, spill, pseudo_source)   pseudo_source None = 전문가 8개 온라인 합의
+PLSOURCE_PLAN = [(200, 2000, True, None), (200, 2000, True, "self"), (200, 2000, True, "gen")]
+PSEUDO_CSV_FMT = "pseudo_labels_{ps}_l{l}_s{s}.csv"   # model/make_pseudo_labels.py 산출물(프로젝트 루트)
 
 
 def _artifacts(mark_version, tag):
@@ -319,9 +339,15 @@ def _sh(cmd, log_path=None, timeout_sec=None):
 
 def main():
     ap = argparse.ArgumentParser(description="Mark5_EXP 반복실험 실행기 (5조건 x 5seed)")
-    ap.add_argument("--mark_version", type=str, default="mark5.0")
+    ap.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     ap.add_argument("--seeds", type=int, nargs="+", default=DEFAULT_SEEDS)
     ap.add_argument("--unlabeled_ns", type=int, nargs="+", default=DEFAULT_UNLABELED_NS)
+    # [신설 2026-09-17 / 8절] labeled 축. 0 은 "전량(2,000, 태그 없음)" 을 뜻한다(argparse 로 None 을 받을 수 없어서).
+    ap.add_argument("--labeled_ns", type=int, nargs="+", default=[0],
+                    help="labeled 개수 목록(200 500 1000 …). 0 = 전량(태그 없음). unlabeled_ns 와 곱해 조합을 만든다.")
+    ap.add_argument("--preset", type=str, default=None, choices=["paper", "plsource"],
+                    help="paper: 체크리스트 8절 회차 계획(조합 11개 x seed). plsource: pseudo-label 출처 비교(3 x seed). "
+                         "--labeled_ns/--unlabeled_ns/--ceiling 를 무시한다.")
     ap.add_argument("--dry_run", action="store_true", help="무엇을 돌릴지만 출력하고 끝낸다")
     ap.add_argument("--force", action="store_true", help="이미 끝난 단계도 다시 돌린다")
     ap.add_argument("--skip_test", action="store_true",
@@ -372,18 +398,42 @@ def main():
     try:
         python = sys.executable
         # 천장 모드면 조건 하나("ceil") x seed. 아니면 기존대로 unlabeled x seed.
-        if args.ceiling:
-            combos = [("ceil", s) for s in args.seeds]
+        # [변경 2026-09-17] 조합 원소가 (labeled_n, unlabeled_n|"ceil", seed) 세 칸이 됐다. labeled_n None = 전량.
+        # 조합 원소 = (labeled_n, unlabeled_n|"ceil", seed, spill, pseudo_source)
+        if args.preset == "paper":
+            combos = [(l, n, s, False, None) for (l, n) in PAPER_PLAN for s in args.seeds]
+            if not os.path.isfile(args.ceiling_csv if os.path.isabs(args.ceiling_csv) else os.path.join(PROJECT_ROOT, args.ceiling_csv)):
+                print(f"[ERROR] preset paper 에는 상한(ceil) 회차가 있어 천장용 라벨 CSV 가 필요합니다: {args.ceiling_csv}")
+                sys.exit(1)
+        elif args.preset == "plsource":
+            combos = [(l, n, s, sp, ps) for (l, n, sp, ps) in PLSOURCE_PLAN for s in args.seeds]
+            _missing = [PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s) for (l, n, sp, ps) in PLSOURCE_PLAN if ps for s in args.seeds
+                        if not os.path.isfile(os.path.join(PROJECT_ROOT, PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s)))]
+            if _missing:
+                print("[ERROR] preset plsource 에 필요한 pseudo-label CSV 가 없습니다(model/make_pseudo_labels.py 로 먼저 만드십시오):")
+                for m in _missing:
+                    print("        " + m)
+                print("        self 는 같은 seed 의 l200_u0 student 체크포인트, gen 은 같은 seed 의 비교모델 sup l200 체크포인트가 재료입니다.")
+                sys.exit(1)
         else:
-            combos = [(n, s) for n in args.unlabeled_ns for s in args.seeds]
+            labeled_ns = [None if l == 0 else int(l) for l in args.labeled_ns]
+            if args.ceiling:
+                combos = [(l, "ceil", s, False, None) for l in labeled_ns for s in args.seeds]
+            else:
+                combos = [(l, n, s, False, None) for l in labeled_ns for n in args.unlabeled_ns for s in args.seeds]
 
         # ---- 계획 출력 ---------------------------------------------------
         print("=" * 78)
-        print(f" Mark5_EXP 반복실험 — {len(combos)}개 조합" + ("  [천장 조건]" if args.ceiling else ""))
+        print(f" Mark5_EXP2 반복실험 — {len(combos)}개 조합" + ("  [천장 조건]" if args.ceiling else "") + (f"  [preset {args.preset}]" if args.preset else ""))
         print(f" 시작    : {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        if args.ceiling:
-            print(f" 조건     : 천장 — unlabeled 2,000 에 진짜 라벨({args.ceiling_csv}) · teacher 미사용")
+        if args.preset == "paper":
+            print(f" 조건     : PAPER_PLAN {len(PAPER_PLAN)}개 (labeled 전량·200·500·1000 x u0/u2000/ceil/곡선) — 파일 머리 주석 참조")
+        elif args.preset == "plsource":
+            print(f" 조건     : PLSOURCE_PLAN {len(PLSOURCE_PLAN)}개 (labeled 200 + unlabeled 3,800 · 합의/self/gen)")
+        elif args.ceiling:
+            print(f" 조건     : 천장 — unlabeled 2,000 에 진짜 라벨({args.ceiling_csv}) · teacher 미사용 · labeled {args.labeled_ns}")
         else:
+            print(f" labeled  : {args.labeled_ns} (0=전량)")
             print(f" unlabeled: {args.unlabeled_ns}")
         print(f" seeds    : {args.seeds}")
         if timeout_sec:
@@ -392,22 +442,23 @@ def main():
             print(f" 로그    : {master_path}")
         print("=" * 78)
 
-        def _cond_txt(n):
-            return "ceil " if n == "ceil" else f"u{n:<5}"
+        def _cond_txt(l, n, sp=False, ps=None):
+            return (("l" + (f"{l:<4}" if l is not None else "all ")) + " " + ("ceil " if n == "ceil" else f"u{n:<5}")
+                    + (" +sp" if sp else "    ") + (f" ps={ps}" if ps else ""))
 
         todo, done = [], []
-        for n, s in combos:
-            tag = _run_tag(args.mark_version, s, None if n == "ceil" else n, ceiling=(n == "ceil"))
+        for l, n, s, sp, ps in combos:
+            tag = _run_tag(args.mark_version, s, None if n == "ceil" else n, ceiling=(n == "ceil"), labeled_n=l, spill=sp, ps=ps)
             need = _needs(args.mark_version, tag, args.force, args.skip_test)
-            (todo if any(need) else done).append((n, s, tag, need))
+            (todo if any(need) else done).append((l, n, s, sp, ps, tag, need))
 
-        for n, s, tag, _ in done:
-            print(f"  [건너뜀] {_cond_txt(n)} seed {s}   {tag}")
-        for n, s, tag, need in todo:
+        for l, n, s, sp, ps, tag, _ in done:
+            print(f"  [건너뜀] {_cond_txt(l, n, sp, ps)} seed {s}   {tag}")
+        for l, n, s, sp, ps, tag, need in todo:
             # [H1] 무엇을 다시 돌리는지 단계까지 보여준다.
             steps = "·".join(nm for nm, f in
                              zip(["학습", "val", "test"], need) if f)
-            print(f"  [실행]   {_cond_txt(n)} seed {s}   {tag}   ({steps})")
+            print(f"  [실행]   {_cond_txt(l, n, sp, ps)} seed {s}   {tag}   ({steps})")
         print(f"\n 완료 {len(done)}개 / 남은 {len(todo)}개")
 
         if args.dry_run:
@@ -427,10 +478,11 @@ def main():
                 return None
             return os.path.join(LOG_DIR, f"{tag}__{stage}.log")
 
-        for i, (n, s, tag, need) in enumerate(todo, 1):
+        for i, (l, n, s, sp, ps, tag, need) in enumerate(todo, 1):
             need_train, need_val, need_test = need
             print("\n" + "=" * 78)
-            print(f" [{i}/{len(todo)}] " + ("천장" if n == "ceil" else f"unlabeled={n}") + f" · seed={s} · run_tag={tag}")
+            print(f" [{i}/{len(todo)}] labeled={'전량' if l is None else l} · " + ("천장" if n == "ceil" else f"unlabeled={n}")
+                  + (" +남은 labeled" if sp else "") + (f" · pseudo={ps}" if ps else "") + f" · seed={s} · run_tag={tag}")
             elapsed = (time.time() - t_start) / 60
             print(f" 지금까지 {elapsed:.0f}분 경과 · 지금 {time.strftime('%H:%M:%S')}")
             skipped = [nm for nm, f in zip(["학습", "val", "test"], need) if not f]
@@ -438,14 +490,18 @@ def main():
                 print(f" 이미 끝난 단계는 건너뜁니다: {', '.join(skipped)}")
             print("=" * 78, flush=True)
 
+            _lab = ["--labeled_n", str(l)] if l is not None else []      # [2026-09-17] labeled 축
+            _sp = ["--spill_labeled"] if sp else []
+            _ps = ["--pseudo_csv", PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s), "--pseudo_source", ps] if ps else []
             if n == "ceil":
                 # 천장: 학습은 CSV 경로를, 평가는 --ceiling 플래그를 받아 같은 태그(_ceil_s<k>)를 만든다.
-                common = ["--mark_version", args.mark_version, "--seed", str(s)]
+                common = ["--mark_version", args.mark_version, "--seed", str(s)] + _lab
                 train_args = common + ["--ceiling_csv", args.ceiling_csv]
                 eval_args = common + ["--ceiling"]
             else:
-                common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)]
-                train_args = eval_args = common
+                common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)] + _lab
+                train_args = common + _sp + _ps
+                eval_args = common + _sp + (["--pseudo_source", ps] if ps else [])
             failed_stage = None
 
             # [H2] 자식은 반드시 -u (무버퍼). 안 그러면 죽는 순간의 로그가 사라진다.

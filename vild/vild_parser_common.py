@@ -113,6 +113,14 @@ class BaseAudioParser:
                 print(f"[Parser] Mel too short for segmentation: {total_time} < {window} in {file_path}")
                 return []
 
+            # [신설 2026-09-17 / Mark5.2 6절] mel 세그먼트와 같은 창의 **파형**도 함께 낸다(record["wave"]).
+            # student 인코더가 mn10(파형 입력)이면 이것을 쓰고, teacher 8개는 계속 mel(record["tensor"])을 쓴다.
+            # mel 프레임 f 는 hop_length 간격(center=True)이라 프레임 [start, start+window) 은 샘플
+            # [start*hop, start*hop + segment_samples) 에 해당한다(window 101·hop 160 -> 16,000 샘플 = 1.0 초).
+            # 3.0 초 클립(48,000)이면 마지막 세그먼트 start=200 -> 32,000~48,000 으로 딱 맞는다. 짧으면 0 으로 채운다.
+            hop = int(self.config.hop_length)
+            seg_samples = int(getattr(self.config, "segment_samples", hop * (window - 1)))
+            wave_1d = waveform.reshape(-1)
             candidates = []
             segment_counter = 0
             for start in range(0, total_time - window + 1, stride):
@@ -123,12 +131,17 @@ class BaseAudioParser:
                     (self.config.num_input_channels, self.config.n_mels, self.config.segment_length),
                 )
                 if normed is not None:
+                    s0 = start * hop
+                    wave_seg = wave_1d[s0:s0 + seg_samples]
+                    if wave_seg.numel() < seg_samples:
+                        wave_seg = torch.nn.functional.pad(wave_seg, (0, seg_samples - wave_seg.numel()))
                     candidates.append({
                         "segment_index": segment_counter,
                         "start_frame": start,
                         "end_frame": start + window,
                         "saliency": self.compute_saliency_score(normed),
                         "tensor": normed,
+                        "wave": wave_seg.clone().to(torch.float32),   # [segment_samples] 16 kHz
                     })
                     segment_counter += 1
 
@@ -150,6 +163,7 @@ class BaseAudioParser:
                     "end_frame": last["end_frame"],
                     "saliency": last["saliency"],
                     "tensor": last["tensor"].clone(),
+                    "wave": last["wave"].clone(),
                 })
             return selected
         except Exception as e:

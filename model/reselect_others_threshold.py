@@ -222,7 +222,7 @@ def backup(paths, backup_dir, move=False):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--mark_version", type=str, default="mark5.0")
+    ap.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     ap.add_argument("--tags", nargs="*", default=None, help="일부 run_tag 만")
     ap.add_argument("--fixed", type=str, default=None, help="val 선택 대신 이 규칙을 전부에 적용: 실수(direct) 또는 argmax")
     ap.add_argument("--check", action="store_true", help="파일에 적힌 규칙으로 다시 계산해 같은지만 확인(쓰기 없음)")

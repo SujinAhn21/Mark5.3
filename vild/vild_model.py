@@ -238,9 +238,156 @@ class LearnableBackgroundEmbedding(nn.Module):
         return self.background_emb
 
 
+class Mn10AudioEncoder(nn.Module):
+    """[신설 2026-09-17 / Mark5.2 6절] 사전학습 오디오 백본 EfficientAT mn10 을 student 인코더로 쓴다.
+
+    왜 바꾸나(2026-09-08 결정): 기존 SimpleAudioEncoder 는 사전학습 없는 3층 CNN(143,488 파라미터)이라
+    표현이 병목이었다. 같은 val 운영점에서 반지도 이득이 0 이었고(09-07), 비교모델(mn10·CED·PANNs)이
+    0.89~0.95 인데 우리는 0.86 이었다. 백본은 노벨티(이진 전문가 합의·텍스트 앵커 헤드)와 무관하므로
+    인코더와 그 앞 mel 프론트엔드만 바꾸고 나머지(세그먼트 5개·teacher 합의·두 갈래 헤드·텍스트 앵커·
+    others 규칙·SpecAugment·feature KD)는 그대로 둔다. 비교모델과 같은 백본이라 표에서 백본 효과가 상쇄된다.
+
+    입력: [B, T] 16 kHz 파형(세그먼트 1.0 초 = 16,000 샘플. 파서가 mel 세그먼트와 같은 창으로 잘라 준다).
+          SimpleAudioEncoder 는 mel [B, C, 64, 101] 을 받지만 mn10 은 32 kHz·128 mel 규격의 자기 프론트엔드를
+          쓰므로 파형에서 시작해야 한다. 어느 쪽을 줄지는 config.student_input("waveform"/"mel")이 정한다.
+    출력: [B, embedding_dim]  (기존과 같아 DualBranchStudentHead·ViLDTextHead·feature KD 가 그대로 붙는다)
+
+    구조: frontend(Baseline_EfficientAT_mn10/model_def.py 와 같은 계산 — 16k→32k 리샘플, preemphasis -0.97,
+          STFT 1024/hop 320/win 800, Kaldi mel 128(fmax 15 kHz), log(x+1e-5), (x+4.5)/5)
+          → [학습 중·augment=True 면] SpecAugment(비율 8/64·16/101, 채움값 = 그 bin 의 시간 평균 — 8 kHz 위
+            빈 대역에 밝은 띠가 생기지 않게. Baseline common/augment.py 규칙)
+          → mn10 백본(third_party/efficientat, weights/mn10_as_mAP_471.pt, 전 층 파인튜닝) → 풀링 960
+          → Dropout(0.3) → Linear(960, embedding_dim)
+    사전학습 가중치는 저자 mlp 헤드(classifier.5.*)만 빼고 strict 하게 맞춘다. 헤드는 쓰지 않는다(features 만 씀).
+    """
+
+    SAMPLE_RATE = 32000
+    N_MELS = 128
+    WIN_LENGTH = 800
+    HOP_SIZE = 320
+    N_FFT = 1024
+    FMIN = 0.0
+    FMAX = 15000.0     # 저자 코드: fmax=None -> sr//2 - fmax_aug_range//2 = 16000 - 1000
+    HEAD_KEYS = ("classifier.5.weight", "classifier.5.bias")
+
+    def __init__(self, config):
+        super().__init__()
+        import contextlib, io, os, sys
+        import torchaudio
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        third = os.path.join(project_root, "third_party", "efficientat")
+        if third not in sys.path:
+            sys.path.insert(0, third)
+        from models.mn.model import get_model     # third_party/efficientat (MIT, 원본 그대로)
+        with contextlib.redirect_stdout(io.StringIO()):      # get_model 이 모델 전체를 print 한다
+            self.core = get_model(num_classes=2, pretrained_name=None, width_mult=1.0,
+                                  head_type="mlp", se_dims="c")
+        self.pretrained_loaded = False
+        self.pretrained_source = None
+        weights_path = getattr(config, "mn10_pretrained_path", None)
+        if weights_path is None:
+            weights_path = os.path.join(project_root, "weights", "mn10_as_mAP_471.pt")
+        if getattr(config, "mn10_load_pretrained", True):
+            if not os.path.isfile(weights_path):
+                raise FileNotFoundError(f"[ERROR] EfficientAT mn10 가중치가 없습니다: {weights_path}")
+            sd = torch.load(weights_path, map_location="cpu", weights_only=True)
+            if isinstance(sd, dict) and "state_dict" in sd:
+                sd = sd["state_dict"]
+            for k in self.HEAD_KEYS:
+                sd.pop(k, None)                                   # 저자 527-class 헤드는 버린다
+            res = self.core.load_state_dict(sd, strict=False)
+            missing = [k for k in res.missing_keys if k not in self.HEAD_KEYS]
+            if res.unexpected_keys or missing:
+                raise RuntimeError(f"[ERROR] mn10 가중치 키 불일치 — missing={missing}, unexpected={list(res.unexpected_keys)}")
+            self.pretrained_loaded = True
+            self.pretrained_source = weights_path
+        # 저자 mlp 헤드는 쓰지 않으므로 통째로 떼어낸다(state_dict·파라미터 수에 1.23M 이 헛되이 남지 않게).
+        # _forward_impl 이 self.classifier(x) 를 부르므로 Identity 로 바꿔 둔다(그 출력은 버린다).
+        feat_dim = int(self.core.classifier[2].in_features)       # mlp 헤드 첫 Linear 의 입력 = 960 (mn10)
+        self.core.classifier = nn.Identity()
+        self.proj = nn.Sequential(
+            nn.Dropout(getattr(config, "mn10_proj_dropout", 0.3)),
+            nn.Linear(feat_dim, config.embedding_dim),
+        )
+        self.register_buffer("window", torch.hann_window(self.WIN_LENGTH, periodic=False), persistent=False)
+        self.register_buffer("preemphasis", torch.as_tensor([[[-0.97, 1.0]]]), persistent=False)
+        mel_basis, _ = torchaudio.compliance.kaldi.get_mel_banks(
+            self.N_MELS, self.N_FFT, self.SAMPLE_RATE, self.FMIN, self.FMAX,
+            vtln_low=100.0, vtln_high=-500.0, vtln_warp_factor=1.0)
+        self.register_buffer("mel_basis", F.pad(mel_basis, (0, 1), mode="constant", value=0), persistent=False)
+        self.input_sample_rate = int(getattr(config, "sample_rate", 16000))
+        # SpecAugment 비율(Mark5 규칙 8/64·16/101 을 mel 수·프레임 수에 비례해 옮김) — 학습 루프가 augment=True 로 켠다.
+        self.sa_freq_ratio = float(getattr(config, "spec_augment_freq_mask_param", 8)) / float(getattr(config, "n_mels", 64))
+        self.sa_time_ratio = float(getattr(config, "spec_augment_time_mask_param", 16)) / float(getattr(config, "segment_length", 101))
+        self.sa_num_freq = int(getattr(config, "spec_augment_num_freq_masks", 2))
+        self.sa_num_time = int(getattr(config, "spec_augment_num_time_masks", 2))
+
+    def frontend(self, wave):
+        """[B, T] 16 kHz 파형 -> mel [B, 128, T']. Baseline_EfficientAT_mn10/model_def.py 와 같은 계산."""
+        import torchaudio
+        if wave.dim() == 3:
+            wave = wave.squeeze(1)
+        if self.input_sample_rate != self.SAMPLE_RATE:
+            # Resample 모듈 대신 함수형 — 커널 버퍼가 state_dict 에 들어가 torchaudio 버전이 갈리면 로드가 깨진다.
+            wave = torchaudio.functional.resample(wave, self.input_sample_rate, self.SAMPLE_RATE)
+        x = F.conv1d(wave.unsqueeze(1), self.preemphasis).squeeze(1)
+        spec = torch.stft(x, self.N_FFT, hop_length=self.HOP_SIZE, win_length=self.WIN_LENGTH, center=True,
+                          normalized=False, window=self.window, return_complex=True)
+        power = spec.real ** 2 + spec.imag ** 2
+        mel = torch.matmul(self.mel_basis, power)
+        mel = (mel + 0.00001).log()
+        return (mel + 4.5) / 5.0
+
+    def spec_augment(self, mel):
+        """[B, F, T] 에 주파수·시간 마스크. 채움값은 그 샘플·그 bin 의 시간 평균(비교모델과 같은 규칙).
+        16 kHz 소리를 32 kHz 규격에 넣어 8 kHz 위 24 bin 이 거의 비어 있으므로 전체 평균 하나로 채우면
+        그 대역에 밝은 띠가 생긴다(2026-09-05 code-reviewer 실측). 난수는 torch 전역 seed."""
+        B, n_mels, n_frames = mel.shape
+        f_param = max(1, int(round(n_mels * self.sa_freq_ratio)))
+        t_param = max(1, int(round(n_frames * self.sa_time_ratio)))
+        out = mel.clone()
+        fill = mel.mean(dim=2, keepdim=True)               # [B, F, 1]
+        for b in range(B):
+            for _ in range(self.sa_num_freq):
+                f = int(torch.randint(0, f_param + 1, (1,)).item())
+                if f == 0 or f >= n_mels:
+                    continue
+                f0 = int(torch.randint(0, n_mels - f + 1, (1,)).item())
+                out[b, f0:f0 + f, :] = fill[b, f0:f0 + f, :]
+            for _ in range(self.sa_num_time):
+                t = int(torch.randint(0, t_param + 1, (1,)).item())
+                if t == 0 or t >= n_frames:
+                    continue
+                t0 = int(torch.randint(0, n_frames - t + 1, (1,)).item())
+                out[b, :, t0:t0 + t] = fill[b, :, :]
+        return out
+
+    def forward(self, x, augment=False):
+        """x: [B, T] 파형(또는 [B, 1, T]). augment 는 학습 루프가 SpecAugment 를 켤 때만 True 로 준다."""
+        mel = self.frontend(x)
+        if augment and self.training:
+            mel = self.spec_augment(mel)
+        _logits, features = self.core(mel.unsqueeze(1))          # features: 풀링된 [B, 960]
+        # 원본 _forward_impl 이 features 를 .squeeze() 하므로 배치가 1이면 [960] 이 된다(원본은 자기 헤드 출력으로
+        # 배치 차원을 되살리는데 헤드를 Identity 로 바꿔 그 분기가 안 탄다). eval 은 늘 배치 1 이라 여기서 되살린다.
+        if features.dim() == 1:
+            features = features.unsqueeze(0)
+        return self.proj(features)
+
+    @staticmethod
+    def get_min_input_shape(config=None):
+        """파형 입력 크기 (B, T). 세그먼트 1.0 초."""
+        sr = getattr(config, "sample_rate", 16000) if config else 16000
+        dur = getattr(config, "segment_duration", 1.0) if config else 1.0
+        return (1, int(sr * dur))
+
+
 def build_audio_encoder(config):
     encoder_type = getattr(config, "encoder_type", "cnn")
     if encoder_type == "residual_cnn":
         return ResidualAudioEncoder(config)
+    if encoder_type == "mn10":
+        # [신설 2026-09-17] Mark5.2 기본 백본. config.student_input 이 "waveform" 이어야 파서가 파형 세그먼트를 준다.
+        return Mn10AudioEncoder(config)
     return SimpleAudioEncoder(config)
     

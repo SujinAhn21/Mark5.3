@@ -397,7 +397,7 @@ def build_latex(raw, lat, tests, rows, top, split, n_seeds, raw_ceil=None, gap=N
 
 def main():
     ap = argparse.ArgumentParser(description="반복실험 집계를 논문용 표(마크다운·LaTeX)로 뽑는다.")
-    ap.add_argument("--mark_version", type=str, default="mark5.0")
+    ap.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     ap.add_argument("--split", type=str, default="test", choices=["test", "val"])
     ap.add_argument("--extra_csv", type=str, default="",
                     help="비교모델 결과 CSV(열: model + 지표 5종). 표 1 에 행으로 붙는다.")

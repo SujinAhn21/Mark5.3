@@ -72,7 +72,16 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100):
     model_size_mb = total_params * 4 / (1024 ** 2)  # fp32 가정
 
     num_classes = len(config.get_classes_for_evaluation())
-    dummy_segment = torch.randn(1, config.num_input_channels, config.n_mels, config.segment_length, device=device)
+    # [변경 2026-09-17 / Mark5.2 6절] student 입력이 파형(mn10)이면 세그먼트 1.0초 파형으로 잰다.
+    # mn10 은 mel 프론트엔드(리샘플·STFT·mel)까지 인코더 안에 있으므로 FLOPs·지연시간에 그 몫이 포함된다
+    # (비교모델과 같은 기준). cnn 경로는 옛날처럼 mel [1, C, 64, 101] 을 넣는다(mel 계산은 파서 몫이라 제외).
+    if getattr(config, "student_input", "mel") == "waveform":
+        dummy_segment = torch.randn(1, int(getattr(config, "segment_samples", 16000)), device=device)
+        _input_desc = f"waveform 1x{dummy_segment.shape[1]} (16 kHz, {getattr(config, 'segment_duration', 1.0)}s)"
+    else:
+        dummy_segment = torch.randn(1, config.num_input_channels, config.n_mels, config.segment_length, device=device)
+        _input_desc = f"mel 1x{config.num_input_channels}x{config.n_mels}x{config.segment_length}"
+    print(f"[INFO] 측정 입력: {_input_desc} · 인코더 {type(encoder).__name__}")
     dummy_text_emb = torch.randn(num_classes, config.embedding_dim, device=device)
 
     # [추가] FLOPs 측정 (encoder+branch_head, 세그먼트 1개 기준).
@@ -106,6 +115,8 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100):
 
     result = {
         "mark_version": mark_version,
+        "encoder_type": getattr(config, "encoder_type", "cnn"),       # [추가 2026-09-17]
+        "input": _input_desc,
         "total_parameters": total_params,
         "model_size_mb": round(model_size_mb, 4),
         "gmacs_per_segment": round(gmacs_per_segment, 6),
@@ -133,7 +144,7 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Mark 모델의 파라미터 수·모델 용량·FLOPs·CPU 추론 지연시간을 측정합니다.")
-    parser.add_argument("--mark_version", type=str, required=True)
+    parser.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     parser.add_argument("--num_warmup", type=int, default=10)
     parser.add_argument("--num_runs", type=int, default=100)
     args = parser.parse_args()

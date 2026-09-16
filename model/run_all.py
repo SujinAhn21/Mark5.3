@@ -8,8 +8,8 @@ import argparse
 import sys
 
 # ===== 파라미터 설정 =====
-parser = argparse.ArgumentParser(description="mark5.0 전체 학습 파이프라인 (앙상블 지식 증류)")
-parser.add_argument("--mark_version", type=str, required=True, help="실행할 모델 버전")
+parser = argparse.ArgumentParser(description="Mark5.2 전체 학습 파이프라인 (앙상블 지식 증류, mn10 백본)")
+parser.add_argument("--mark_version", type=str, default="mark5.2", help="실행할 모델 버전 (기본 mark5.2 — [변경 2026-09-17] 이 저장소의 본 모델)")
 args = parser.parse_args()
 mark_version = args.mark_version
 
@@ -126,7 +126,13 @@ def run_step_5_generate_test_index():
                            "--mode", "test", "--mark_version", mark_version])
 
 @timed_step
-def run_step6_evaluate_model():
+def run_step6a_evaluate_val_select_threshold():
+    """[신설 2026-09-16] val 평가 — others 판정 규칙(운영점)을 val 에서 자동으로 골라 json 에 적는다.
+    test 평가(6b)가 그 json 을 읽으므로 반드시 먼저 돈다(Mark5_EXP2 run_experiments.py 의 val -> test 순서와 같음)."""
+    return run_subprocess([sys.executable, os.path.join(model_dir, "eval.py"), "--mark_version", mark_version, "--split", "val"])
+
+@timed_step
+def run_step6b_evaluate_model():
     """학습된 Student 모델(C) 및 모든 비교 모델의 성능을 평가합니다. (test_set 사용)"""
     """비교 모델: A, B, C """
     return run_subprocess([sys.executable, os.path.join(model_dir, "eval.py"), "--mark_version", mark_version])
@@ -138,7 +144,7 @@ def run_step6_evaluate_model():
 # ===== 메인 실행 =====
 if __name__ == "__main__":
     logging.info("="*50)
-    logging.info(f"  mark5.0 전체 학습 파이프라인 (앙상블 지식 증류) 시작  ")
+    logging.info(f"  {mark_version} 전체 학습 파이프라인 (앙상블 지식 증류) 시작  ")
     logging.info("="*50)
     logging.info(f"모델 버전: {mark_version}")
     logging.info("기존 전문가 모델들의 지식을 통합하여 새로운 Student 모델을 학습합니다.")
@@ -153,7 +159,8 @@ if __name__ == "__main__":
         run_step3_student_model_train,
         run_step_4_preprocess_test_data,
         run_step_5_generate_test_index,
-        run_step6_evaluate_model
+        run_step6a_evaluate_val_select_threshold,   # [신설 2026-09-16] val -> 운영점 자동 선택
+        run_step6b_evaluate_model                   # test (json 의 운영점 사용)
     ]
 
     for step in steps:

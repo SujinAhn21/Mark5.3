@@ -78,7 +78,7 @@ def _keep_topk_segments(segment_records, segment_probs, seg_weights, config):
 
 
 def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_n=None, ceiling=False,
-             others_threshold=None):
+             others_threshold=None, labeled_n=None, spill_labeled=False, pseudo_source=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
 
     eval 은 학습을 하지 않지만 **run_tag 로 체크포인트를 찾기 때문에** 학습과 같은 조건을
@@ -94,6 +94,9 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
         raise ValueError(f"[ERROR] --ceiling 과 --unlabeled_n={unlabeled_n} 을 함께 줄 수 없습니다(천장은 unlabeled 를 쓰지 않음).")
     config.ceiling = bool(ceiling)
     config.unlabeled_n = None if ceiling else unlabeled_n
+    config.labeled_n = labeled_n       # [신설 2026-09-17 / 8절] 학습 때 --labeled_n 을 줬으면 같은 값을 줘야 _l<n> 체크포인트를 찾는다
+    config.spill_labeled = bool(spill_labeled)   # _sp
+    config.pseudo_source = pseudo_source         # _ps<이름>
     device = config.device
     parser = AudioParser(config, segment_mode=True)
 
@@ -115,6 +118,12 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
 
     encoder = build_audio_encoder(config).to(device)
     encoder.load_state_dict(resolve_state_dict(checkpoint, "model_state_dict", "encoder_state_dict", "model"))
+    # [신설 2026-09-17] student 입력 종류(config.student_input). 체크포인트에 encoder_type 이 적혀 있으면 config 와 대조한다.
+    _student_input = getattr(config, "student_input", "mel")
+    _ckpt_enc = (checkpoint.get("config_metadata") or {}).get("encoder_type")
+    if _ckpt_enc is not None and _ckpt_enc != getattr(config, "encoder_type", "cnn"):
+        raise RuntimeError(f"[ERROR] 체크포인트의 encoder_type={_ckpt_enc!r} 과 config 의 {getattr(config, 'encoder_type', 'cnn')!r} 이 다릅니다.")
+    print(f"[INFO] student 인코더 {type(encoder).__name__} · 입력 {_student_input}")
     # [변경 2026-08-22] 학습 때와 같은 구조로 만들어야 branch state_dict 가 맞는다.
     branch_head = DualBranchStudentHead(
         config.embedding_dim,
@@ -202,7 +211,11 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                 if seg.ndim == 3:
                     seg = seg.unsqueeze(0)
                 seg = seg.to(device)
-                base_features = encoder(seg)
+                # [변경 2026-09-17 / Mark5.2 6절] student 가 mn10(파형 입력)이면 같은 창의 파형(record["wave"])을 넣는다.
+                if _student_input == "waveform":
+                    base_features = encoder(record["wave"].unsqueeze(0).to(device))
+                else:
+                    base_features = encoder(seg)
                 supervised_features, distill_features = branch_head(base_features)
                 sup_logits = text_head(supervised_features, text_emb)
                 distill_logits = text_head(distill_features, text_emb)
@@ -488,7 +501,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="학습된 모델의 성능을 평가합니다.")
-    parser.add_argument("--mark_version", type=str, required=True)
+    parser.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     # [추가 2026-08-17] 평가 split 선택. 기본은 test(기존 동작 그대로).
     # 운영점은 val 로 고르고 test 는 마지막 확인 한 번만 쓴다(mark4.x 와 같은 원칙).
     parser.add_argument("--split", type=str, default="test", choices=["test", "val"])
@@ -498,6 +511,10 @@ if __name__ == "__main__":
                         help="학습 때 쓴 seed. 체크포인트 이름의 _s<k> 를 맞추는 용도.")
     parser.add_argument("--unlabeled_n", type=int, default=None,
                         help="학습 때 쓴 unlabeled 개수. 체크포인트 이름의 _u<n> 을 맞추는 용도.")
+    parser.add_argument("--labeled_n", type=int, default=None,
+                        help="학습 때 쓴 labeled 개수. 체크포인트 이름의 _l<n> 을 맞추는 용도.")
+    parser.add_argument("--spill_labeled", action="store_true", help="학습 때 --spill_labeled 를 줬으면 같이(_sp 태그).")
+    parser.add_argument("--pseudo_source", type=str, default=None, help="학습 때 --pseudo_source 를 줬으면 같이(_ps 태그).")
     parser.add_argument("--ceiling", action="store_true",
                         help="천장 조건으로 학습한 체크포인트(_ceil)를 평가할 때 준다.")
     # [신설 2026-09-07 / Mark5_EXP2] 기본은 val 에서 고른 임계값(config.others_threshold_mode=val_select).
@@ -507,4 +524,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     evaluate(mark_version=args.mark_version, split=args.split,
              seed_value=args.seed, unlabeled_n=args.unlabeled_n, ceiling=args.ceiling,
-             others_threshold=args.others_threshold)
+             others_threshold=args.others_threshold, labeled_n=args.labeled_n,
+             spill_labeled=args.spill_labeled, pseudo_source=args.pseudo_source)

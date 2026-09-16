@@ -32,7 +32,7 @@ def main():
     parser.add_argument(
         '--mark_version',
         type=str,
-        default="mark5.0",
+        default="mark5.2",   # [변경 2026-09-17]
         help="모델 및 데이터셋 버전 (예: mark5.0, mark3_semisupervised_poc)"
     )
     args = parser.parse_args()

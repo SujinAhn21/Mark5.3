@@ -123,6 +123,67 @@ SPECIALIST_CONFIG = {
 }
 
 
+def select_labeled_subset(labeled_files, labeled_n, seed, classes):
+    """[신설 2026-09-17 / 8절] labeled 서브샘플 — 라벨 효율 표(200·500·1,000)와 pseudo-label 출처 비교가 같은 부분집합을 쓴다.
+    클래스별로 고르게(n//C 개씩, 나머지는 앞 클래스부터 1개씩), seed 로 클래스별 순서를 섞어 앞에서 자른다.
+    반환: (뽑힌 행 목록, 남은 행 목록). 같은 seed·n 이면 어디서 불러도 같은 결과."""
+    _ln = int(labeled_n)
+    classes = list(classes)
+    if _ln <= 0 or _ln > len(labeled_files):
+        raise ValueError(f"[ERROR] labeled_n={_ln} 은 1 이상, 실제 labeled 개수({len(labeled_files)}) 이하여야 합니다.")
+    by_cls = {c: [r for r in labeled_files if r.get("label") == c] for c in classes}
+    rng = random.Random(int(seed))
+    for c in classes:
+        rng.shuffle(by_cls[c])
+    base, extra = divmod(_ln, len(classes))
+    picked, rest = [], []
+    for i, c in enumerate(classes):
+        k = base + (1 if i < extra else 0)
+        if k > len(by_cls[c]):
+            raise ValueError(f"[ERROR] labeled_n={_ln}: 클래스 {c} 에 {k}개가 필요한데 {len(by_cls[c])}개뿐입니다.")
+        picked += by_cls[c][:k]
+        rest += by_cls[c][k:]
+    return picked, rest
+
+
+def load_pseudo_csv(path, classes):
+    """[신설 2026-09-17 / 8절] CSV(path,label,confidence,…) -> {basename: (label_idx, confidence)}. 라벨은 classes 안이어야 한다."""
+    lookup = {}
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    if not rows or any(c not in rows[0] for c in ("path", "label")):
+        raise ValueError(f"[ERROR] pseudo-label CSV 형식이 아닙니다(path,label 열 필요): {path}")
+    bad = sorted({r["label"] for r in rows if r["label"] not in classes})
+    if bad:
+        raise ValueError(f"[ERROR] pseudo-label CSV 에 클래스 밖 라벨 {bad}: {path}")
+    for r in rows:
+        conf = float(r.get("confidence", 1.0) or 1.0)
+        lookup[os.path.basename(r["path"])] = (classes.index(r["label"]), conf)
+    return lookup
+
+
+def specialist_config_for(config):
+    """[신설 2026-09-17] config.classes 에 맞춘 teacher 목록. mark5.2 는 media_talking 대신 talking 이 담당 칸 이름이라
+    키를 바꿔 준다(fusion 이 키 = 클래스 이름으로 담당 칸을 찾는다). mark5.0 은 그대로. make_consensus_labels.py 도 이것을 쓴다."""
+    out = {}
+    for k, v in SPECIALIST_CONFIG.items():
+        if k == "media_talking" and "talking" in config.classes and "media_talking" not in config.classes:
+            k = "talking"
+        out[k] = v
+    return out
+
+
+class _CsvFusion:
+    """[신설 2026-09-17 / 8절] CSV pseudo-label 을 fusion 출력과 같은 모양으로 감싼다(train 루프가 둘을 같은 코드로 다룬다).
+    logits: one-hot [B, C] · features: None · uncertainty = 1 - confidence · disagreement 0 · specialist_weights 없음."""
+    def __init__(self, logits, features, confidence):
+        self.logits = logits
+        self.features = features
+        self.uncertainty = 1.0 - confidence
+        self.disagreement = torch.zeros_like(confidence)
+        self.specialist_weights = {}
+
+
 class EnsembleTeacher:
     def __init__(self, specialist_config, device, others_rule="min", score_mode="margin",
                  use_distribution_alignment=False, dist_align_tau=0.5, dist_align_momentum=0.999):
@@ -222,7 +283,9 @@ class SemiSupervisedDataset(Dataset):
                             "end_frame": record["end_frame"],
                             "saliency": record["saliency"],
                         }
-                        self.samples.append((seg, label if is_labeled else -1, metadata))
+                        # [변경 2026-09-17 / Mark5.2 6절] 같은 창의 파형(record["wave"], 1.0초 16 kHz)도 같이 들고 간다.
+                        # student 가 mn10(파형 입력)이면 이것을 쓰고 teacher 는 계속 mel 을 쓴다(config.student_input).
+                        self.samples.append((seg, record["wave"], label if is_labeled else -1, metadata))
             except Exception as e:
                 print(f"[ERROR] Failed to parse {path}: {e}")
 
@@ -259,8 +322,9 @@ class SampleListDataset(Dataset):
 
 
 def custom_collate(batch):
-    mels, labels, metadata = zip(*batch)
-    return torch.stack(mels, dim=0), list(labels), list(metadata)
+    # [변경 2026-09-17] (mel, wave, label, meta) — wave 는 [B, segment_samples] 로 쌓는다.
+    mels, waves, labels, metadata = zip(*batch)
+    return torch.stack(mels, dim=0), torch.stack(waves, dim=0), list(labels), list(metadata)
 
 
 def dkd_loss(student_logits, teacher_logits, target_idx, T, dkd_alpha, dkd_beta):
@@ -433,7 +497,8 @@ def _stable_file_split(path, val_ratio=0.1):
     return "val" if bucket < val_ratio else "train"
 
 
-def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceiling_csv=None):
+def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceiling_csv=None, labeled_n=None,
+                pseudo_csv=None, pseudo_source=None, spill_labeled=False):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 실험 조건으로 받는다.
 
     두 인자 모두 None 이면 기존 Mark5 와 완전히 같은 동작이다
@@ -456,6 +521,16 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
     config.experiment_seed = seed_value
     config.unlabeled_n = None if is_ceiling else unlabeled_n
     config.ceiling = is_ceiling
+    config.labeled_n = labeled_n        # [신설 2026-09-17 / 8절] run_tag 에 _l<n>
+    # [신설 2026-09-17 / 8절] pseudo-label 출처 비교. CSV 를 주면 teacher 대신 그 라벨을 쓴다(태그 _ps<이름>).
+    if (pseudo_csv is None) != (pseudo_source is None):
+        raise ValueError("[ERROR] --pseudo_csv 와 --pseudo_source 는 함께 줘야 합니다(태그와 파일이 짝).")
+    if pseudo_csv is not None and is_ceiling:
+        raise ValueError("[ERROR] --pseudo_csv 는 천장 조건과 함께 쓸 수 없습니다(천장은 unlabeled 를 쓰지 않음).")
+    config.pseudo_source = pseudo_source
+    config.spill_labeled = bool(spill_labeled)
+    if spill_labeled and labeled_n is None:
+        raise ValueError("[ERROR] --spill_labeled 는 --labeled_n 과 함께 써야 합니다(남은 labeled 를 unlabeled 로 돌리는 옵션).")
     if is_ceiling and unlabeled_n not in (None, 0):
         # 천장은 정의상 unlabeled 를 쓰지 않는다. 다른 값을 같이 주면 조건이 모호해지므로 멈춘다.
         raise ValueError(f"[ERROR] --ceiling_csv 와 --unlabeled_n={unlabeled_n} 을 함께 줄 수 없습니다. "
@@ -467,6 +542,26 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
     parser = AudioParser(config, segment_mode=True)
 
     labeled_files = list(csv.DictReader(open(_resolve_csv_path("dataset_labeled.csv"), newline="", encoding="utf-8")))
+
+    # ==========================================================================
+    # [신설 2026-09-17 / 8절] labeled 서브샘플 — 라벨 효율 표(labeled 200·500·1,000)
+    #   클래스별로 고르게 뽑는다: 클래스당 n//9 개, 나머지 n%9 개는 클래스 순서 앞에서부터 1개씩.
+    #   같은 seed 면 같은 클립이 뽑히고, 작은 n 이 큰 n 의 부분집합(누적)이 되도록 클래스별로 섞은 순서의 앞에서 자른다.
+    #   unlabeled 는 건드리지 않는다(2,000 전량 또는 --unlabeled_n). val·test 도 그대로 430.
+    #   천장(ceiling) 조건과 같이 주면 "labeled n + 진짜 라벨 2,000" 이 되어 표의 '상한' 행과 뜻이 달라지므로 막는다.
+    # ==========================================================================
+    spilled_files = []
+    if labeled_n is not None:
+        if is_ceiling:
+            raise ValueError("[ERROR] --labeled_n 과 --ceiling_csv 는 함께 쓸 수 없습니다(상한 행은 labeled 2,000 + 진짜 라벨 2,000 으로 정의).")
+        _classes = list(config.get_classes_for_evaluation())
+        labeled_files, _rest = select_labeled_subset(labeled_files, labeled_n, effective_seed, _classes)
+        _cnt = {c: sum(1 for r in labeled_files if r["label"] == c) for c in _classes}
+        print(f"[INFO] labeled 서브샘플: {len(labeled_files)}개 사용 (seed={effective_seed}, 클래스별 {_cnt})")
+        if spill_labeled:
+            # 남은 labeled 클립의 라벨을 떼어 unlabeled 풀에 합친다(체크리스트 8절 "labeled 200 + unlabeled 3,800").
+            spilled_files = [{"path": r["path"]} for r in _rest]
+            print(f"[INFO] 남은 labeled {len(spilled_files)}개를 라벨 없이 unlabeled 풀에 합칩니다(--spill_labeled)")
 
     # ==========================================================================
     # [신설 2026-09-06] 천장 조건 — 진짜 라벨 CSV 를 labeled 에 합친다
@@ -556,6 +651,10 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
         print(f"[INFO] unlabeled 서브샘플: {len(unlabeled_files)}개 사용 "
               f"(전체 {len(_order)}개 중, seed={effective_seed} 기준 누적 추출)")
 
+    if spilled_files:
+        unlabeled_files = unlabeled_files + spilled_files
+        print(f"[INFO] unlabeled 풀 = dataset_unlabeled {len(unlabeled_files) - len(spilled_files)} + 남은 labeled {len(spilled_files)} = {len(unlabeled_files)}개")
+
     if not unlabeled_files and is_ceiling:
         print("[INFO] 천장 조건이므로 unlabeled 0개 · teacher 미사용 · 순수 지도학습입니다(의도된 동작).")
     elif not unlabeled_files:
@@ -594,7 +693,7 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
         train_samples = []
         val_samples = []
         for sample in labeled_dataset.samples:
-            _, label, metadata = sample
+            _, _, label, metadata = sample
             split_name = _stable_file_split(metadata["path"], val_ratio=0.1)
             if split_name == "val":
                 val_samples.append(sample)
@@ -610,6 +709,21 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, collate_fn=custom_collate)
 
     student_encoder = build_audio_encoder(config).to(device)
+    # [신설 2026-09-17 / Mark5.2 6절] student 입력 종류. "waveform" 이면 파서가 준 파형을 mn10 에 넣고,
+    # SpecAugment 는 인코더 안(128 mel, bin 별 시간 평균 채움)에서 건다. "mel" 이면 옛 경로 그대로.
+    _student_input = getattr(config, "student_input", "mel")
+    _enc_params = sum(p.numel() for p in student_encoder.parameters() if p.requires_grad)
+    print(f"[INFO] student 인코더: {type(student_encoder).__name__} (encoder_type={getattr(config, 'encoder_type', 'cnn')}, "
+          f"입력={_student_input}, 학습 파라미터 {_enc_params:,}"
+          + (f", 사전학습 {'로드' if getattr(student_encoder, 'pretrained_loaded', False) else '없음'}"
+             if hasattr(student_encoder, "pretrained_loaded") else "") + ")")
+
+    def run_student_encoder(mel_x, wave_x, augment=False):
+        """student 인코더 호출 한 곳. mel 경로는 호출자가 이미 SpecAugment 를 걸어 준 mel 을 받고,
+        파형 경로는 인코더가 augment 플래그로 자기 mel 에 건다."""
+        if _student_input == "waveform":
+            return student_encoder(wave_x, augment=augment)
+        return student_encoder(mel_x)
     # [변경 2026-08-22] distill branch 마지막 ReLU 를 config 로 제어한다(기본 없음).
     # eval.py 도 같은 값을 읽어야 state_dict 구조가 맞는다.
     student_branch = DualBranchStudentHead(
@@ -633,17 +747,31 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
     if config.use_background_embedding:
         background_embedding = LearnableBackgroundEmbedding(config.embedding_dim).to(device)
 
-    specialist_config = SPECIALIST_CONFIG   # 모듈 상수(위 참조). make_consensus_labels.py 와 공유
+    specialist_config = specialist_config_for(config)   # 모듈 상수(위 참조)를 config 클래스 이름에 맞춘 것. make_consensus_labels.py 와 공유
     _others_rule = getattr(config, "fusion_others_rule", "min")
     _score_mode = getattr(config, "fusion_score_mode", "margin")
     _use_da = getattr(config, "use_distribution_alignment", False)
     _da_tau = getattr(config, "dist_align_tau", 0.5)
     _da_mom = getattr(config, "dist_align_momentum", 0.999)
-    ensemble_teacher = EnsembleTeacher(specialist_config, device,
-                                       others_rule=_others_rule, score_mode=_score_mode,
-                                       use_distribution_alignment=_use_da,
-                                       dist_align_tau=_da_tau, dist_align_momentum=_da_mom)
-    if _score_mode == "margin":
+    pseudo_lookup = None
+    if pseudo_csv is not None:
+        # [신설 2026-09-17 / 8절] CSV 모드: teacher 8개를 아예 만들지 않는다. 라벨·확신도는 CSV 에서.
+        _cpath = pseudo_csv if os.path.isabs(pseudo_csv) else os.path.join(PROJECT_ROOT, pseudo_csv)
+        pseudo_lookup = load_pseudo_csv(_cpath, list(config.get_classes_for_evaluation()))
+        _hit = sum(1 for r in unlabeled_files if os.path.basename(r["path"]) in pseudo_lookup)
+        print(f"[INFO] pseudo-label 출처 = {pseudo_source} (CSV {_cpath}) — unlabeled {len(unlabeled_files)}개 중 {_hit}개에 라벨 있음, "
+              f"teacher 8개 미사용, feature KD 없음")
+        if _hit < len(unlabeled_files):
+            print(f"[WARN] CSV 에 없는 unlabeled 클립 {len(unlabeled_files) - _hit}개는 확신도 0 으로 취급돼 학습에서 빠집니다.")
+        ensemble_teacher = None
+    else:
+        ensemble_teacher = EnsembleTeacher(specialist_config, device,
+                                           others_rule=_others_rule, score_mode=_score_mode,
+                                           use_distribution_alignment=_use_da,
+                                           dist_align_tau=_da_tau, dist_align_momentum=_da_mom)
+    if pseudo_lookup is not None:
+        pass
+    elif _score_mode == "margin":
         print("[INFO] teacher fusion: 담당 칸 = margin(target-others), others 칸 = -max(margin)")
     else:
         print(f"[INFO] teacher fusion: 담당 칸 = raw logit, others 칸 조립 규칙 = {_others_rule}")
@@ -685,7 +813,7 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
     _distill_classify = getattr(config, "distill_branch_classify", False)
     criterion = DistillationLoss(
         temperature=_temp, alpha=_alpha,
-        feature_kd_weight=config.feature_kd_weight if config.use_feature_kd else 0.0,
+        feature_kd_weight=(config.feature_kd_weight if (config.use_feature_kd and pseudo_csv is None) else 0.0),
         use_dkd=_use_dkd, dkd_alpha=_dkd_a, dkd_beta=_dkd_b,
         use_pseudo_label_ce=_use_pl)
     if _use_pl:
@@ -699,9 +827,19 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
           + (f" | 채택 임계값={_pl_min_conf}, 확신도 가중={_pl_weighting}" if _use_pl else f" | T={_temp}")
           + f" | alpha={_alpha}, feature_kd={config.feature_kd_weight if config.use_feature_kd else 0.0}"
           + f" | distill branch 분류손실={_distill_classify}")
-    optimizer_params = list(student_encoder.parameters()) + list(student_branch.parameters())
+    # [변경 2026-09-17] 백본 학습률 분리. config.encoder_learning_rate 가 있으면(mn10: 5e-5) 인코더만 그 값,
+    # 새로 만드는 층(branch·background)은 learning_rate(1e-4). None 이면 전부 learning_rate(옛 동작).
+    _enc_lr = getattr(config, "encoder_learning_rate", None)
+    _head_params = list(student_branch.parameters())
     if background_embedding is not None:
-        optimizer_params += list(background_embedding.parameters())
+        _head_params += list(background_embedding.parameters())
+    _enc_trainable = [p for p in student_encoder.parameters() if p.requires_grad]
+    if _enc_lr is not None:
+        optimizer_params = [{"params": _enc_trainable, "lr": float(_enc_lr)},
+                            {"params": _head_params, "lr": config.learning_rate}]
+        print(f"[INFO] 학습률: 인코더 {float(_enc_lr):g} / 헤드(branch·background) {config.learning_rate:g}")
+    else:
+        optimizer_params = _enc_trainable + _head_params
     # [변경 2026-08-17] weight_decay 와 LR 스케줄러를 mark4.x 와 같게 맞췄다.
     # mark4.x 는 weight_decay 가 전무해 teacher 가 val best 를 epoch 5 에 찍고 곧장 과적합하던 것을
     # 실측하고 1e-4 를 넣었고, ReduceLROnPlateau(factor 0.5, patience 3)도 함께 쓴다.
@@ -764,8 +902,9 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
         teacher_feature_cache.clear()
         unlabeled_metadata_cache.clear()
 
-        for mel_batch, label_batch, metadata_batch in train_loader:
+        for mel_batch, wave_batch, label_batch, metadata_batch in train_loader:
             mel = mel_batch.to(device)
+            wave = wave_batch.to(device) if _student_input == "waveform" else None
             optimizer.zero_grad()
 
             labeled_indices = [i for i, lbl in enumerate(label_batch) if isinstance(lbl, str)]
@@ -775,10 +914,11 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
             if labeled_indices:
                 labeled_mel = mel[labeled_indices]
                 # [추가 2026-08-23] SpecAugment. 정답 라벨은 그대로 두고 입력만 가린다.
-                if _use_sa:
+                # [변경 2026-09-17] 파형 경로면 인코더가 자기 mel 에 건다(augment=_use_sa).
+                if _use_sa and _student_input == "mel":
                     labeled_mel = apply_spec_augment(labeled_mel, _sa_nf, _sa_f, _sa_nt, _sa_t)
                 labeled_targets = torch.tensor([student_label_map[label_batch[i]] for i in labeled_indices], dtype=torch.long, device=device)
-                base_features = student_encoder(labeled_mel)
+                base_features = run_student_encoder(labeled_mel, wave[labeled_indices] if wave is not None else None, augment=_use_sa)
                 supervised_features, _ = student_branch(base_features)
                 student_logits = student_classifier(supervised_features, student_text_emb)
                 hard_total, hard_loss, _, _ = criterion(student_logits, hard_targets=labeled_targets)
@@ -810,7 +950,18 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
                 else:
                     teacher_input = unlabeled_mel
                     student_input = unlabeled_mel
-                fusion_output = ensemble_teacher(teacher_input, student_label_map)
+                unlabeled_wave = wave[unlabeled_indices] if wave is not None else None
+                if pseudo_lookup is not None:
+                    # CSV 모드: one-hot 로짓(argmax 만 쓰이므로 충분)·확신도. 특징은 없다(feature KD 0).
+                    _lab, _conf = [], []
+                    for bi in unlabeled_indices:
+                        _e = pseudo_lookup.get(os.path.basename(metadata_batch[bi]["path"]))
+                        _lab.append(_e[0] if _e else 0); _conf.append(_e[1] if _e else 0.0)
+                    _oh = F.one_hot(torch.tensor(_lab, device=device), num_classes=len(student_label_map)).float()
+                    _cf = torch.tensor(_conf, device=device, dtype=torch.float32)
+                    fusion_output = _CsvFusion(_oh, None, _cf)
+                else:
+                    fusion_output = ensemble_teacher(teacher_input, student_label_map)
 
                 # [신설 2026-08-22] 합의 기반 선별.
                 # specialist_weights[c] 는 전문가 c 가 "이건 내 클래스다"라고 본 확률이다.
@@ -830,11 +981,12 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
 
                 if keep_mask.any():
                     kept_mel = student_input[keep_mask]
+                    kept_wave = unlabeled_wave[keep_mask] if unlabeled_wave is not None else None
                     kept_teacher_logits = fusion_output.logits[keep_mask]
                     kept_teacher_feats = fusion_output.features[keep_mask]
                     kept_weights = pseudo_conf[keep_mask] if (_use_pl and _pl_weighting) else None
 
-                    base_features = student_encoder(kept_mel)
+                    base_features = run_student_encoder(kept_mel, kept_wave, augment=_use_sa)
                     supervised_features, distill_features = student_branch(base_features)
                     student_logits = student_classifier(supervised_features, student_text_emb)
                     soft_total, _, soft_loss, feat_loss = criterion(
@@ -861,7 +1013,8 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
                         )
                         loss = loss + db_total
                         total_distill_cls_loss += db_loss.item()
-                teacher_feature_cache.append(fusion_output.features.detach().cpu())
+                if fusion_output.features is not None:
+                    teacher_feature_cache.append(fusion_output.features.detach().cpu())
                 for local_pos, batch_idx in enumerate(unlabeled_indices):
                     meta = dict(metadata_batch[batch_idx])
                     meta["teacher_disagreement"] = float(fusion_output.disagreement[local_pos].item())
@@ -897,10 +1050,10 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
         val_total = 0.0
         val_hard_total = 0.0
         with torch.no_grad():
-            for mel_batch, label_batch, _ in val_loader:
+            for mel_batch, wave_batch, label_batch, _ in val_loader:
                 mel = mel_batch.to(device)
                 targets = torch.tensor([student_label_map[lbl] for lbl in label_batch], dtype=torch.long, device=device)
-                base_features = student_encoder(mel)
+                base_features = run_student_encoder(mel, wave_batch.to(device) if _student_input == "waveform" else None, augment=False)
                 supervised_features, _ = student_branch(base_features)
                 logits = student_classifier(supervised_features, student_text_emb)
                 # [수정] total((1-α)·hard)뿐 아니라 raw hard CE도 따로 기록해 train_hard와 동일 척도로 비교
@@ -1027,8 +1180,8 @@ def train_mark5(seed_value=None, mark_version="mark5.0", unlabeled_n=None, ceili
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="mark5.0 Student 모델을 학습합니다.")
-    parser.add_argument("--mark_version", type=str, required=True)
+    parser = argparse.ArgumentParser(description="Mark5.2 Student 모델을 학습합니다(반복실험판).")
+    parser.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     # [변경 2026-08-30 / Mark5_EXP] default 42 -> None.
     # 값을 주면 그 seed 로 돌고 산출물 이름에 _s<k> 가 붙는다(반복실험).
     # 안 주면 예전처럼 seed 42 로 돌고 태그도 안 붙는다(기존 동작 보존).
@@ -1042,6 +1195,17 @@ if __name__ == "__main__":
     parser.add_argument("--ceiling_csv", type=str, default=None,
                         help="천장(upper bound) 조건: unlabeled 에 진짜 라벨을 붙인 CSV 경로(프로젝트 루트 기준). "
                              "주면 unlabeled 를 쓰지 않고 지도학습으로 돌며 run_tag 에 _ceil 이 붙는다.")
+    # [신설 2026-09-17 / 8절] 라벨 효율 표용 labeled 개수.
+    parser.add_argument("--labeled_n", type=int, default=None,
+                        help="labeled 를 몇 클립만 쓸지(200/500/1000). 클래스별 고르게, seed 기준 누적. 미지정 시 전량(2,000).")
+    # [신설 2026-09-17 / 8절] pseudo-label 출처 비교·unlabeled 풀 확장.
+    parser.add_argument("--pseudo_csv", type=str, default=None,
+                        help="teacher 대신 쓸 pseudo-label CSV(path,label,confidence). model/make_pseudo_labels.py 가 만든다.")
+    parser.add_argument("--pseudo_source", type=str, default=None,
+                        help="--pseudo_csv 의 출처 이름(self | gen). run_tag 에 _ps<이름> 이 붙는다.")
+    parser.add_argument("--spill_labeled", action="store_true",
+                        help="--labeled_n 으로 뽑고 남은 labeled 를 라벨 없이 unlabeled 풀에 합친다(태그 _sp).")
     args = parser.parse_args()
     train_mark5(seed_value=args.seed, mark_version=args.mark_version,
-                unlabeled_n=args.unlabeled_n, ceiling_csv=args.ceiling_csv)
+                unlabeled_n=args.unlabeled_n, ceiling_csv=args.ceiling_csv, labeled_n=args.labeled_n,
+                pseudo_csv=args.pseudo_csv, pseudo_source=args.pseudo_source, spill_labeled=args.spill_labeled)

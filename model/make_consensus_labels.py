@@ -68,7 +68,7 @@ for p in (PROJECT_ROOT, os.path.join(PROJECT_ROOT, "utils"), os.path.join(PROJEC
     if p not in sys.path:
         sys.path.append(p)
 
-from train_mark5 import EnsembleTeacher, SPECIALIST_CONFIG, _resolve_csv_path, _resolve_resource_path  # noqa: E402
+from train_mark5 import EnsembleTeacher, specialist_config_for, _resolve_csv_path, _resolve_resource_path  # noqa: E402
 from vild_config import AudioViLDConfig                       # noqa: E402
 from vild_parser_teacher import AudioParser                   # noqa: E402
 from seed_utils import set_seed                               # noqa: E402
@@ -112,7 +112,7 @@ def _with_suffix(path, suffix):
 
 def main():
     ap = argparse.ArgumentParser(description="unlabeled 클립에 teacher 8명의 합의 라벨을 오프라인으로 매긴다")
-    ap.add_argument("--mark_version", type=str, default="mark5.0")
+    ap.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     ap.add_argument("--min_conf", type=float, default=None, help="세그먼트 채택 임계값(기본: config.pseudo_label_min_confidence=0.5)")
     ap.add_argument("--min_segments", type=int, default=3, help="클립 채택에 필요한 채택 세그먼트 수(5개 중, 기본 3=과반)")
     ap.add_argument("--clips_per_batch", type=int, default=8, help="teacher 한 번 호출에 묶는 클립 수(세그먼트 5개씩)")
@@ -152,11 +152,12 @@ def main():
 
     # ---- teacher 8개 (train_mark5.py 와 같은 목록·같은 설정) + 신원 기록 ----
     teacher_files = []
-    for name, spec in SPECIALIST_CONFIG.items():
+    specialist_config = specialist_config_for(config)   # [2026-09-17] mark5.2 는 talking 키
+    for name, spec in specialist_config.items():
         for key in ("encoder_path", "classifier_path"):
             teacher_files.append({"specialist": name, **_file_identity(_resolve_resource_path(spec[key]))})
     parser = AudioParser(config, segment_mode=True)
-    teacher = EnsembleTeacher(SPECIALIST_CONFIG, device, others_rule=others_rule, score_mode=score_mode,
+    teacher = EnsembleTeacher(specialist_config, device, others_rule=others_rule, score_mode=score_mode,
                               use_distribution_alignment=False)
 
     csv_path = _resolve_csv_path("dataset_unlabeled.csv")

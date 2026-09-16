@@ -36,3 +36,7 @@ tqdm==4.66.5
 
 # --- 효율성 프로파일링(FLOPs 측정, model/profile_efficiency.py) ---
 thop==0.1.1.post2209072238
+
+# --- [2026-09-17] mn10 백본(third_party/efficientat)이 torchvision.ops.misc.ConvNormActivation 을 쓴다 ---
+# 로컬 venv 용 핀. ★코랩에서는 설치하지 말 것 — +cpu 휠을 넣으면 GPU torch 가 CPU torch 로 교체될 수 있다. 코랩에는 이미 있다.
+torchvision==0.19.1+cpu
