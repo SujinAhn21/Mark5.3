@@ -974,6 +974,9 @@ def main():
         tab_csv = os.path.join(PLOT_DIR, f"paper_table_{args.mark_version}_{args.split}.csv")
         # 원자료에는 천장 행도 같이 들어간다(cond 열로 구분). 요약·논문표에는 "ceiling" 행이 맨 끝에 붙는다.
         df_all.to_csv(raw_csv, index=False, encoding=CSV_ENCODING)
+        # [2026-09-17 / 11절] 라벨 효율·출처 비교 회차까지 전부 담은 원자료도 남긴다(본 조건 15회만 든 위 파일과 구분).
+        pd.concat([df_le_all, df_ps_all], ignore_index=True).to_csv(
+            os.path.join(PLOT_DIR, f"aggregate_raw_all_{args.mark_version}_{args.split}.csv"), index=False, encoding=CSV_ENCODING)
         (summary if ceil_summary is None else pd.concat([summary, ceil_summary])).to_csv(sum_csv, encoding=CSV_ENCODING)
         show_table.to_csv(tab_csv, index=False, encoding=CSV_ENCODING)
         print(f"\n[INFO] 원자료   : {raw_csv}")
