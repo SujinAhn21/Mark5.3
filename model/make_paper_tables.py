@@ -287,7 +287,7 @@ def load_zeroshot(mark_version, baseline_plot_dirs=()):
     ours, clap, fine = {}, {}, {}
     for p in sorted(glob.glob(os.path.join(PLOT_DIR, "zeroshot_*.json"))):
         name = os.path.basename(p)[len("zeroshot_"):-len(".json")]
-        if "_limit" in name or name.startswith("confusion_") or name.startswith("predictions_"):
+        if "_limit" in name or "_smoke" in name or name.startswith("confusion_") or name.startswith("predictions_"):
             continue
         with open(p, encoding="utf-8") as f:
             d = json.load(f)

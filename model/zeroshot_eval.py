@@ -11,12 +11,17 @@
 같은 문장 인코더(all-MiniLM-L6-v2)·같은 템플릿 4개·동의어 평균이라 새 앵커는 기존 앵커와 같은 방식으로 만들어진다.
 
 잰 것
-  (1) 제로샷 세트 dataset_eval_zeroshot6.csv (631, 정답 = 새 6종) — 15-way 판정.
+  (1) 제로샷 세트 dataset_eval_zeroshot6.csv (631, 정답 = 새 6종) — others 는 9 앵커 규칙, 클래스는 15 앵커 argmax.
       새 클래스별 재현율(정답을 그 클래스로 보낸 비율) · 오분류 방향(가장 많이 간 곳) · 6종 평균.
   (2) 정규 test dataset_test.csv (430, 정답 = 9종) — 같은 15 앵커로 판정.
       9종 Accuracy · Macro P · Macro R · Macro F1. 새 앵커 6개가 붙은 뒤에도 기존 성능이 유지되는지
       (plots/performance_summary_<run_tag>.csv 의 9 앵커 결과와 나란히 적는다 — 있으면).
-others 규칙은 그 회차의 val 자동 선택 json(plots/others_threshold_<run_tag>.json)을 그대로 쓴다(15-way softmax 위에서). 없으면 config 값.
+others 규칙은 그 회차의 val 자동 선택 json(plots/others_threshold_<run_tag>.json)을 그대로 쓴다. 없으면 config 값.
+  ★ others 판정은 **기존 9 앵커의 softmax**(= eval.py 와 완전히 같은 계산)로 내린다. 15-way softmax 위에 9-way 에서 고른 임계값을 얹으면
+    Prob_others 가 앵커 6개만큼 희석돼 운영점이 바뀌기 때문이다(2026-09-17 검수에서 잡음). 그래서
+      (a) 9 앵커 경로: 세그먼트 softmax(9) → 집계 → pair 보정 → others 규칙 → "others 인가"       ← eval.py 그대로
+      (b) 15 앵커 경로: 세그먼트 softmax(15) → 집계 → pair 보정 → others 를 뺀 argmax             ← 새 앵커가 붙은 클래스 판정
+    (a) 가 others 면 others, 아니면 (b). CSV 의 Prob_* 열은 (b)의 15-way 확률이고 "Prob others (9-way)" 열이 (a)의 값이다.
 
 산출물 (plots/):
   zeroshot_<run_tag>.json                 요약(위 지표 전부 + 앵커·규칙·체크포인트 sha256)
@@ -116,11 +121,15 @@ def build_anchors(config, zeroshot_bank, device):
     return torch.cat([base, new], dim=0), new_classes, prompts_used
 
 
-def apply_rule_from_json(config):
+def apply_rule_from_json(config, ckpt_sha=None):
+    """val 자동 선택 json 의 규칙을 config 에 싣는다. eval.py 와 같이 체크포인트 sha256 을 대조한다(다르면 멈춤 — 재학습 뒤 val 을 다시 돌려야 한다)."""
     thr_json = os.path.join(PLOT_DIR, f"others_threshold_{config.run_tag}.json")
     if os.path.exists(thr_json):
         with open(thr_json, encoding="utf-8") as f:
             saved = json.load(f)
+        saved_sha = (saved.get("checkpoint") or {}).get("sha256") or saved.get("checkpoint_sha256")
+        if ckpt_sha and saved_sha and saved_sha != ckpt_sha:
+            raise SystemExit(f"[ERROR] {os.path.basename(thr_json)} 의 체크포인트 지문이 지금 체크포인트와 다릅니다 — eval.py --split val 을 다시 돌리십시오.")
         config.others_decision_mode = saved.get("rule", config.others_decision_mode)
         if config.others_decision_mode == "direct" and saved.get("threshold") is not None:
             config.others_direct_threshold = float(saved["threshold"])
@@ -128,19 +137,39 @@ def apply_rule_from_json(config):
     return f"config 기본({config.others_decision_mode}" + (f", thr {config.others_direct_threshold:g})" if config.others_decision_mode == "direct" else ")")
 
 
-def predict_set(rows, config, parser, encoder, branch, text_head, bg, text_emb, class_names, device):
-    """클립마다 eval.py 와 같은 계산(세그먼트 5개 → 두 갈래 혼합 → 집계 → pair 보정 → others 규칙)을 15 앵커로."""
+def predict_set(rows, config, parser, encoder, branch, text_head, bg, text_emb, class_names, device, n_base=None):
+    """클립마다 두 경로를 계산한다(모듈 머리말 ★ 참고).
+      (a) 9 앵커(text_emb[:n_base]) 경로 = eval.py 와 같은 계산으로 others 판정
+      (b) 15 앵커 경로 = 같은 계산을 15 앵커로 → others 를 뺀 argmax 가 클래스 판정
+    반환 [(row, pred_idx|None, probs15|None, prob_others9|None)]."""
     use_bg_override = getattr(config, "use_background_override_at_eval", False)
     student_input = getattr(config, "student_input", "mel")
     w = getattr(config, "distill_branch_eval_weight", 0.5)
     oi = class_names.index("others")
+    n_base = n_base or len(class_names)
+    base_names = class_names[:n_base]
     out = []
+
+    def _seg_probs(sup, dis, emb):
+        sl, dl = text_head(sup, emb), text_head(dis, emb)
+        if bg is not None and use_bg_override:
+            bgn = F.normalize(bg(), dim=0)
+            sl = sl.clone(); sl[:, oi] = torch.maximum(sl[:, oi], (F.normalize(sup, dim=1) @ bgn) / text_head.temperature)
+            dl = dl.clone(); dl[:, oi] = torch.maximum(dl[:, oi], (F.normalize(dis, dim=1) @ bgn) / text_head.temperature)
+        return ((1 - w) * torch.softmax(sl, dim=-1) + w * torch.softmax(dl, dim=-1)).squeeze(0).cpu().numpy()
+
+    def _clip(seg_probs, sal, names):
+        if config.enable_temporal_smoothing:
+            seg_probs = apply_temporal_smoothing(seg_probs, config.temporal_smoothing_alpha)
+        agg, _ = aggregate_segment_probs(seg_probs, sal, config)
+        return apply_class_pair_calibration(agg, names, config)
+
     with torch.no_grad():
         for i, r in enumerate(rows, 1):
             recs = parser.load_and_segment_with_metadata(r["path"])
             if not recs:
-                out.append((r, None, None)); continue
-            seg_probs, sal = [], [x["saliency"] for x in recs]
+                out.append((r, None, None, None)); continue
+            p9, p15, sal = [], [], [x["saliency"] for x in recs]
             for x in recs:
                 if student_input == "waveform":
                     feat = encoder(x["wave"].unsqueeze(0).to(device))
@@ -148,19 +177,20 @@ def predict_set(rows, config, parser, encoder, branch, text_head, bg, text_emb, 
                     seg = x["tensor"]; seg = seg.unsqueeze(0) if seg.ndim == 3 else seg
                     feat = encoder(seg.to(device))
                 sup, dis = branch(feat)
-                sl, dl = text_head(sup, text_emb), text_head(dis, text_emb)
-                if bg is not None and use_bg_override:
-                    bgn = F.normalize(bg(), dim=0)
-                    sl = sl.clone(); sl[:, oi] = torch.maximum(sl[:, oi], (F.normalize(sup, dim=1) @ bgn) / text_head.temperature)
-                    dl = dl.clone(); dl[:, oi] = torch.maximum(dl[:, oi], (F.normalize(dis, dim=1) @ bgn) / text_head.temperature)
-                seg_probs.append(((1 - w) * torch.softmax(sl, dim=-1) + w * torch.softmax(dl, dim=-1)).squeeze(0).cpu().numpy())
-            if config.enable_temporal_smoothing:
-                seg_probs = apply_temporal_smoothing(seg_probs, config.temporal_smoothing_alpha)
-            agg, _ = aggregate_segment_probs(seg_probs, sal, config)
-            cal = apply_class_pair_calibration(agg, class_names, config)
-            cal, pred, _ = apply_others_calibration(cal.copy(), class_names, config)
-            cal, pred, _ = apply_abstention(cal, class_names, config, pred)
-            out.append((r, int(pred), cal))
+                p9.append(_seg_probs(sup, dis, text_emb[:n_base]))
+                p15.append(_seg_probs(sup, dis, text_emb))
+            # (a) eval.py 와 같은 others 판정 (9 앵커)
+            cal9 = _clip(p9, sal, base_names)
+            cal9, pred9, _ = apply_others_calibration(cal9.copy(), base_names, config)
+            cal9, pred9, _ = apply_abstention(cal9, base_names, config, pred9)
+            # (b) 15 앵커 클래스 판정
+            cal15 = _clip(p15, sal, class_names)
+            if int(pred9) == oi:
+                pred = oi
+            else:
+                masked = cal15.copy(); masked[oi] = -1.0
+                pred = int(np.argmax(masked))
+            out.append((r, int(pred), cal15, float(cal9[oi])))
             if i % 200 == 0:
                 print(f"  {i}/{len(rows)}")
     return out
@@ -176,7 +206,7 @@ def compute_metrics(zs, te, base_classes, new_classes, class_names):
     """
     C, B = len(class_names), len(base_classes)
     conf = np.zeros((len(new_classes), C), dtype=int)
-    for r, pred, _ in zs:
+    for r, pred, *_ in zs:
         if pred is None:
             continue
         conf[new_classes.index(r["label"]), pred] += 1
@@ -192,12 +222,12 @@ def compute_metrics(zs, te, base_classes, new_classes, class_names):
     n_zs = sum(v["n"] for v in per_class.values())
     zs_acc = float(sum(v["n"] * v["recall"] for v in per_class.values() if v["n"]) / max(1, n_zs))
     zs_macro_recall = float(np.nanmean([v["recall"] for v in per_class.values()])) if n_zs else float("nan")
-    y_true_all = [new_classes.index(r["label"]) + B for r, p, _ in zs if p is not None] + \
-                 [base_classes.index(r["label"]) for r, p, _ in te if p is not None and r["label"] in base_classes]
-    y_pred_all = [p for r, p, _ in zs if p is not None] + [p for r, p, _ in te if p is not None and r["label"] in base_classes]
+    y_true_all = [new_classes.index(r["label"]) + B for r, p, *_ in zs if p is not None] + \
+                 [base_classes.index(r["label"]) for r, p, *_ in te if p is not None and r["label"] in base_classes]
+    y_pred_all = [p for r, p, *_ in zs if p is not None] + [p for r, p, *_ in te if p is not None and r["label"] in base_classes]
     p6, r6, f6, _ = precision_recall_fscore_support(y_true_all, y_pred_all, labels=list(range(B, C)), average="macro", zero_division=0)
-    y_t = [base_classes.index(r["label"]) for r, p, _ in te if p is not None and r["label"] in base_classes]
-    y_p = [p for r, p, _ in te if p is not None and r["label"] in base_classes]
+    y_t = [base_classes.index(r["label"]) for r, p, *_ in te if p is not None and r["label"] in base_classes]
+    y_p = [p for r, p, *_ in te if p is not None and r["label"] in base_classes]
     acc9 = accuracy_score(y_t, y_p) if y_t else float("nan")
     mp9, mr9, mf9, _ = precision_recall_fscore_support(y_t, y_p, labels=list(range(B)), average="macro", zero_division=0)
     leaked = sum(1 for p in y_p if p >= B)
@@ -230,9 +260,12 @@ def save_and_print(json_stem, pred_stem, suffix, title, zs, te, metrics, base_cl
     for name, res in (("zeroshot6", zs), ("test", te)):
         with open(os.path.join(PLOT_DIR, f"{pred_stem}_{name}{suffix}.csv"), "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["Filename", "True Label", "Predicted Label"] + [f"Prob_{c}" for c in class_names])
-            for r, pred, cal in res:
-                w.writerow([os.path.basename(r["path"]), r["label"], class_names[pred] if pred is not None else ""]
+            w.writerow(["Filename", "True Label", "Predicted Label", "Prob others (9-way)"] + [f"Prob_{c}" for c in class_names])
+            for item in res:
+                r, pred, cal = item[0], item[1], item[2]
+                p9 = item[3] if len(item) > 3 else None
+                w.writerow([os.path.basename(r["path"]), r["label"], class_names[pred] if pred is not None else "",
+                            (f"{p9:.6f}" if p9 is not None else "")]
                            + ([f"{float(v):.6f}" for v in cal] if cal is not None else []))
     base9 = _read_reference_summary(reference_summary)
     summary = dict(extra)
@@ -288,7 +321,7 @@ def main():
     text_emb, new_classes, prompts_used = build_anchors(config, args.zeroshot_bank, device)
     base_classes = list(config.get_classes_for_evaluation())
     class_names = base_classes + new_classes
-    rule_desc = apply_rule_from_json(config)
+    rule_desc = apply_rule_from_json(config, sha)
     print(f"[INFO] 제로샷: run_tag={tag} · 체크포인트 {os.path.basename(model_path)} · 앵커 {len(class_names)}개 "
           f"({len(base_classes)} + 새 {len(new_classes)}: {new_classes}) · others 규칙 {rule_desc}")
     parser = AudioParser(config, segment_mode=True)
@@ -309,9 +342,9 @@ def main():
 
     t0 = time.time()
     print(f"[INFO] (1) 제로샷 세트 {len(zs_rows)}클립")
-    zs = predict_set(zs_rows, config, parser, encoder, branch, text_head, bg, text_emb, class_names, device)
+    zs = predict_set(zs_rows, config, parser, encoder, branch, text_head, bg, text_emb, class_names, device, n_base=len(base_classes))
     print(f"[INFO] (2) 정규 test {len(te_rows)}클립 (15 앵커)")
-    te = predict_set(te_rows, config, parser, encoder, branch, text_head, bg, text_emb, class_names, device)
+    te = predict_set(te_rows, config, parser, encoder, branch, text_head, bg, text_emb, class_names, device, n_base=len(base_classes))
 
     extra = {"run_tag": tag, "checkpoint": {"file": os.path.basename(model_path), "sha256": sha},
              "zeroshot_bank": os.path.relpath(args.zeroshot_bank, PROJECT_ROOT), "prompts_used": prompts_used,

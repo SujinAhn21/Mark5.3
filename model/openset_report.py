@@ -104,7 +104,7 @@ def _discover(model_root, plot_subdir="plots", pattern=None):
     for s in EVAL_SETS:
         for p in glob.glob(os.path.join(pdir, f"prediction_details_*_eval_{s}.csv")):
             tag = os.path.basename(p)[len("prediction_details_"):-len(f"_eval_{s}.csv")]
-            if "_limit" in tag:                                            # 동작 확인용 산출물은 표에 안 넣는다
+            if "_limit" in tag or "_smoke" in tag:                         # 동작 확인용 산출물(_limitN·_smoke)은 표에 안 넣는다
                 continue
             if pattern and not fnmatch.fnmatch(tag, pattern):
                 continue

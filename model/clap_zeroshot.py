@@ -16,11 +16,12 @@
   (hook.py 의 목록: 0 = 630k-best, 1 = 630k-audioset-best, 2 = 630k-fusion-best, 3 = 630k-audioset-fusion-best — 2026-09-17 원문 확인).
   오디오는 CLAP 이 스스로 48 kHz 로 리샘플해 읽는다(get_audio_embedding_from_filelist). 3초 클립은 CLAP 안에서 10초로 반복 패딩된다.
 
-판정 — 코사인 유사도 x CLAP 의 학습된 logit scale(logit_scale_a) 을 softmax 한 15-way 확률.
+판정 — 코사인 유사도 x CLAP 의 학습된 logit scale(logit_scale_a) 을 softmax 한 확률. others 는 9 앵커 softmax 에 val 선택 규칙을
+  그대로 적용해 정하고(규칙을 고른 확률 공간과 같음), others 가 아니면 15 앵커 softmax 에서 others 를 뺀 argmax 가 클래스다.
   others 규칙은 Mark5.2 와 같은 두 후보 가운데 val(dataset_val.csv, 9 앵커)에서 Macro F1 최대를 고른다(--others_rule val_select, 기본):
     argmax(9클래스) · direct(Prob_others >= thr 이면 others, 아니면 others 를 뺀 argmax) 격자 0.02~0.95 간격 0.01,
     동률이면 격자 가운데, argmax 가 최댓값과 동률이면 argmax (vild/postprocess_utils.select_others_threshold 와 같은 규칙).
-  Mark5.2 처럼 val 에서 고른 규칙을 15-way 확률 위에 그대로 적용한다. --others_rule argmax 로 고정할 수도 있다.
+  --others_rule argmax 로 고정할 수도 있다(9 앵커 argmax 가 others 면 others).
   CLAP 은 우리 후처리(세그먼트 집계·pair 보정)가 없다 — 클립 하나를 통째로 넣는 모델이라 그 단계가 없는 것이 원래 모습이다.
 
 산출물 (plots/, 태그 = clap_<체크포인트>):
@@ -95,17 +96,27 @@ def load_clap(ckpt_id, ckpt_path, device):
     except ImportError:
         raise SystemExit("[ERROR] laion_clap 이 없습니다. `pip install laion-clap` 뒤에 다시 실행하십시오(코랩 셀 참고).")
     model_id, fusion = CKPTS[ckpt_id]
-    model = laion_clap.CLAP_Module(enable_fusion=fusion, amodel="HTSAT-tiny", device=str(device))
+    # CLAP_Module 은 텍스트 타워로 허깅페이스 'roberta-base' 를 받는다(약 500 MB, 캐시되면 그 뒤로는 안 받음).
+    # 코랩 앞 셀이 HF_HUB_OFFLINE=1 을 켰으면 캐시가 없을 때 여기서 멈추므로 잠시 끈다(문장 인코더 캐시에는 영향 없음).
+    _off = os.environ.pop("HF_HUB_OFFLINE", None)
+    try:
+        model = laion_clap.CLAP_Module(enable_fusion=fusion, amodel="HTSAT-tiny", device=str(device))
+    finally:
+        if _off is not None:
+            os.environ["HF_HUB_OFFLINE"] = _off
     if not ckpt_path:
-        # 패키지 load_ckpt 와 같은 자리(패키지 폴더)에 같은 이름으로 받는다. 이미 있으면 그대로 쓴다.
+        # 찾는 순서: 옆의 Baseline_CLAP/weights(드라이브 사본) → ~/.cache/clap → laion_clap 패키지 폴더 → 패키지 폴더로 다운로드.
         import wget
         pkg_dir = os.path.dirname(os.path.realpath(laion_clap.__file__))
         name = [k for k, (i, _) in CKPTS.items() if i == model_id][0] + ".pt"
-        ckpt_path = os.path.join(pkg_dir, name)
-        if not os.path.exists(ckpt_path):
+        cands = [os.path.join(PROJECT_ROOT, "..", "Baseline_CLAP", "weights", name),
+                 os.path.expanduser(os.path.join("~", ".cache", "clap", name)), os.path.join(pkg_dir, name)]
+        ckpt_path = next((c for c in cands if os.path.isfile(c)), None)
+        if ckpt_path is None:
             print(f"[INFO] 체크포인트 다운로드: https://huggingface.co/lukewys/laion_clap/resolve/main/{name} → {pkg_dir}")
             ckpt_path = wget.download("https://huggingface.co/lukewys/laion_clap/resolve/main/" + name, pkg_dir)
             print()
+        ckpt_path = os.path.abspath(ckpt_path)
     _load_ckpt_lowmem(model, ckpt_path)
     model.eval()
     return model, ckpt_path
@@ -248,10 +259,21 @@ def main():
     print(f"[INFO] others 규칙: {rule_desc}")
 
     def run(rows, name):
+        """others 판정은 9 앵커 softmax(규칙을 고른 바로 그 확률) 로, 클래스 판정은 15 앵커 softmax 에서 others 를 뺀 argmax 로
+        (Mark5_EXP2/model/zeroshot_eval.py 와 같은 두 경로 — 15-way 에 9-way 임계값을 얹으면 Prob_others 가 희석돼 운영점이 바뀐다)."""
         print(f"[INFO] {name} {len(rows)}클립")
         emb = embed_audio(model, [r["path"] for r in rows], args.batch_size)
-        probs = probs_from(emb, anchors, scale)
-        return [(r, decide(p, others_idx, rule, thr), p) for r, p in zip(rows, probs)]
+        probs15 = probs_from(emb, anchors, scale)
+        probs9 = probs_from(emb, anchors[:len(base_classes)], scale)
+        out = []
+        for r, p15, p9 in zip(rows, probs15, probs9):
+            if decide(p9, others_idx, rule, thr) == others_idx:
+                pred = others_idx
+            else:
+                masked = p15.copy(); masked[others_idx] = -1.0
+                pred = int(np.argmax(masked))
+            out.append((r, pred, p15, float(p9[others_idx])))
+        return out
 
     zs = run(zs_rows, "(1) 제로샷 세트")
     te = run(te_rows, "(2) 정규 test (15 앵커)")
