@@ -827,17 +827,23 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
           + (f" | 채택 임계값={_pl_min_conf}, 확신도 가중={_pl_weighting}" if _use_pl else f" | T={_temp}")
           + f" | alpha={_alpha}, feature_kd={config.feature_kd_weight if config.use_feature_kd else 0.0}"
           + f" | distill branch 분류손실={_distill_classify}")
-    # [변경 2026-09-17] 백본 학습률 분리. config.encoder_learning_rate 가 있으면(mn10: 5e-5) 인코더만 그 값,
-    # 새로 만드는 층(branch·background)은 learning_rate(1e-4). None 이면 전부 learning_rate(옛 동작).
+    # [변경 2026-09-17] 백본 학습률 분리. config.encoder_learning_rate 가 있으면(mn10: 5e-5) 사전학습 백본만 그 값,
+    # 새로 만드는 층(투영·branch·background)은 learning_rate(1e-4). None 이면 전부 learning_rate(옛 동작).
+    # [검수 C5 / 2026-09-17] 투영층 proj(Dropout+Linear 960->384)는 Mn10AudioEncoder 안에 있어 전에는 인코더 그룹(5e-5)에
+    # 같이 들어갔다. config 주석("투영은 1e-4")과 맞추려고 proj 만 골라 새 층 그룹으로 옮긴다.
     _enc_lr = getattr(config, "encoder_learning_rate", None)
     _head_params = list(student_branch.parameters())
     if background_embedding is not None:
         _head_params += list(background_embedding.parameters())
     _enc_trainable = [p for p in student_encoder.parameters() if p.requires_grad]
     if _enc_lr is not None:
-        optimizer_params = [{"params": _enc_trainable, "lr": float(_enc_lr)},
-                            {"params": _head_params, "lr": config.learning_rate}]
-        print(f"[INFO] 학습률: 인코더 {float(_enc_lr):g} / 헤드(branch·background) {config.learning_rate:g}")
+        _proj_ids = {id(p) for p in getattr(student_encoder, "proj", nn.Identity()).parameters()}
+        _backbone_params = [p for p in _enc_trainable if id(p) not in _proj_ids]
+        _new_layer_params = [p for p in _enc_trainable if id(p) in _proj_ids] + _head_params
+        optimizer_params = [{"params": _backbone_params, "lr": float(_enc_lr)},
+                            {"params": _new_layer_params, "lr": config.learning_rate}]
+        print(f"[INFO] 학습률: 백본 {float(_enc_lr):g} ({sum(p.numel() for p in _backbone_params):,}개) / "
+              f"새 층(투영·branch·background) {config.learning_rate:g} ({sum(p.numel() for p in _new_layer_params):,}개)")
     else:
         optimizer_params = _enc_trainable + _head_params
     # [변경 2026-08-17] weight_decay 와 LR 스케줄러를 mark4.x 와 같게 맞췄다.
@@ -943,6 +949,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 #              깨지는 세그먼트는 아래 선별(keep_mask)이 걸러낸다.
                 #   clean    : teacher 는 원본을 보고 student 만 증강 view 를 본다
                 #              (FixMatch 식 일관성 정규화 — pseudo-label 품질 보존).
+                # [변경 2026-09-17] teacher 는 어느 경우든 mel 을 본다. student 가 파형 경로면 student 의 증강은
+                # 인코더 안에서 독립적으로 걸린다(mel 규격이 64 와 128 로 달라 같은 위치를 맞출 수 없다).
                 if _use_sa:
                     aug_unlabeled_mel = apply_spec_augment(unlabeled_mel, _sa_nf, _sa_f, _sa_nt, _sa_t)
                     teacher_input = aug_unlabeled_mel if _sa_teacher_view == "augmented" else unlabeled_mel
@@ -983,7 +991,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                     kept_mel = student_input[keep_mask]
                     kept_wave = unlabeled_wave[keep_mask] if unlabeled_wave is not None else None
                     kept_teacher_logits = fusion_output.logits[keep_mask]
-                    kept_teacher_feats = fusion_output.features[keep_mask]
+                    kept_teacher_feats = fusion_output.features[keep_mask] if fusion_output.features is not None else None   # CSV 모드(_CsvFusion)는 features 가 None → feature KD 0 (검수 C2)
                     kept_weights = pseudo_conf[keep_mask] if (_use_pl and _pl_weighting) else None
 
                     base_features = run_student_encoder(kept_mel, kept_wave, augment=_use_sa)

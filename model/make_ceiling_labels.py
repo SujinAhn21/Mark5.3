@@ -44,9 +44,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
 
 # vild_config 를 import 하면 torch·sentence_transformers 가 딸려 온다(로컬에서 1분 이상).
-# 라벨 이름만 필요하므로 여기 적어 두고 vild_config.py:45-49 와 같은지 실행 때 대조한다.
-CLASS_NAMES = ["heavy_impact", "dragging", "construction", "machine_noise",
-               "media_talking", "water_toilet", "water_shower", "dog_bark", "others"]
+# 라벨 이름만 필요하므로 여기 적어 두고 vild_config.py 와 같은지 실행 때 대조한다.
+# [수정 2026-09-17 / 검수 C1] mark5.2 부터 media_talking 이 talking 이다(09-15 데이터 재구성). 옛 목록이 남아 있어 provenance 의
+# talking 222행이 "9-class 밖" 으로 걸려 상한 라벨이 아예 안 만들어지던 것을 mark_version 별 목록으로 고쳤다.
+CLASS_NAMES_BY_VERSION = {
+    "mark5.2": ["heavy_impact", "dragging", "construction", "machine_noise",
+                "talking", "water_toilet", "water_shower", "dog_bark", "others"],
+    "mark5.0": ["heavy_impact", "dragging", "construction", "machine_noise",
+                "media_talking", "water_toilet", "water_shower", "dog_bark", "others"],
+}
+CLASS_NAMES = CLASS_NAMES_BY_VERSION["mark5.2"]          # main() 이 --mark_version 으로 다시 고른다
 
 
 def _sha1(path):
@@ -57,16 +64,19 @@ def _sha1(path):
     return h.hexdigest()
 
 
-def _check_class_names_against_config():
-    """vild_config.py 의 classes 정의를 텍스트로 읽어 위 상수와 같은지 본다(import 없이)."""
+def _check_class_names_against_config(mark_version):
+    """vild_config.py 의 해당 mark_version 분기 본문에서 클래스 이름 9개가 그 순서로 나오는지 본다(import 없이).
+    [2026-09-17] 전에는 파일 전체에서 이름만 찾아 옛 분기(mark5.0 의 media_talking)에 걸려 불일치를 못 잡았다."""
     cfg = os.path.join(PROJECT_ROOT, "vild", "vild_config.py")
     try:
         txt = open(cfg, encoding="utf-8").read()
     except OSError:
         return
-    missing = [c for c in CLASS_NAMES if f'"{c}"' not in txt and f"'{c}'" not in txt]
-    if missing:
-        raise SystemExit(f"[ERROR] vild_config.py 에 없는 클래스 이름이 있습니다: {missing} — CLASS_NAMES 를 맞추십시오.")
+    i = txt.find(f'"{mark_version}"')
+    block = txt[i:i + 3000] if i >= 0 else txt
+    pos = [block.find(f'"{c}"') for c in CLASS_NAMES]
+    if any(p < 0 for p in pos) or pos != sorted(pos):
+        raise SystemExit(f"[ERROR] vild_config.py 의 {mark_version} 분기 클래스 순서가 CLASS_NAMES {CLASS_NAMES} 와 다릅니다.")
 
 
 def read_provenance(xlsx_path, mark_version):
@@ -119,7 +129,11 @@ def main():
     ap.add_argument("--consensus_csv", type=str, default=os.path.join(PROJECT_ROOT, "consensus_labels.csv"),
                     help="있으면 진짜 라벨과 대조해 정확도·others 오염을 찍는다(없어도 됨)")
     args = ap.parse_args()
-    _check_class_names_against_config()
+    global CLASS_NAMES
+    if args.mark_version not in CLASS_NAMES_BY_VERSION:
+        raise SystemExit(f"[ERROR] --mark_version {args.mark_version!r} 의 클래스 목록을 모릅니다(CLASS_NAMES_BY_VERSION 에 추가): {list(CLASS_NAMES_BY_VERSION)}")
+    CLASS_NAMES = CLASS_NAMES_BY_VERSION[args.mark_version]
+    _check_class_names_against_config(args.mark_version)
 
     prov = os.path.abspath(args.provenance)
     if not os.path.isfile(prov):

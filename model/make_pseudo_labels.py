@@ -16,7 +16,7 @@
 
 라벨 규칙:
   self : eval.py 와 같은 클립 판정 — 세그먼트 5개 확률(두 갈래 혼합) 집계 → class-pair 보정 → others 규칙.
-         others 규칙은 그 회차의 plots/others_threshold_<run_tag>.json(val 자동 선택)이 있으면 그것을, 없으면 config 기본.
+         others 규칙은 그 회차의 plots/others_threshold_<run_tag>.json(val 자동 선택)을 쓴다(체크포인트 sha256 대조, 없으면 멈춤. 동작 확인용 --allow_config_rule).
          confidence = 최종 확률 벡터의 최댓값.
   gen  : 비교모델 폴더의 model_def.build_model 로 만들고 체크포인트(model_state)를 실어 3.0초 클립을 통째로 넣는다
          (비교모델의 평가 규칙 그대로 softmax argmax). confidence = softmax 최댓값. 클래스 이름으로 맞춘다.
@@ -71,7 +71,16 @@ def _pool(config, labeled_n, seed, spill_labeled, limit=None):
     return pool
 
 
-def _label_with_self(config, ckpt_path, pool, device):
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
     """Mark5.2 student 로 라벨링 — eval.py 의 클립 판정과 같은 계산."""
     import torch.nn.functional as F
     from postprocess_utils import (aggregate_segment_probs, apply_abstention, apply_class_pair_calibration,
@@ -82,6 +91,7 @@ def _label_with_self(config, ckpt_path, pool, device):
     from checkpoint_utils import load_checkpoint, resolve_state_dict
 
     ckpt = load_checkpoint(ckpt_path, map_location=device)
+    ckpt_sha = _sha256(ckpt_path)
     _ckpt_enc = (ckpt.get("config_metadata") or {}).get("encoder_type")
     if _ckpt_enc is not None and _ckpt_enc != getattr(config, "encoder_type", "cnn"):
         raise SystemExit(f"[ERROR] 체크포인트 encoder_type={_ckpt_enc!r} 과 config {config.encoder_type!r} 이 다릅니다.")
@@ -104,16 +114,27 @@ def _label_with_self(config, ckpt_path, pool, device):
     student_input = getattr(config, "student_input", "mel")
     w = getattr(config, "distill_branch_eval_weight", 0.5)
 
-    # others 규칙: 그 회차의 val 자동 선택 json 이 있으면 그것을 쓴다(eval.py test 와 같은 규칙).
+    # others 규칙: 그 회차의 val 자동 선택 json 을 쓴다(eval.py test 와 같은 규칙).
+    # [검수 P5 / 2026-09-17] json 이 없으면 멈추고, 있으면 체크포인트 sha256 을 대조한다(eval.py·zeroshot_eval.py 와 같은 규칙).
+    # 전에는 json 이 없으면 config 기본(direct 0.09)으로 조용히 떨어졌고 지문 대조도 없었다. --allow_config_rule 은 동작 확인용.
     thr_json = os.path.join(PROJECT_ROOT, "plots", f"others_threshold_{config.run_tag}.json")
-    rule_desc = f"config 기본({config.others_decision_mode}"
     if os.path.exists(thr_json):
         with open(thr_json, encoding="utf-8") as f:
             saved = json.load(f)
+        saved_sha = (saved.get("checkpoint") or {}).get("sha256")
+        if saved_sha and saved_sha != ckpt_sha:
+            raise SystemExit(f"[ERROR] {os.path.basename(thr_json)} 의 체크포인트 지문({saved_sha[:12]})이 지금 체크포인트({ckpt_sha[:12]})와 "
+                             f"다릅니다 — 재학습했으면 eval.py --split val 을 다시 돌리십시오.")
         config.others_decision_mode = saved.get("rule", config.others_decision_mode)
         if config.others_decision_mode == "direct" and saved.get("threshold") is not None:
             config.others_direct_threshold = float(saved["threshold"])
         rule_desc = f"val 선택 json({config.others_decision_mode}"
+    elif allow_config_rule:
+        print(f"[WARN] {os.path.basename(thr_json)} 이 없어 config 기본 규칙을 씁니다(--allow_config_rule). 실험용 라벨이 아닙니다.")
+        rule_desc = f"config 기본(--allow_config_rule, {config.others_decision_mode}"
+    else:
+        raise SystemExit(f"[ERROR] {thr_json} 이 없습니다. self 라벨은 test 와 같은 운영점으로 매겨야 하므로 그 회차의 eval.py --split val 을 "
+                         f"먼저 돌리십시오. 동작 확인만 하려면 --allow_config_rule.")
     if config.others_decision_mode == "direct":
         rule_desc += f", thr {config.others_direct_threshold:g})"
     else:
@@ -198,6 +219,7 @@ def main():
     ap.add_argument("--baseline_dir", type=str, default=os.path.join(PROJECT_ROOT, "..", "Baseline_EfficientAT_mn10"))
     ap.add_argument("--out", type=str, default=None)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--allow_config_rule", action="store_true", help="동작 확인용(self): val 선택 json 이 없어도 config 기본 others 규칙으로 진행")
     args = ap.parse_args()
 
     config = AudioViLDConfig(mark_version=args.mark_version)
@@ -213,7 +235,7 @@ def main():
         raise SystemExit(f"[ERROR] 체크포인트가 없습니다: {ckpt}")
     t0 = time.time()
     if args.source == "self":
-        rows, model_name = _label_with_self(config, ckpt, pool, device)
+        rows, model_name = _label_with_self(config, ckpt, pool, device, allow_config_rule=args.allow_config_rule)
     else:
         rows, model_name = _label_with_generalist(config, ckpt, args.baseline_dir, pool, device)
 

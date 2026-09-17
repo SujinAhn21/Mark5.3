@@ -108,10 +108,27 @@ def load_raw(mark_version, split):
 
 
 def load_latency(mark_version):
+    """aggregate_latency_<mv>.csv(aggregate_results.collect_latency 의 평균·SD). 없으면 plots/efficiency_profile_<mv>*.json 을
+    직접 읽어 같은 모양(index=항목, 열 mean/std)으로 만든다. [검수 C4 / 2026-09-17] aggregate_results 를 안 돌렸거나 옛 판이
+    1회 측정분을 CSV 로 안 남긴 경우에도 표 3·3-b·표 8 의 Mark5.2 행이 빠지지 않게 한다."""
     p = os.path.join(PLOT_DIR, f"aggregate_latency_{mark_version}.csv")
-    if not os.path.exists(p):
+    if os.path.exists(p):
+        return pd.read_csv(p, encoding="utf-8-sig", index_col=0)
+    import glob, json
+    recs = []
+    for jp in sorted(glob.glob(os.path.join(PLOT_DIR, f"efficiency_profile_{mark_version}*.json"))):
+        try:
+            with open(jp, encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception as e:
+            print(f"[WARN] {os.path.basename(jp)} 읽기 실패: {e}")
+            continue
+        recs.append({k: v for k, v in d.items() if isinstance(v, (int, float)) and not isinstance(v, bool)})
+    if not recs:
         return None
-    return pd.read_csv(p, encoding="utf-8-sig", index_col=0)
+    num = pd.DataFrame(recs)
+    print(f"[INFO] aggregate_latency_{mark_version}.csv 가 없어 efficiency_profile json {len(recs)}개에서 직접 평균을 냅니다.")
+    return pd.DataFrame({"mean": num.mean(), "std": num.std(ddof=1) if len(num) > 1 else np.nan})
 
 
 def load_tests(mark_version, split):
@@ -310,7 +327,8 @@ def load_zeroshot(mark_version, baseline_plot_dirs=()):
             + [(f"{_disp(g.split('_sup_')[0].split('_pl_')[0].split('_ceil_')[0])} fine-tuned {g}", v) for g, v in fine.items()])
 
 
-ZS_COLS = [("zeroshot6", "accuracy", "zero-shot 6 acc"), ("zeroshot6", "macro_recall_new6", "new-6 macro R"),
+ZS_COLS = [("zeroshot6", "accuracy", "zero-shot 6 acc"), ("zeroshot6", "macro_precision_new6", "new-6 macro P"),
+           ("zeroshot6", "macro_recall_new6", "new-6 macro R"), ("zeroshot6", "macro_f1_new6", "new-6 macro F1"),
            ("zeroshot6", "macro_precision_new6_15way", "new-6 macro P (15-way)"), ("zeroshot6", "macro_recall_new6_15way", "new-6 macro R (15-way)"),
            ("zeroshot6", "macro_f1_new6_15way", "new-6 macro F1 (15-way)"),
            ("test9_with_15_anchors", "accuracy", "test-9 Accuracy"), ("test9_with_15_anchors", "macro_precision", "test-9 Macro P"),

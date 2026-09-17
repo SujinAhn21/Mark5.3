@@ -348,6 +348,9 @@ class AudioViLDConfig:
         #   "augmented" : student 와 같은 증강 view (기본) — 진짜 online. 증강마다 pseudo-label 이
         #                 재계산되고, 가려진 view 에서 앙상블 합의가 깨지는 클립은 선별
         #                 (pseudo_label_min_confidence)이 걸러낸다.
+        #                 ★ mn10(파형) 경로에서는 "같은 view" 가 아니다: teacher 는 64-mel 에 건 마스크를 보고, student 는
+        #                 인코더 안 128-mel 에 따로 뽑은 마스크를 본다(규격이 달라 위치를 맞출 수 없다). 둘 다 증강 view 이지만
+        #                 마스크는 독립이다 — 논문에는 "teacher·student 각각 독립 SpecAugment" 로 쓴다. (09-17 검수 P4)
         #   "clean"     : teacher 는 원본, student 만 증강 view (FixMatch 식 일관성 정규화) —
         #                 pseudo-label 품질(0.894)이 보존되는 안전한 대안.
         self.spec_augment_teacher_view = "augmented"

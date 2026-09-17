@@ -121,8 +121,10 @@ def build_anchors(config, zeroshot_bank, device):
     return torch.cat([base, new], dim=0), new_classes, prompts_used
 
 
-def apply_rule_from_json(config, ckpt_sha=None):
-    """val 자동 선택 json 의 규칙을 config 에 싣는다. eval.py 와 같이 체크포인트 sha256 을 대조한다(다르면 멈춤 — 재학습 뒤 val 을 다시 돌려야 한다)."""
+def apply_rule_from_json(config, ckpt_sha=None, allow_config_rule=False):
+    """val 자동 선택 json 의 규칙을 config 에 싣는다. eval.py 와 같이 체크포인트 sha256 을 대조한다(다르면 멈춤 — 재학습 뒤 val 을 다시 돌려야 한다).
+    [검수 P5 / 2026-09-17] json 이 없으면 eval.py 처럼 멈춘다(전에는 config 기본 direct 0.09 로 조용히 떨어져 표 8 에 다른 운영점이
+    섞일 수 있었다). 동작 확인용으로만 --allow_config_rule 로 config 값을 쓰게 하고, 그때는 화면과 json 의 others_rule 에 표시된다."""
     thr_json = os.path.join(PLOT_DIR, f"others_threshold_{config.run_tag}.json")
     if os.path.exists(thr_json):
         with open(thr_json, encoding="utf-8") as f:
@@ -134,7 +136,11 @@ def apply_rule_from_json(config, ckpt_sha=None):
         if config.others_decision_mode == "direct" and saved.get("threshold") is not None:
             config.others_direct_threshold = float(saved["threshold"])
         return f"val 선택 json({config.others_decision_mode}" + (f", thr {config.others_direct_threshold:g})" if config.others_decision_mode == "direct" else ")")
-    return f"config 기본({config.others_decision_mode}" + (f", thr {config.others_direct_threshold:g})" if config.others_decision_mode == "direct" else ")")
+    if not allow_config_rule:
+        raise SystemExit(f"[ERROR] {thr_json} 이 없습니다. eval.py --split val 을 먼저 돌려 others 규칙을 골라야 test·eval 과 같은 운영점으로 "
+                         f"제로샷을 잴 수 있습니다(run_experiments.py 는 이 순서로 돕니다). 동작 확인만 하려면 --allow_config_rule.")
+    print(f"[WARN] {os.path.basename(thr_json)} 이 없어 config 기본 규칙을 씁니다(--allow_config_rule). 표에 넣을 값이 아닙니다.")
+    return f"config 기본(--allow_config_rule, {config.others_decision_mode}" + (f", thr {config.others_direct_threshold:g})" if config.others_decision_mode == "direct" else ")")
 
 
 def predict_set(rows, config, parser, encoder, branch, text_head, bg, text_emb, class_names, device, n_base=None):
@@ -200,7 +206,7 @@ def compute_metrics(zs, te, base_classes, new_classes, class_names):
     """(1) 제로샷 세트·(2) 정규 test 의 지표. zs·te 는 [(row, pred_idx|None, probs|None)] — zeroshot_eval 과 clap_zeroshot 이 같이 쓴다.
 
     - per_class[c]: n · recall(정답을 c 로 보낸 비율) · top_wrong(가장 많이 간 다른 곳) · sent_to_others
-    - zeroshot6: accuracy(6종 전체 클립 기준) · macro_recall_new6 · 15-way 라벨 공간에서 새 6종의 macro P/R/F1
+    - zeroshot6: accuracy(6종 전체 클립 기준) · macro P/R/F1(6종 세트 안, 새 6종 라벨 기준) · 15-way 라벨 공간에서 새 6종의 macro P/R/F1
       (예측이 기존 9종으로 새면 재현율이, 기존 클립이 새 종으로 오면 정밀도가 떨어진다 — test 클립도 함께 넣는다)
     - test9: 9종 Accuracy · Macro P · Macro R · Macro F1(15 앵커로 판정, 라벨은 9종) · 새 클래스로 샌 클립 수
     """
@@ -222,6 +228,14 @@ def compute_metrics(zs, te, base_classes, new_classes, class_names):
     n_zs = sum(v["n"] for v in per_class.values())
     zs_acc = float(sum(v["n"] * v["recall"] for v in per_class.values() if v["n"]) / max(1, n_zs))
     zs_macro_recall = float(np.nanmean([v["recall"] for v in per_class.values()])) if n_zs else float("nan")
+    # [검수 P8 / 2026-09-17] 6종 세트 안에서의 macro P·F1 — 지표 4개 세트 규칙(Accuracy 옆에 P·R·F1). 예측이 기존 9종·others 로
+    # 새면 그 클립은 어느 새 클래스의 예측에도 안 들어가므로 재현율만 깎이고, 새 클래스끼리 헷갈리면 정밀도가 깎인다.
+    y_true_zs = [new_classes.index(r["label"]) + B for r, p, *_ in zs if p is not None]
+    y_pred_zs = [p for r, p, *_ in zs if p is not None]
+    if y_true_zs:
+        p6s, r6s, f6s, _ = precision_recall_fscore_support(y_true_zs, y_pred_zs, labels=list(range(B, C)), average="macro", zero_division=0)
+    else:
+        p6s = r6s = f6s = float("nan")
     y_true_all = [new_classes.index(r["label"]) + B for r, p, *_ in zs if p is not None] + \
                  [base_classes.index(r["label"]) for r, p, *_ in te if p is not None and r["label"] in base_classes]
     y_pred_all = [p for r, p, *_ in zs if p is not None] + [p for r, p, *_ in te if p is not None and r["label"] in base_classes]
@@ -232,7 +246,8 @@ def compute_metrics(zs, te, base_classes, new_classes, class_names):
     mp9, mr9, mf9, _ = precision_recall_fscore_support(y_t, y_p, labels=list(range(B)), average="macro", zero_division=0)
     leaked = sum(1 for p in y_p if p >= B)
     return {"conf": conf, "per_class": per_class,
-            "zeroshot6": {"n": n_zs, "accuracy": zs_acc, "macro_recall_new6": zs_macro_recall,
+            "zeroshot6": {"n": n_zs, "accuracy": zs_acc, "macro_precision_new6": float(p6s), "macro_recall_new6": zs_macro_recall,
+                          "macro_f1_new6": float(f6s), "macro_recall_new6_sklearn": float(r6s),
                           "macro_precision_new6_15way": float(p6), "macro_recall_new6_15way": float(r6), "macro_f1_new6_15way": float(f6),
                           "per_class": per_class},
             "test9": {"n": len(y_t), "accuracy": float(acc9), "macro_precision": float(mp9), "macro_recall": float(mr9),
@@ -285,8 +300,9 @@ def save_and_print(json_stem, pred_stem, suffix, title, zs, te, metrics, base_cl
     print("\n" + "=" * 78)
     print(f" 제로샷 결과 — {title} (앵커 {C}개, others 규칙 {rule_desc})")
     print("=" * 78)
-    print(f" (1) 제로샷 6종 {z['n']}클립: accuracy {z['accuracy']:.4f} · 새 6종 macro recall {z['macro_recall_new6']:.4f} "
-          f"· 15-way 새 6종 macro P {z['macro_precision_new6_15way']:.4f} / R {z['macro_recall_new6_15way']:.4f} / F1 {z['macro_f1_new6_15way']:.4f}")
+    print(f" (1) 제로샷 6종 {z['n']}클립: accuracy {z['accuracy']:.4f} · 새 6종 macro P {z['macro_precision_new6']:.4f} / R {z['macro_recall_new6']:.4f} "
+          f"/ F1 {z['macro_f1_new6']:.4f} · 15-way(+test 클립) 새 6종 macro P {z['macro_precision_new6_15way']:.4f} / R {z['macro_recall_new6_15way']:.4f} "
+          f"/ F1 {z['macro_f1_new6_15way']:.4f}")
     for c, v in metrics["per_class"].items():
         print(f"     {c:<13} n={v['n']:<4} recall {v['recall']:.3f}  → others {v['sent_to_others']:.3f}  가장 많이 간 곳: {v['top_wrong']} ({v['top_wrong_share']:.3f})")
     print(f" (2) 정규 test 9종 {t9['n']}클립({C} 앵커): Accuracy {t9['accuracy']:.4f} · Macro P {t9['macro_precision']:.4f} "
@@ -307,6 +323,7 @@ def main():
     ap.add_argument("--pseudo_source", type=str, default=None)
     ap.add_argument("--zeroshot_bank", type=str, default=os.path.join(SHARED_DIR, "resources", "zeroshot_prompt_bank.json"))
     ap.add_argument("--limit", type=int, default=None, help="동작 확인용: 세트마다 라벨별 앞 N 클립만(산출물 이름에 _limitN)")
+    ap.add_argument("--allow_config_rule", action="store_true", help="동작 확인용: val 선택 json 이 없어도 config 기본 others 규칙으로 진행")
     args = ap.parse_args()
 
     config = AudioViLDConfig(mark_version=args.mark_version)
@@ -321,7 +338,7 @@ def main():
     text_emb, new_classes, prompts_used = build_anchors(config, args.zeroshot_bank, device)
     base_classes = list(config.get_classes_for_evaluation())
     class_names = base_classes + new_classes
-    rule_desc = apply_rule_from_json(config, sha)
+    rule_desc = apply_rule_from_json(config, sha, allow_config_rule=args.allow_config_rule)
     print(f"[INFO] 제로샷: run_tag={tag} · 체크포인트 {os.path.basename(model_path)} · 앵커 {len(class_names)}개 "
           f"({len(base_classes)} + 새 {len(new_classes)}: {new_classes}) · others 규칙 {rule_desc}")
     parser = AudioParser(config, segment_mode=True)

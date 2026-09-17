@@ -931,6 +931,10 @@ def baseline_paired(df_le, baseline_csvs):
         b = pd.read_csv(path)
         if "labeled" not in b.columns:
             b["labeled"] = _full_labeled_count()
+        # [2026-09-17 / 검수 C3] 데이터 효율 곡선 회차(pl + unlabeled 500·1000)는 짝에서 뺀다 — 안 빼면 labeled 200 에서
+        # 비교모델 pl 이 seed 당 3행이 되어 n(짝)=15 짜리 검정이 됐다. 본표 짝은 unlabeled 열이 비어 있는(전량) 회차만.
+        if "unlabeled" in b.columns:
+            b = b[b["unlabeled"].isna()].reset_index(drop=True)
         model = str(b["model"].iloc[0]) if "model" in b.columns and len(b) else os.path.basename(path)
         for lab in sorted(set(b["labeled"].astype(int)) & set(df_le["labeled"].astype(int))):
             ours = df_le[df_le["labeled"] == lab]
@@ -1214,25 +1218,28 @@ def main():
     print(lat.to_string(index=False))
 
     num = lat.drop(columns=["file"]).select_dtypes("number")
-    if len(lat) > 1:
-        n_lat = len(lat)
-        ci_lo, ci_hi = {}, {}
+    n_lat = len(lat)
+    ci_lo, ci_hi = {}, {}
+    if n_lat > 1:
         for c in num.columns:
             lo, hi, _ = ci95(num[c].values)
             ci_lo[c], ci_hi[c] = lo, hi
-        stat = pd.DataFrame({"mean": num.mean(), "std": num.std(ddof=1),
-                             "ci_low": pd.Series(ci_lo), "ci_high": pd.Series(ci_hi),
-                             "min": num.min(), "max": num.max(),
-                             "median": num.median(),
-                             "q1": num.quantile(0.25), "q3": num.quantile(0.75),
-                             "iqr": num.quantile(0.75) - num.quantile(0.25)})
+    # [검수 C4 / 2026-09-17] 1회뿐이어도 CSV 는 저장한다(std·CI 는 NaN). 전에는 2회 이상일 때만 저장해서
+    # make_paper_tables 의 표 3·3-b·표 8(Params) 에서 Mark5.2 행이 통째로 빠졌다. 소비자 쪽은 std 가 NaN 이면 '± SD' 를 붙이지 않는다.
+    stat = pd.DataFrame({"mean": num.mean(), "std": num.std(ddof=1) if n_lat > 1 else np.nan,
+                         "ci_low": pd.Series(ci_lo, dtype=float), "ci_high": pd.Series(ci_hi, dtype=float),
+                         "min": num.min(), "max": num.max(),
+                         "median": num.median(),
+                         "q1": num.quantile(0.25), "q3": num.quantile(0.75),
+                         "iqr": num.quantile(0.75) - num.quantile(0.25)})
+    if n_lat > 1:
         print(f"\n--- 평균 ± 표본SD · 95% CI (n={n_lat}, t={t_crit(n_lat):.3f}) ---")
-        print(stat.to_string())
-        out = os.path.join(PLOT_DIR, f"aggregate_latency_{args.mark_version}.csv")
-        stat.to_csv(out, encoding=CSV_ENCODING)
-        print(f"\n[INFO] 저장: {out}")
     else:
-        print("\n[INFO] 1회뿐이라 표준편차를 낼 수 없습니다. 5회 측정하는 것을 권합니다.")
+        print("\n--- 1회뿐이라 표준편차·CI 는 비운다(NaN). 5회 측정하는 것을 권합니다 ---")
+    print(stat.to_string())
+    out = os.path.join(PLOT_DIR, f"aggregate_latency_{args.mark_version}.csv")
+    stat.to_csv(out, encoding=CSV_ENCODING)
+    print(f"\n[INFO] 저장: {out}")
 
 
 if __name__ == "__main__":
