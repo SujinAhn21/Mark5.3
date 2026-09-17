@@ -172,7 +172,7 @@ def load_baseline_raw(paths):
 
 _COND_ORDER = {"supervised": 0, "ours": 1, "upper": 2}
 _BASE_COND = {"sup": "supervised (labeled only)", "pl": "+ consensus pseudo-labels", "ceil": "upper (true labels)"}
-_DISPLAY = {"efficientat_mn10": "EfficientAT mn10", "ced_tiny": "CED-Tiny", "panns_cnn6": "PANNs CNN6"}
+_DISPLAY = {"efficientat_mn10": "EfficientAT mn10", "ced_tiny": "CED-Tiny", "panns_cnn6": "PANNs CNN6", "clap_htsat_tiny": "LAION-CLAP (HTSAT-tiny)"}   # [2026-09-17] CLAP 네 번째
 
 
 def _disp(model):
@@ -279,10 +279,12 @@ def openset_rows(os_tab):
     return rows
 
 
-def load_zeroshot(mark_version):
-    """plots/zeroshot_<run_tag>.json 들을 (모델, 묶음) 로 모은다. 동작 확인용(_limit)은 뺀다. 반환: [(이름, [json...])]"""
+def load_zeroshot(mark_version, baseline_plot_dirs=()):
+    """plots/zeroshot_<run_tag>.json 들을 (모델, 묶음) 로 모은다. 동작 확인용(_limit)은 뺀다. 반환: [(이름, [json...])]
+    [2026-09-17] 비교모델 plots(--baseline_raw 의 폴더)에 있는 zeroshot_<tag>.json(파인튜닝한 CLAP, Baseline_CLAP/zeroshot_eval.py)도
+    seed 묶음으로 모은다 — 표 8 에 '학습 전 CLAP(참조선)' 과 '학습 뒤 CLAP' 이 나란히 놓인다."""
     import glob, json, re
-    ours, clap = {}, {}
+    ours, clap, fine = {}, {}, {}
     for p in sorted(glob.glob(os.path.join(PLOT_DIR, "zeroshot_*.json"))):
         name = os.path.basename(p)[len("zeroshot_"):-len(".json")]
         if "_limit" in name or name.startswith("confusion_") or name.startswith("predictions_"):
@@ -294,7 +296,18 @@ def load_zeroshot(mark_version):
         elif name.startswith(mark_version):
             m = re.match(r"^(?P<g>.+)_s\d+$", name)
             ours.setdefault(m.group("g") if m else name, []).append(d)
-    return [(f"Proposed (Mark5.2) {g}", v) for g, v in ours.items()] + [(f"LAION-CLAP {g[len('clap_'):]}", v) for g, v in clap.items()]
+    for pdir in baseline_plot_dirs:
+        for p in sorted(glob.glob(os.path.join(pdir, "zeroshot_*.json"))):
+            name = os.path.basename(p)[len("zeroshot_"):-len(".json")]
+            if "_limit" in name or "_smoke" in name or name.startswith("confusion_") or name.startswith("predictions_"):
+                continue
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            m = re.match(r"^(?P<g>.+)_s\d+$", name)
+            fine.setdefault(m.group("g") if m else name, []).append(d)
+    return ([(f"Proposed (Mark5.2) {g}", v) for g, v in ours.items()]
+            + [(f"LAION-CLAP {g[len('clap_'):]} (zero-shot, no training)", v) for g, v in clap.items()]
+            + [(f"{_disp(g.split('_sup_')[0].split('_pl_')[0].split('_ceil_')[0])} fine-tuned {g}", v) for g, v in fine.items()])
 
 
 ZS_COLS = [("zeroshot6", "accuracy", "zero-shot 6 acc"), ("zeroshot6", "macro_recall_new6", "new-6 macro R"),
@@ -364,7 +377,7 @@ def _tests_rows(tests, short_map):
     return out
 
 
-def build_extra(mark_version, split, raw_all, base, lat):
+def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=()):
     """[2026-09-17 / 11절] 표 4~8 + 추가 검정을 마크다운·LaTeX 두 벌로. 자료가 없는 표는 그 사실을 적고 건너뛴다."""
     md, tex = [], []
     full_labeled = int(raw_all["labeled"].max()) if "labeled" in raw_all.columns and raw_all["labeled"].notna().any() else 0
@@ -433,7 +446,7 @@ def build_extra(mark_version, split, raw_all, base, lat):
         md += ["(자료 없음 — model/openset_report.py 의 plots/openset_table.csv 가 없다)", ""]
 
     # 표 8 제로샷
-    rows8 = zeroshot_rows(load_zeroshot(mark_version), lat)
+    rows8 = zeroshot_rows(load_zeroshot(mark_version, baseline_plot_dirs), lat)
     md += ["## 표 8. 제로샷 — 학습에 없던 6종(door·treadmill·golf_putting·violin·piano·cat)을 문장 앵커만 추가해 판정", ""]
     if rows8:
         zs_hdr = [lbl for _, _, lbl in ZS_COLS]
@@ -763,7 +776,8 @@ def main():
     md = build_markdown(raw, lat, tests, rows, top, args.split, n_seeds, raw_ceil=raw_ceil, gap=gap)
     tex = build_latex(raw, lat, tests, rows, top, args.split, n_seeds, raw_ceil=raw_ceil, gap=gap)
     base = load_baseline_raw(args.baseline_raw) if args.baseline_raw else None
-    md_x, tex_x = build_extra(args.mark_version, args.split, raw_all, base, lat)   # [2026-09-17 / 11절] 표 4~8 + 추가 검정
+    bdirs = sorted({os.path.dirname(os.path.abspath(p)) for p in args.baseline_raw if os.path.isfile(p)} - {os.path.abspath(PLOT_DIR)})   # 이 저장소 plots 는 제외
+    md_x, tex_x = build_extra(args.mark_version, args.split, raw_all, base, lat, bdirs)   # [2026-09-17 / 11절] 표 4~8 + 추가 검정
     md += "\n" + md_x
     tex += "\n" + tex_x
 

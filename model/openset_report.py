@@ -14,7 +14,7 @@ Accuracy · Macro Precision · Macro Recall · Macro F1 네 지표도 같이 둔
 어디서 읽나 — 모두 prediction_details CSV 의 "True Label"·"Predicted Label" 두 열만 쓴다. 학습·추론을 다시 하지 않는다.
     Mark5.2(이 저장소)  plots/prediction_details_<tag>_eval_far_heldout.csv · _eval_boundary_B.csv · <tag>.csv(test)
                           ← model/eval.py --split eval_far_heldout / eval_boundary_B / (test)  (운영점 = val 에서 고른 others 규칙)
-    비교모델 3개         ../Baseline_*/plots/prediction_details_<tag>_eval_far_heldout.csv 등
+    비교모델 4개         ../Baseline_*/plots/prediction_details_<tag>_eval_far_heldout.csv 등 (EfficientAT·CED·PANNs·CLAP)
                           ← 각 폴더 eval.py --split eval_far_heldout ... (운영점 = softmax argmax, others 도 한 클래스)
   "같은 운영점 규칙" 이란 각 모델이 정규 test 에서 쓰는 규칙 그대로를 평가 세트에도 쓴다는 뜻이다. 세트를 보고 임계값을 새로
   고르지 않는다(그러면 ① 만 좋아지게 맞출 수 있다). Mark5.2 의 규칙은 test performance_summary 의 Others Rule·Others
@@ -58,7 +58,7 @@ from aggregate_results import _read_summary                                   # 
 TARGET_CLASSES = ["heavy_impact", "dragging", "construction", "machine_noise",
                   "talking", "water_toilet", "water_shower", "dog_bark"]       # Mark5.2 타겟 8종(others 제외). 비교모델도 같은 이름·순서
 EVAL_SETS = ("far_heldout", "boundary_B")
-BASELINE_DIRS = ("Baseline_EfficientAT_mn10", "Baseline_CED_Tiny", "Baseline_PANNs_CNN6")
+BASELINE_DIRS = ("Baseline_EfficientAT_mn10", "Baseline_CED_Tiny", "Baseline_PANNs_CNN6", "Baseline_CLAP")   # [2026-09-17] CLAP 네 번째
 _SEED_RE = re.compile(r"^(?P<group>.+)_s(?P<seed>\d+)$")
 
 
