@@ -11,6 +11,13 @@
 >   라벨 효율 표(`paper_table_label_eff_*`) · l200 곡선 · 출처 비교 표(`paper_table_plsource_*`) · 비교모델 짝지은 검정(`aggregate_tests_vs_baseline_*`).
 > - 상한(ceil) 라벨 CSV 는 새 데이터 기준으로 `model/make_ceiling_labels.py` 로 다시 만들어야 한다(저장소의 ceiling_labels.csv 는 mark5.0 시절 것).
 > - mn10 가중치 `weights/`·코드 `third_party/`·torchvision 요구는 Mark5.2 README 와 같다.
+> - **10절(2026-09-17) open-set·제로샷·CLAP — 전부 학습 0회.** 평가 세트 인덱스 `dataset_eval_{zeroshot6,boundary_B,far_heldout}.csv` 는
+>   Mark5.2 `preprocessing/generate_eval_index.py` 가 만들고 여기 루트에 복사해 쓴다.
+>   `model/eval.py --split eval_far_heldout|eval_boundary_B` (① 학습에 없던 소리→others, Others FPR = 1 − ①) ·
+>   `model/openset_report.py` (네 모델 ①·② 표: prediction_details CSV 만 읽는다, 옆의 Baseline_* 자동 탐색) ·
+>   `model/zeroshot_eval.py` (앵커 9 + 새 6종 `shared_vild/resources/zeroshot_prompt_bank.json`, 제로샷 세트 + test) ·
+>   `model/clap_zeroshot.py` (LAION-CLAP 630k-audioset-best, 같은 문장·같은 지표·같은 산출물 형식, `pip install laion-clap`, 코랩 전용).
+>   `shared_vild/resources/prompt_bank.json` 은 Mark5.2 것(talking 항목·others 동의어)으로 맞췄다(전에는 Mark5 옛 뱅크가 남아 있었다).
 > 아래는 Mark5 원본 README 그대로.
 
 # Mark5.0

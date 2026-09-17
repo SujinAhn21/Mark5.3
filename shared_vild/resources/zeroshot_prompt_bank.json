@@ -1,0 +1,41 @@
+{
+  "_note": "[2026-09-17 / 10절 제로샷] 학습에 없는 6종. 템플릿은 prompt_bank.json 과 같고, 문장 하나(동의어 3개 평균)로 앵커를 추가한다. 폴더→클래스 매핑은 Mark5.2/preprocessing/generate_eval_index.py ZEROSHOT_CLASSES.",
+  "prompt_templates": [
+    "a sound of {label} in the room",
+    "the audio of {label}",
+    "an indoor sound that resembles {label}",
+    "a recording of {label}"
+  ],
+  "class_synonyms": {
+    "door": [
+      "a door opening and closing",
+      "door slam",
+      "door closing sound"
+    ],
+    "treadmill": [
+      "running on a treadmill",
+      "treadmill footsteps",
+      "someone running on an exercise machine"
+    ],
+    "golf_putting": [
+      "golf putting",
+      "a golf ball rolling and being putted",
+      "golf ball rolling on the floor"
+    ],
+    "violin": [
+      "violin playing",
+      "a violin being played",
+      "string instrument violin music"
+    ],
+    "piano": [
+      "piano playing",
+      "a piano being played",
+      "piano music"
+    ],
+    "cat": [
+      "a cat meowing",
+      "cat crying",
+      "cat meow"
+    ]
+  }
+}

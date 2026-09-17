@@ -70,7 +70,7 @@ from train_mark5 import EnsembleTeacher, _resolve_csv_path
 
 SPECIALISTS = {
     "heavy_impact": "mark4.1", "dragging": "mark4.2", "construction": "mark4.3",
-    "machine_noise": "mark4.4", "media_talking": "mark4.5", "water_toilet": "mark4.6",
+    "machine_noise": "mark4.4", "talking": "mark4.5", "water_toilet": "mark4.6",
     "water_shower": "mark4.7", "dog_bark": "mark4.8",
 }
 

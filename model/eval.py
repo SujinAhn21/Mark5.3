@@ -50,6 +50,7 @@ from checkpoint_utils import load_checkpoint, resolve_state_dict
 
 
 def _resolve_dataset_csv_path(split: str):
+    # [2026-09-17] split 은 test·val 또는 eval_<세트>. 파일 이름은 늘 dataset_<split>.csv 다.
     """[변경 2026-08-17] test 고정이었던 것을 split 인자로 일반화했다.
 
     mark4.x 는 eval.py --split val 로 val 을 따로 평가해 운영점(threshold)을 고르고
@@ -504,7 +505,11 @@ if __name__ == "__main__":
     parser.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     # [추가 2026-08-17] 평가 split 선택. 기본은 test(기존 동작 그대로).
     # 운영점은 val 로 고르고 test 는 마지막 확인 한 번만 쓴다(mark4.x 와 같은 원칙).
-    parser.add_argument("--split", type=str, default="test", choices=["test", "val"])
+    # [변경 2026-09-17 / 10절] test·val 외에 평가 전용 세트 이름도 받는다: eval_far_heldout · eval_boundary_B (dataset_eval_*.csv,
+    # preprocessing/generate_eval_index.py 가 만든다). 정답이 전부 others 인 세트라 결과의 "Others FPR" = 1 − open-set ①
+    # (학습에 없던 소리를 others 로 보낸 비율). 운영점은 val 에서 고른 json 을 그대로 읽는다(test 와 같은 규칙).
+    parser.add_argument("--split", type=str, default="test",
+                        help="test | val | eval_far_heldout | eval_boundary_B (dataset_<split>.csv 를 읽는다)")
     # [신설 2026-08-30 / Mark5_EXP] 학습 때 준 것과 **같은 값**을 줘야 그 조건의
     # 체크포인트를 찾는다(run_tag 가 파일명을 가르기 때문).
     parser.add_argument("--seed", type=int, default=None,
