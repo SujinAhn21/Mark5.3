@@ -15,10 +15,10 @@ Accuracy · Macro Precision · Macro Recall · Macro F1 네 지표도 같이 둔
     Mark5.2(이 저장소)  plots/prediction_details_<tag>_eval_far_heldout.csv · _eval_boundary_B.csv · <tag>.csv(test)
                           ← model/eval.py --split eval_far_heldout / eval_boundary_B / (test)  (운영점 = val 에서 고른 others 규칙)
     비교모델 4개         ../Baseline_*/plots/prediction_details_<tag>_eval_far_heldout.csv 등 (EfficientAT·CED·PANNs·CLAP)
-                          ← 각 폴더 eval.py --split eval_far_heldout ... (운영점 = softmax argmax, others 도 한 클래스)
+                          ← 각 폴더 eval.py --split eval_far_heldout ... (운영점 = val 에서 고른 others 규칙 json, 2026-09-17 B안 — Mark5.2 와 같은 절차)
   "같은 운영점 규칙" 이란 각 모델이 정규 test 에서 쓰는 규칙 그대로를 평가 세트에도 쓴다는 뜻이다. 세트를 보고 임계값을 새로
   고르지 않는다(그러면 ① 만 좋아지게 맞출 수 있다). Mark5.2 의 규칙은 test performance_summary 의 Others Rule·Others
-  Threshold 행에서 읽어 표의 rule 열에 적는다.
+  Threshold 행에서 읽어 표의 rule 열에 적는다. 비교모델도 B안 뒤로는 같은 두 행을 쓰므로 같은 방법으로 읽는다.
 
 같은 태그에서 seed(_s<k>) 만 다른 회차는 한 묶음(group)으로 평균 ± 표본표준편차(ddof=1) 를 낸다. 회차마다 값은
 openset_raw.csv 에 그대로 남긴다.
@@ -153,8 +153,8 @@ def evaluate_tag(model_root, tag, label):
     metrics = _read_summary(summ) if os.path.isfile(summ) else {}
     for k in ("Accuracy", "Macro Precision", "Macro Recall", "Macro F1"):
         row[k] = metrics.get(k, float("nan"))
-    # Mark5.2 의 eval.py 는 val 에서 고른 규칙을 요약 CSV 의 Others Rule·Others Threshold 행에 적는다(문자열이라 직접 읽는다).
-    # 그 행이 없으면 비교모델(softmax argmax, others 도 한 클래스)이다.
+    # Mark5.2·비교모델(B안) eval.py 는 val 에서 고른 규칙을 요약 CSV 의 Others Rule·Others Threshold 행에 적는다(문자열이라 직접 읽는다).
+    # 그 행이 없으면 옛 산출물(softmax argmax, others 도 한 클래스)이다.
     rule = _read_rule(summ) if os.path.isfile(summ) else None
     row["rule"] = rule or "argmax(softmax)"
     row["note"] = "; ".join(notes)

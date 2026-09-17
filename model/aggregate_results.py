@@ -1226,7 +1226,7 @@ def main():
             ci_lo[c], ci_hi[c] = lo, hi
     # [검수 C4 / 2026-09-17] 1회뿐이어도 CSV 는 저장한다(std·CI 는 NaN). 전에는 2회 이상일 때만 저장해서
     # make_paper_tables 의 표 3·3-b·표 8(Params) 에서 Mark5.2 행이 통째로 빠졌다. 소비자 쪽은 std 가 NaN 이면 '± SD' 를 붙이지 않는다.
-    stat = pd.DataFrame({"mean": num.mean(), "std": num.std(ddof=1) if n_lat > 1 else np.nan,
+    stat = pd.DataFrame({"mean": num.mean(), "std": num.std(ddof=1) if n_lat > 1 else np.nan, "n": n_lat,
                          "ci_low": pd.Series(ci_lo, dtype=float), "ci_high": pd.Series(ci_hi, dtype=float),
                          "min": num.min(), "max": num.max(),
                          "median": num.median(),

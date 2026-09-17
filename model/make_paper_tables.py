@@ -45,7 +45,6 @@
 #      값은 "0.8512 ± 0.0071" 처럼 문자열로 적어도 되고 숫자만 적어도 된다.)
 
 import argparse
-import csv
 import os
 
 import numpy as np
@@ -128,7 +127,33 @@ def load_latency(mark_version):
         return None
     num = pd.DataFrame(recs)
     print(f"[INFO] aggregate_latency_{mark_version}.csv 가 없어 efficiency_profile json {len(recs)}개에서 직접 평균을 냅니다.")
-    return pd.DataFrame({"mean": num.mean(), "std": num.std(ddof=1) if len(num) > 1 else np.nan})
+    return pd.DataFrame({"mean": num.mean(), "std": num.std(ddof=1) if len(num) > 1 else np.nan, "n": len(num)})
+
+
+def latency_n(lat):
+    """효율 측정 횟수. aggregate_latency CSV 의 n 열(2026-09-17 추가) → 없으면 std 가 NaN 이면 1, 아니면 모름(None)."""
+    if lat is None:
+        return None
+    if "n" in lat.columns:
+        try:
+            return int(lat["n"].dropna().iloc[0])
+        except (IndexError, ValueError, TypeError):
+            return None
+    try:
+        return 1 if lat["std"].isna().all() else None
+    except KeyError:
+        return None
+
+
+def latency_caption(lat, latex=False):
+    """[2차 검수 P-3] 캡션의 측정 횟수를 고정 '5회' 대신 실제 n 으로."""
+    n = latency_n(lat)
+    if latex:
+        return ("CPU latency is a single measurement." if n == 1 else
+                f"CPU latency is the mean $\\pm$ SD of {n} measurements." if n else
+                "CPU latency is the mean $\\pm$ SD of repeated measurements.")
+    return ("CPU 지연은 1회 측정값이다(5회 반복을 권함 — profile_efficiency 를 _r<k> 로 여러 번)." if n == 1 else
+            f"CPU 지연만 {n}회 측정한 평균 ± SD 다." if n else "CPU 지연만 반복 측정한 평균 ± SD 다.")
 
 
 def load_tests(mark_version, split):
@@ -727,7 +752,7 @@ def build_markdown(raw, lat, tests, rows, top, split, n_seeds, raw_ceil=None, ga
             L.append(f"| {label} | {s} |")
         L.append("")
         L.append("캡션: 파라미터·크기·연산량은 아키텍처에서 정해지는 값이라 반복해도 변하지 않는다.")
-        L.append("CPU 지연만 5회 측정한 평균 ± SD 다.")
+        L.append(latency_caption(lat))
         L.append("")
 
     if tests is not None:
@@ -819,7 +844,7 @@ def build_latex(raw, lat, tests, rows, top, split, n_seeds, raw_ceil=None, gap=N
         L.append("\\centering")
         L.append("\\caption{Efficiency of the proposed student model. "
                  "Parameter count, model size and FLOPs are architectural constants; "
-                 "CPU latency is the mean $\\pm$ SD of five measurements.}")
+                 + latency_caption(lat, latex=True) + "}")
         L.append("\\label{tab:efficiency}")
         L.append("\\begin{tabular}{lc}")
         L.append("\\toprule")

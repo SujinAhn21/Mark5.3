@@ -18,8 +18,9 @@
   self : eval.py 와 같은 클립 판정 — 세그먼트 5개 확률(두 갈래 혼합) 집계 → class-pair 보정 → others 규칙.
          others 규칙은 그 회차의 plots/others_threshold_<run_tag>.json(val 자동 선택)을 쓴다(체크포인트 sha256 대조, 없으면 멈춤. 동작 확인용 --allow_config_rule).
          confidence = 최종 확률 벡터의 최댓값.
-  gen  : 비교모델 폴더의 model_def.build_model 로 만들고 체크포인트(model_state)를 실어 3.0초 클립을 통째로 넣는다
-         (비교모델의 평가 규칙 그대로 softmax argmax). confidence = softmax 최댓값. 클래스 이름으로 맞춘다.
+  gen  : 비교모델 폴더의 model_def.build_model 로 만들고 체크포인트(model_state)를 실어 3.0초 클립을 통째로 넣는다.
+         others 규칙은 비교모델 eval.py 와 같이 그 회차의 <baseline_dir>/plots/others_threshold_<tag>.json(val 자동 선택, 2026-09-17 B안)을
+         쓴다(체크포인트 sha256 대조, 없으면 멈춤. --allow_config_rule 이면 argmax). confidence = softmax 최댓값. 클래스 이름으로 맞춘다.
 
 같은 부분집합을 쓰기 위해 train_mark5.select_labeled_subset(같은 seed·labeled_n)로 "남은 labeled" 를 뽑는다.
 
@@ -122,9 +123,11 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
         with open(thr_json, encoding="utf-8") as f:
             saved = json.load(f)
         saved_sha = (saved.get("checkpoint") or {}).get("sha256")
-        if saved_sha and saved_sha != ckpt_sha:
-            raise SystemExit(f"[ERROR] {os.path.basename(thr_json)} 의 체크포인트 지문({saved_sha[:12]})이 지금 체크포인트({ckpt_sha[:12]})와 "
-                             f"다릅니다 — 재학습했으면 eval.py --split val 을 다시 돌리십시오.")
+        # [2차 검수 P-2] eval.py 와 같은 강도로: run_tag 도 대조하고, 지문이 없는 json(옛 형식)도 통과시키지 않는다.
+        if saved.get("run_tag") != config.run_tag or not saved_sha or saved_sha != ckpt_sha:
+            raise SystemExit(f"[ERROR] {os.path.basename(thr_json)} 은 지금 체크포인트로 고른 값이 아닙니다"
+                             f"(json run_tag={saved.get('run_tag')} sha256={str(saved_sha)[:12]} / 지금 {config.run_tag} sha256={ckpt_sha[:12]})"
+                             f" — 재학습했으면 eval.py --split val 을 다시 돌리십시오.")
         config.others_decision_mode = saved.get("rule", config.others_decision_mode)
         if config.others_decision_mode == "direct" and saved.get("threshold") is not None:
             config.others_direct_threshold = float(saved["threshold"])
@@ -175,8 +178,9 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
     return out, os.path.basename(ckpt_path)
 
 
-def _label_with_generalist(config, ckpt_path, baseline_dir, pool, device):
-    """비교모델(EfficientAT sup) 로 라벨링 — 3.0초 클립 통째로, softmax argmax."""
+def _label_with_generalist(config, ckpt_path, baseline_dir, pool, device, allow_config_rule=False):
+    """비교모델(EfficientAT sup) 로 라벨링 — 3.0초 클립 통째로, softmax 에 비교모델 eval.py 와 같은 others 규칙.
+    [2차 검수 C-2 / 2026-09-17] 전에는 argmax 고정이라 B안(val 선택 규칙) 뒤의 비교모델 test 판정·self 라벨과 운영점이 달랐다."""
     bdir = os.path.abspath(baseline_dir)
     if not os.path.isfile(os.path.join(bdir, "model_def.py")):
         raise SystemExit(f"[ERROR] --baseline_dir 에 model_def.py 가 없습니다: {bdir}")
@@ -185,6 +189,19 @@ def _label_with_generalist(config, ckpt_path, baseline_dir, pool, device):
     model_def = importlib.import_module("model_def")
     bdata = importlib.import_module("common.data")
     bpaths = importlib.import_module("common.paths")
+    brule = importlib.import_module("common.others_rule")
+    tag = os.path.splitext(os.path.basename(ckpt_path))[0]           # 비교모델 체크포인트 이름 = run_tag (common/naming.artifact_paths)
+    rule_json = brule.rule_json_path(os.path.join(bdir, "plots"), tag)
+    if os.path.isfile(rule_json):
+        rule, thr, _saved = brule.load_rule_json(rule_json, tag, ckpt_path)      # run_tag·sha256 다르면 RuntimeError
+        rule_desc = f"val 선택 json {brule.describe(rule, thr)}"
+    elif allow_config_rule:
+        rule, thr = "argmax", None
+        rule_desc = "argmax(--allow_config_rule, json 없음 — 실험용 라벨이 아닙니다)"
+        print(f"[WARN] {os.path.basename(rule_json)} 이 없어 argmax 로 진행합니다(--allow_config_rule).")
+    else:
+        raise SystemExit(f"[ERROR] {rule_json} 이 없습니다. gen 라벨은 비교모델 test 와 같은 운영점으로 매겨야 하므로 그 회차의 "
+                         f"eval.py --split val 을 먼저 돌리십시오(run_experiments.py 는 이 순서로 돕니다). 동작 확인만 하려면 --allow_config_rule.")
     model = model_def.build_model(num_classes=len(bpaths.CLASS_NAMES), load_pretrained=False).to(device)
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     model.load_state_dict(ckpt["model_state"] if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt)
@@ -194,13 +211,13 @@ def _label_with_generalist(config, ckpt_path, baseline_dir, pool, device):
     missing = [c for c in ours if c not in bnames]
     if missing:
         raise SystemExit(f"[ERROR] 비교모델 클래스에 없는 이름 {missing} (비교모델 {bnames})")
-    print(f"[INFO] gen 라벨링: {os.path.basename(ckpt_path)} · 비교모델 {getattr(model, 'MODEL_TAG', '?')} · 클래스 {bnames}")
+    print(f"[INFO] gen 라벨링: {os.path.basename(ckpt_path)} · 비교모델 {getattr(model, 'MODEL_TAG', '?')} · 클래스 {bnames} · others 규칙 {rule_desc}")
     out = []
     with torch.no_grad():
         for i, item in enumerate(pool, 1):
             wav = torch.from_numpy(bdata.load_clip(item["path"])).unsqueeze(0).to(device)
             prob = torch.softmax(model(wav), dim=-1).squeeze(0).cpu().numpy()
-            k = int(np.argmax(prob))
+            k = int(brule.predict_rule(prob[None, :], bnames, rule, thr)[0])      # eval.py 와 같은 판정
             out.append((item["path"], bnames[k], float(prob[k])))
             if i % 200 == 0:
                 print(f"  {i}/{len(pool)}")
@@ -219,7 +236,7 @@ def main():
     ap.add_argument("--baseline_dir", type=str, default=os.path.join(PROJECT_ROOT, "..", "Baseline_EfficientAT_mn10"))
     ap.add_argument("--out", type=str, default=None)
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--allow_config_rule", action="store_true", help="동작 확인용(self): val 선택 json 이 없어도 config 기본 others 규칙으로 진행")
+    ap.add_argument("--allow_config_rule", action="store_true", help="동작 확인용: val 선택 json 이 없어도 진행(self: config 기본 규칙, gen: argmax)")
     args = ap.parse_args()
 
     config = AudioViLDConfig(mark_version=args.mark_version)
@@ -237,7 +254,7 @@ def main():
     if args.source == "self":
         rows, model_name = _label_with_self(config, ckpt, pool, device, allow_config_rule=args.allow_config_rule)
     else:
-        rows, model_name = _label_with_generalist(config, ckpt, args.baseline_dir, pool, device)
+        rows, model_name = _label_with_generalist(config, ckpt, args.baseline_dir, pool, device, allow_config_rule=args.allow_config_rule)
 
     suffix = f"_limit{args.limit}" if args.limit else ""
     out = args.out or os.path.join(PROJECT_ROOT, f"pseudo_labels_{args.source}_l{args.labeled_n}_s{args.seed}{suffix}.csv")

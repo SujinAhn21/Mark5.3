@@ -37,7 +37,7 @@ import csv
 import hashlib
 import json
 import os
-import sys
+import re
 import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -72,8 +72,14 @@ def _check_class_names_against_config(mark_version):
         txt = open(cfg, encoding="utf-8").read()
     except OSError:
         return
-    i = txt.find(f'"{mark_version}"')
-    block = txt[i:i + 3000] if i >= 0 else txt
+    # [2차 검수 C-1 / 2026-09-17] 앵커는 분기 줄(`if/elif self.mark_version == "<버전>":`)이어야 한다. 단순히 '"mark5.0"' 을 찾으면
+    # `def __init__(self, mark_version="mark5.0")` 기본값에 먼저 걸려 그 뒤 3,000자(mark4.x 분기)에서 순서 검사가 틀렸다.
+    # 블록 끝은 다음 `elif`/`else` 분기 줄까지로 잘라 고정 길이를 쓰지 않는다.
+    m = re.search(rf'^\s*(?:if|elif)\s+self\.mark_version\s*==\s*"{re.escape(mark_version)}"\s*:', txt, flags=re.M)
+    if m is None:
+        raise SystemExit(f"[ERROR] vild_config.py 에 mark_version == \"{mark_version}\" 분기가 없습니다.")
+    nxt = re.search(r'^\s*(?:elif\s+self\.mark_version|else\s*:)', txt[m.end():], flags=re.M)
+    block = txt[m.end():m.end() + nxt.start()] if nxt else txt[m.end():]
     pos = [block.find(f'"{c}"') for c in CLASS_NAMES]
     if any(p < 0 for p in pos) or pos != sorted(pos):
         raise SystemExit(f"[ERROR] vild_config.py 의 {mark_version} 분기 클래스 순서가 CLASS_NAMES {CLASS_NAMES} 와 다릅니다.")
@@ -225,7 +231,7 @@ def main():
     print(f" 클래스 분포: {stats['class_distribution']}")
     print(f" 출처 분포  : {stats['source_distribution']}")
     print(f" 저장: {out_path}\n       {stats_path}")
-    print(" 비교모델 세 폴더에 복사하십시오:  cp ceiling_labels.csv ../Baseline_*/")
+    print(" 비교모델 네 폴더에 복사하십시오:  cp ceiling_labels.csv ../Baseline_*/")
     print("=" * 70)
 
 

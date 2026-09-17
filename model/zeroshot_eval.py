@@ -130,8 +130,11 @@ def apply_rule_from_json(config, ckpt_sha=None, allow_config_rule=False):
         with open(thr_json, encoding="utf-8") as f:
             saved = json.load(f)
         saved_sha = (saved.get("checkpoint") or {}).get("sha256") or saved.get("checkpoint_sha256")
-        if ckpt_sha and saved_sha and saved_sha != ckpt_sha:
-            raise SystemExit(f"[ERROR] {os.path.basename(thr_json)} 의 체크포인트 지문이 지금 체크포인트와 다릅니다 — eval.py --split val 을 다시 돌리십시오.")
+        # [2차 검수 P-2] eval.py 와 같은 강도: run_tag 도 대조하고 지문 없는 json 도 통과시키지 않는다.
+        if saved.get("run_tag") != config.run_tag or not saved_sha or (ckpt_sha and saved_sha != ckpt_sha):
+            raise SystemExit(f"[ERROR] {os.path.basename(thr_json)} 은 지금 체크포인트로 고른 값이 아닙니다"
+                             f"(json run_tag={saved.get('run_tag')} sha256={str(saved_sha)[:12]} / 지금 {config.run_tag} sha256={str(ckpt_sha)[:12]})"
+                             f" — eval.py --split val 을 다시 돌리십시오.")
         config.others_decision_mode = saved.get("rule", config.others_decision_mode)
         if config.others_decision_mode == "direct" and saved.get("threshold") is not None:
             config.others_direct_threshold = float(saved["threshold"])
