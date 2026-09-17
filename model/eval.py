@@ -402,6 +402,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
     plt.yticks(rotation=0)
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, f"confusion_matrix_{out_tag}.png"))
+    cm_df.to_csv(os.path.join(plot_dir, f"confusion_matrix_{out_tag}.csv"), encoding="utf-8")   # [2026-09-17 / 7절] 혼동 칸을 숫자로(행 = 정답, 열 = 판정)
     plt.close()
 
     # [추가] mark4 eval.py와 동일한 형태로 Accuracy/P/R/F1/ROC AUC를 CSV로 저장(기존엔 콘솔 print만 하고 파일에 안 남았음).

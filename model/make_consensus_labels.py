@@ -119,6 +119,8 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="동작 확인용: 앞에서 N 개만. 산출물 이름에 _limitN 이 붙는다")
     ap.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "consensus_labels.csv"))
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--truth_csv", type=str, default=os.path.join(PROJECT_ROOT, "ceiling_labels.csv"),
+                    help="[2026-09-17 / 5절] 진짜 라벨 CSV(path,label — make_ceiling_labels.py 산출). 있으면 오염률(합의 라벨 ≠ 진짜)을 stats 에 적는다")
     args = ap.parse_args()
 
     config = AudioViLDConfig(mark_version=args.mark_version)
@@ -281,6 +283,32 @@ def main():
         "limit": args.limit, "clips_per_batch": args.clips_per_batch,
         "elapsed_sec_excluding_teacher_load": round(time.time() - t0, 1),
     }
+    # ---- [2026-09-17 / 체크리스트 5절] 진짜 클래스 대비 오염률 (09-06 에는 7.8%) ----
+    #   truth_csv(ceiling_labels.csv: unlabeled 2,000 의 provenance 진짜 라벨)가 있으면 채택 클립마다 합의 라벨과 대조한다.
+    #   오염률 = 합의 라벨 ≠ 진짜 라벨 인 채택 클립 비율. 진짜가 others 인 클립이 타겟으로 채택된 것도 오염에 든다(합의 라벨은 구조상
+    #   others 가 없으므로 진짜 others 는 전부 오염 또는 미채택). 클래스별 혼동도 남긴다(행 = 진짜, 열 = 합의).
+    if args.truth_csv and os.path.isfile(args.truth_csv):
+        truth = {}
+        with open(args.truth_csv, newline="", encoding="utf-8-sig") as f:
+            for r in csv.DictReader(f):
+                truth[os.path.basename(r["path"])] = r["label"]
+        matched = [(truth[os.path.basename(r["path"])], r["label"]) for r in kept_rows if os.path.basename(r["path"]) in truth]
+        if matched:
+            wrong = sum(1 for t, l in matched if t != l)
+            conf_tl = collections.Counter(matched)
+            stats["contamination"] = {
+                "truth_csv": os.path.relpath(args.truth_csv, PROJECT_ROOT), "n_kept_with_truth": len(matched),
+                "n_wrong": wrong, "rate": round(wrong / len(matched), 4),
+                "true_others_kept": sum(1 for t, _ in matched if t == "others"),
+                "by_true_class": {c: {"n_kept": sum(1 for t, _ in matched if t == c),
+                                      "n_wrong": sum(1 for t, l in matched if t == c and l != c)} for c in class_names},
+                "confusion_true_x_consensus": {t: {l: int(v) for (tt, l), v in conf_tl.items() if tt == t} for t in class_names},
+            }
+            print(f"[INFO] 오염률(합의 ≠ 진짜): {wrong}/{len(matched)} = {wrong / len(matched):.4f}  (진짜 others 인데 채택된 클립 {stats['contamination']['true_others_kept']})")
+        else:
+            print(f"[WARN] --truth_csv {args.truth_csv} 와 파일 이름이 하나도 맞지 않아 오염률을 못 냈습니다.")
+    else:
+        print("[INFO] 진짜 라벨 CSV 가 없어 오염률은 생략(make_ceiling_labels.py 뒤 --truth_csv 로 다시 계산 가능)")
 
     # ---- 저장 ----
     os.makedirs(aux_dir, exist_ok=True)

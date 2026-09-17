@@ -789,6 +789,62 @@ def _cond_name(row):
     return "supervised" if int(row["unlabeled"]) == 0 else f"ours (u{int(row['unlabeled'])})"
 
 
+def _read_classwise(path):
+    """performance_summary CSV 의 '# Class-wise Metrics' 블록 -> {class: {Precision, Recall, F1-Score}}."""
+    out, in_block = {}, False
+    with open(path, encoding="utf-8", newline="") as f:
+        for parts in csv.reader(f):
+            if not parts or not parts[0].strip() or parts[0].startswith("#"):
+                continue
+            if parts[0].strip() == "Class":
+                in_block = True; continue
+            if in_block and len(parts) >= 4:
+                try:
+                    out[parts[0].strip()] = {"Precision": float(parts[1]), "Recall": float(parts[2]), "F1-Score": float(parts[3])}
+                except ValueError:
+                    pass
+    return out
+
+
+def classwise_and_confusion(df_runs, split):
+    """[신설 2026-09-17 / 체크리스트 7절 '클래스별 표, machine_noise 의 dragging·construction 혼동 칸'] 주어진 회차들(보통 본 조건
+    u<max> seed 5회)의 클래스별 Precision·Recall·F1 평균±표본SD 와, prediction_details 의 True/Predicted Label 로 만든 혼동행렬
+    (회차 합·회차 평균). 반환: (classwise DataFrame, confusion_sum DataFrame, confusion_mean DataFrame, 회차 수)"""
+    suffix = "" if split == "test" else f"_{split}"
+    per_class, cms, n_used = {}, [], 0
+    for tag in df_runs["run_tag"]:
+        summ = os.path.join(PLOT_DIR, f"performance_summary_{tag}{suffix}.csv")
+        pred = os.path.join(PLOT_DIR, f"prediction_details_{tag}{suffix}.csv")
+        cw = _read_classwise(summ) if os.path.isfile(summ) else {}
+        for c, m in cw.items():
+            per_class.setdefault(c, []).append(m)
+        if os.path.isfile(pred):
+            d = pd.read_csv(pred, encoding="utf-8")
+            if {"True Label", "Predicted Label"}.issubset(d.columns):
+                cms.append(pd.crosstab(d["True Label"], d["Predicted Label"]))
+                n_used += 1
+    rows = []
+    for c, ms in per_class.items():
+        rec = {"class": c, "N": len(ms)}
+        for k in ("Precision", "Recall", "F1-Score"):
+            v = np.asarray([m[k] for m in ms], dtype=float)
+            rec[f"{k} (mean)"] = v.mean(); rec[f"{k} (std)"] = v.std(ddof=1) if len(v) > 1 else np.nan
+        rows.append(rec)
+    classwise = pd.DataFrame(rows)
+    if cms:
+        classes = list(dict.fromkeys(c for cm in cms for c in list(cm.index) + list(cm.columns)))
+        order = [c for c in CLASS_ORDER if c in classes] + [c for c in classes if c not in CLASS_ORDER]
+        cms = [cm.reindex(index=order, columns=order, fill_value=0) for cm in cms]
+        cm_sum = sum(cms); cm_mean = cm_sum / len(cms)
+    else:
+        cm_sum = cm_mean = pd.DataFrame()
+    return classwise, cm_sum, cm_mean, n_used
+
+
+CLASS_ORDER = ["heavy_impact", "dragging", "construction", "machine_noise", "talking", "media_talking",
+               "water_toilet", "water_shower", "dog_bark", "others"]
+
+
 def label_efficiency(df_le):
     """labeled 200·500·1,000·전량 x {supervised(u0), ours(u<max>), upper(ceil)} 요약표 + 각 labeled 수준에서 u0 vs u<max> 검정.
     반환: (요약 DataFrame(행 = labeled·조건), 검정 DataFrame)."""
@@ -1054,6 +1110,32 @@ def main():
             print("\n[WARN] 조건마다 실행 횟수가 다릅니다:")
             print(counts.to_string())
             print("[WARN] 논문 표에 넣기 전에 부족한 조건을 채우십시오.")
+
+        # ---- [2026-09-17 / 7절] 클래스별 P·R·F1 (본 조건 u<max>, seed 평균±SD) + 혼동행렬(회차 합·평균) ----
+        _umax = int(df["unlabeled"].max()) if not df.empty else None
+        if _umax is not None:
+            _main_runs = df[df["unlabeled"] == _umax]
+            cw, cm_sum, cm_mean, n_cm = classwise_and_confusion(_main_runs, args.split)
+            if not cw.empty:
+                cw_csv = os.path.join(PLOT_DIR, f"paper_table_classwise_{args.mark_version}_{args.split}.csv")
+                cw.to_csv(cw_csv, index=False, encoding=CSV_ENCODING)
+                print("\n" + "=" * 78)
+                print(f" 클래스별 지표 ({args.split}, 본 조건 u{_umax}, {len(_main_runs)}회 평균 ± 표본SD)")
+                print("=" * 78)
+                with pd.option_context("display.width", 240, "display.float_format", "{:.4f}".format):
+                    print(cw.to_string(index=False))
+                print(f"[INFO] 클래스별 표 : {cw_csv}")
+            if not cm_sum.empty:
+                cm_csv = os.path.join(PLOT_DIR, f"confusion_sum_{args.mark_version}_{args.split}.csv")
+                cm_sum.to_csv(cm_csv, encoding=CSV_ENCODING)
+                cm_mean.round(2).to_csv(os.path.join(PLOT_DIR, f"confusion_mean_{args.mark_version}_{args.split}.csv"), encoding=CSV_ENCODING)
+                print(f"\n 혼동행렬 합 ({n_cm}회, 행 = 정답, 열 = 판정):")
+                with pd.option_context("display.width", 240):
+                    print(cm_sum.to_string())
+                if "machine_noise" in cm_sum.index:
+                    r = cm_sum.loc["machine_noise"]
+                    print(f" machine_noise 정답 {int(r.sum())}개 중 → dragging {int(r.get('dragging', 0))} · construction {int(r.get('construction', 0))} (체크리스트 7절 혼동 칸)")
+                print(f"[INFO] 혼동행렬   : {cm_csv} (+ confusion_mean_*.csv)")
 
         # ---- [2026-09-17 / 8절] 라벨 효율 표 (labeled 200·500·1,000·전량 x supervised/ours/upper) ----
         if df_le_all["labeled"].nunique() > 1:

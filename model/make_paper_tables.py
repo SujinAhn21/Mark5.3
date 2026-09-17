@@ -338,6 +338,68 @@ def zeroshot_rows(groups, lat=None):
     return rows
 
 
+EFF_COLS = [("total_parameters", "Params", "int"), ("model_size_mb", "Size (MB)", "f1"),
+            ("gflops_per_clip_approx", "GFLOPs / 3-s clip", "f3"), ("cpu_latency_ms_per_clip", "CPU ms / 3-s clip", "f1")]
+
+
+def efficiency_rows(mark_version, lat, baseline_plot_dirs):
+    """[2026-09-17 / 9절 '같은 기기에서 네 모델'] 표 3 을 여러 모델로: Mark5.2 는 aggregate_latency(반복 측정 평균), 비교모델은
+    각 폴더 plots/efficiency_profile_<model>.json(profile_efficiency.py, 같은 키). [(모델, {열: 문자열}, 비고)]"""
+    import glob, json
+    rows = []
+    if lat is not None:
+        vals = {}
+        for keys, label, _u, kind in LATENCY_ROWS:
+            key = next((k for k in keys if k in lat.index), None)
+            if key is None:
+                continue
+            m = float(lat.loc[key]["mean"]); sd = float(lat.loc[key]["std"])
+            vals[label] = (f"{int(round(m)):,}" if kind == "int" else (f"{m:.3f}" if kind == "f3" else f"{m:.2f}")) + \
+                          (f" ± {sd:.2f}" if sd and not np.isnan(sd) and sd > 0 else "")
+        rows.append(("Proposed (Mark5.2)", {lbl: vals.get(lbl, "-") for _, lbl, _, _ in LATENCY_ROWS}, "1-s segments x 5 per 3-s clip; mn10 + text-anchor head"))
+    for pdir in baseline_plot_dirs:
+        for p in sorted(glob.glob(os.path.join(pdir, "efficiency_profile_*.json"))):
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            vals = {}
+            for key, label, kind in EFF_COLS:
+                v = d.get(key)
+                vals[_lat_label(key)] = "-" if v is None else (f"{int(v):,}" if kind == "int" else (f"{float(v):.3f}" if kind == "f3" else f"{float(v):.2f}"))
+            rows.append((_disp(d.get("model", os.path.basename(p))), vals, d.get("description", d.get("note", ""))))
+    return rows
+
+
+def _lat_label(key):
+    for keys, label, _u, _k in LATENCY_ROWS:
+        if key in keys:
+            return label
+    return key
+
+
+def classwise_rows(mark_version, split):
+    """paper_table_classwise_<mv>_<split>.csv (aggregate_results, 본 조건 seed 평균) -> [(class, P, R, F1, N)]"""
+    cw = _load_csv(f"paper_table_classwise_{mark_version}_{split}.csv")
+    if cw is None or cw.empty:
+        return []
+    out = []
+    for _, r in cw.iterrows():
+        cells = []
+        for k in ("Precision", "Recall", "F1-Score"):
+            m, sd = r.get(f"{k} (mean)", np.nan), r.get(f"{k} (std)", np.nan)
+            cells.append("-" if np.isnan(m) else (f"{m:.4f}" if np.isnan(sd) else f"{m:.4f} ± {sd:.4f}"))
+        out.append((str(r["class"]), *cells, int(r["N"])))
+    return out
+
+
+def confusion_table(mark_version, split):
+    """confusion_sum_<mv>_<split>.csv -> (클래스 목록, 행렬 DataFrame) 또는 (None, None)"""
+    p = os.path.join(PLOT_DIR, f"confusion_sum_{mark_version}_{split}.csv")
+    if not os.path.exists(p):
+        return None, None
+    cm = pd.read_csv(p, encoding="utf-8-sig", index_col=0)
+    return list(cm.columns), cm
+
+
 def _md_table(header, rows):
     L = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for r in rows:
@@ -382,6 +444,20 @@ def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=()):
     md, tex = [], []
     full_labeled = int(raw_all["labeled"].max()) if "labeled" in raw_all.columns and raw_all["labeled"].notna().any() else 0
     metric_hdr = [s_ for _, s_, _ in METRICS]
+
+    # 표 3(확장) 효율 — 네 비교모델 + Mark5.2 한 표
+    rows3 = efficiency_rows(mark_version, lat, baseline_plot_dirs)
+    md += ["## 표 3-b. 효율 — 다섯 모델 같은 기준(3초 클립 1개, CPU)", ""]
+    if len(rows3) > 1:
+        hdr = ["Model"] + [lbl for _, lbl, _, _ in LATENCY_ROWS] + ["Note"]
+        md += _md_table(hdr, [(m_, *[v_.get(lbl, "-") for _, lbl, _, _ in LATENCY_ROWS], n_) for m_, v_, n_ in rows3])
+        md += ["", "캡션: 파라미터·크기·연산량은 구조에서 정해지는 값. CPU 지연은 같은 기기(코랩 CPU)에서 같은 날 잰 값을 쓴다 — 폴더별 json 의 cpu 항목이 다르면 다시 잰다.",
+               "CLAP 행의 파라미터는 분류기(오디오 타워+투영+앵커) 실측이고, 전체 CLAP(텍스트 타워 포함)은 158,334,169 이다(Note 참고).", ""]
+        tex += _tex_table("Efficiency of the five models on the same machine (one 3-s clip, CPU).", "tab:efficiency_all",
+                          ["Model"] + [lbl for _, lbl, _, _ in LATENCY_ROWS],
+                          [(m_, *[v_.get(lbl, "-") for _, lbl, _, _ in LATENCY_ROWS]) for m_, v_, n_ in rows3], "l" + "r" * len(LATENCY_ROWS))
+    else:
+        md += ["(비교모델 efficiency_profile_*.json 이 --baseline_raw 폴더에 없어 Mark5.2 만 표 3 에 있다)", ""]
 
     # 표 4 라벨 효율
     le = _load_csv(f"paper_table_label_eff_{mark_version}_{split}.csv")
@@ -464,6 +540,26 @@ def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=()):
                               [(nm, *[per.get(c, "-") for c in classes]) for nm, n_, v_, per, pr in rows8], "l" + "c" * len(classes))
     else:
         md += ["(자료 없음 — model/zeroshot_eval.py / clap_zeroshot.py 의 plots/zeroshot_*.json 이 없다)", ""]
+
+    # 표 9 클래스별 지표 + 혼동행렬 (본 조건, seed 평균 / 합) — 체크리스트 7절
+    rows9 = classwise_rows(mark_version, split)
+    md += ["## 표 9. 클래스별 Precision · Recall · F1 — 본 조건(unlabeled 전량), seed 평균 ± SD", ""]
+    if rows9:
+        md += _md_table(["Class", "Precision", "Recall", "F1", "n"], rows9) + [""]
+        tex += _tex_table("Per-class precision, recall and F1 of the proposed model (main condition, mean $\\pm$ SD over seeds).",
+                          "tab:classwise", ["Class", "Precision", "Recall", "F1"], [r[:4] for r in rows9], "lccc")
+        classes, cm = confusion_table(mark_version, split)
+        if cm is not None:
+            md += ["혼동행렬(seed 합, 행 = 정답, 열 = 판정):", ""]
+            md += _md_table(["true \\ pred"] + classes, [(idx, *[int(v) for v in row]) for idx, row in cm.iterrows()])
+            if "machine_noise" in cm.index:
+                r = cm.loc["machine_noise"]
+                md += ["", f"machine_noise 정답 {int(r.sum())}개 중 dragging {int(r.get('dragging', 0))} · construction {int(r.get('construction', 0))} 로 감 (체크리스트 7절에서 따로 보기로 한 칸)."]
+            md += [""]
+            tex += _tex_table("Confusion matrix of the proposed model (sum over seeds; rows = true, columns = predicted).", "tab:confusion",
+                              ["true/pred"] + classes, [(idx, *[int(v) for v in row]) for idx, row in cm.iterrows()], "l" + "r" * len(classes))
+    else:
+        md += ["(자료 없음 — aggregate_results.py 가 만든 paper_table_classwise_*.csv 가 없다)", ""]
 
     # 추가 검정
     extra_tests = [("라벨 효율 (수준별 u0 vs u<max>, u<max> vs ceil)", _load_csv(f"aggregate_tests_label_eff_{mark_version}_{split}.csv")),
