@@ -27,7 +27,7 @@
   zeroshot_clap_<ckpt>.json · zeroshot_predictions_clap_<ckpt>_{zeroshot6,test}.csv · zeroshot_confusion_clap_<ckpt>.csv
   + others_threshold_clap_<ckpt>.json (val 에서 고른 규칙·곡선)   ← zeroshot_eval.py 산출물과 이름 규칙이 같다.
 
-로컬(CPU, C 드라이브 99%)에서는 체크포인트(1.86 GB, HF lukewys/laion_clap — 2026-09-17 확인)를 못 받으므로 코랩에서 처음 돌린다. 실행 전 `pip install laion-clap`.
+로컬(CPU, RAM 7 GB WSL)에서 진짜 패키지·체크포인트(~/.cache/clap/630k-audioset-best.pt, HF sha256 일치)로 동작 확인함(2026-09-17). 실행 전 `pip install laion-clap`.
 사용:  python model/clap_zeroshot.py                       # 630k-audioset-best, val 선택 규칙
        python model/clap_zeroshot.py --ckpt_path /content/drive/MyDrive/NewProject/hf_cache/630k-audioset-best.pt   # 받아 둔 파일
        python model/clap_zeroshot.py --limit 3            # 동작 확인(라벨별 3클립, 산출물에 _limit3)
@@ -62,6 +62,33 @@ CKPTS = {"630k-best": (0, False), "630k-audioset-best": (1, False),
          "630k-fusion-best": (2, True), "630k-audioset-fusion-best": (3, True)}
 
 
+def _load_ckpt_lowmem(model, path):
+    """laion_clap hook.py load_ckpt 와 같은 처리(state_dict 꺼내기 · 'module.' 접두사 제거 · transformers>=4.31 이면
+    text_branch.embeddings.position_ids 삭제 · strict 로드)를 **mmap** 으로 한다.
+    이유: 1.86 GB 체크포인트에는 옵티마이저 상태까지 들어 있어 torch.load 로 통째로 올리면 RSS 7.3 GB 가 되고,
+    RAM 7 GB 인 로컬 WSL 에서 OOM 으로 죽었다(2026-09-17 실측, dmesg Out of memory). mmap 은 모델 가중치 페이지만 읽는다.
+    mmap 을 못 쓰는 옛 직렬화 파일이면 보통 방식으로 되돌아간다."""
+    import transformers
+    from packaging import version
+    try:
+        ck = torch.load(path, map_location="cpu", mmap=True, weights_only=False)
+        how = "mmap"
+    except (TypeError, RuntimeError) as e:
+        print(f"[WARN] mmap 로드 실패({type(e).__name__}) — 보통 방식으로 읽습니다")
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        how = "full"
+    sd = ck["state_dict"] if isinstance(ck, dict) and "state_dict" in ck else ck
+    if next(iter(sd)).startswith("module"):
+        sd = {k[7:]: v for k, v in sd.items()}
+    if version.parse(transformers.__version__) >= version.parse("4.31.0"):
+        sd.pop("text_branch.embeddings.position_ids", None)
+    model.model.load_state_dict(sd)                       # 패키지와 같이 strict — 키가 하나라도 어긋나면 여기서 멈춘다
+    n_loaded = sum(1 for n, _ in model.model.named_parameters() if n in sd)
+    n_total = sum(1 for _ in model.model.named_parameters())
+    print(f"[INFO] 체크포인트 로드({how}): {os.path.basename(path)} · 파라미터 텐서 {n_loaded}/{n_total} 적재")
+    del ck, sd
+
+
 def load_clap(ckpt_id, ckpt_path, device):
     try:
         import laion_clap
@@ -69,16 +96,26 @@ def load_clap(ckpt_id, ckpt_path, device):
         raise SystemExit("[ERROR] laion_clap 이 없습니다. `pip install laion-clap` 뒤에 다시 실행하십시오(코랩 셀 참고).")
     model_id, fusion = CKPTS[ckpt_id]
     model = laion_clap.CLAP_Module(enable_fusion=fusion, amodel="HTSAT-tiny", device=str(device))
-    if ckpt_path:
-        model.load_ckpt(ckpt=ckpt_path)
-    else:
-        model.load_ckpt(model_id=model_id)
+    if not ckpt_path:
+        # 패키지 load_ckpt 와 같은 자리(패키지 폴더)에 같은 이름으로 받는다. 이미 있으면 그대로 쓴다.
+        import wget
+        pkg_dir = os.path.dirname(os.path.realpath(laion_clap.__file__))
+        name = [k for k, (i, _) in CKPTS.items() if i == model_id][0] + ".pt"
+        ckpt_path = os.path.join(pkg_dir, name)
+        if not os.path.exists(ckpt_path):
+            print(f"[INFO] 체크포인트 다운로드: https://huggingface.co/lukewys/laion_clap/resolve/main/{name} → {pkg_dir}")
+            ckpt_path = wget.download("https://huggingface.co/lukewys/laion_clap/resolve/main/" + name, pkg_dir)
+            print()
+    _load_ckpt_lowmem(model, ckpt_path)
     model.eval()
-    return model
+    return model, ckpt_path
 
 
 def _mean_anchor(model, prompts):
-    emb = model.get_text_embedding(prompts, use_tensor=True)                       # [P, D]
+    # ★ no_grad 필수 — laion_clap 의 get_text_embedding 은 안에서 no_grad 를 걸지 않는다. 안 걸면 호출마다 RoBERTa 역전파
+    #   그래프(16문장에 약 800 MB)가 반환 텐서에 매달려 남아 15 클래스에서 7 GB 를 넘겨 OOM 으로 죽었다(2026-09-17 로컬 실측).
+    with torch.no_grad():
+        emb = model.get_text_embedding(prompts, use_tensor=True).detach()          # [P, D]
     emb = F.normalize(emb.float(), dim=-1).mean(dim=0)
     return F.normalize(emb, dim=0)
 
@@ -102,7 +139,8 @@ def embed_audio(model, paths, batch_size):
     out = []
     for i in range(0, len(paths), batch_size):
         chunk = paths[i:i + batch_size]
-        e = model.get_audio_embedding_from_filelist(x=chunk, use_tensor=True)     # CLAP 이 48 kHz 로 읽어 임베딩 [B, D]
+        with torch.no_grad():                                                      # 위와 같은 이유(오디오 쪽도 그래프를 남긴다)
+            e = model.get_audio_embedding_from_filelist(x=chunk, use_tensor=True)  # CLAP 이 48 kHz 로 읽어 임베딩 [B, D]
         out.append(F.normalize(e.float().detach().cpu(), dim=-1))
         if (i + len(chunk)) % 200 < batch_size:
             print(f"  {i + len(chunk)}/{len(paths)}")
@@ -168,7 +206,7 @@ def main():
     suffix = f"_limit{args.limit}" if args.limit else ""
     t0 = time.time()
 
-    model = load_clap(args.ckpt_id, args.ckpt_path, device)
+    model, ckpt_used = load_clap(args.ckpt_id, args.ckpt_path, device)
     n_params = sum(p.numel() for p in model.model.parameters())
     scale = float(model.model.logit_scale_a.exp().detach().cpu())
     anchors, base_classes, new_classes, prompts_used = build_anchors(model, config, args.zeroshot_bank)
@@ -219,7 +257,7 @@ def main():
     te = run(te_rows, "(2) 정규 test (15 앵커)")
     extra = {"run_tag": tag, "model": {"name": f"LAION-CLAP {args.ckpt_id}", "paper": "ICASSP 2023, arXiv 2211.06687",
                                         "audio_encoder": "HTSAT-tiny", "text_encoder": "RoBERTa", "parameters": int(n_params),
-                                        "logit_scale": scale, "ckpt_path": args.ckpt_path},
+                                        "logit_scale": scale, "ckpt_path": ckpt_used},
              "zeroshot_bank": os.path.relpath(args.zeroshot_bank, PROJECT_ROOT), "prompts_used": prompts_used,
              "others_rule": rule_desc, "others_rule_json": os.path.basename(thr_json) if args.others_rule == "val_select" else None,
              "limit": args.limit}

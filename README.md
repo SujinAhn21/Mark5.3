@@ -16,7 +16,7 @@
 >   `model/eval.py --split eval_far_heldout|eval_boundary_B` (① 학습에 없던 소리→others, Others FPR = 1 − ①) ·
 >   `model/openset_report.py` (네 모델 ①·② 표: prediction_details CSV 만 읽는다, 옆의 Baseline_* 자동 탐색) ·
 >   `model/zeroshot_eval.py` (앵커 9 + 새 6종 `shared_vild/resources/zeroshot_prompt_bank.json`, 제로샷 세트 + test) ·
->   `model/clap_zeroshot.py` (LAION-CLAP 630k-audioset-best, 같은 문장·같은 지표·같은 산출물 형식, `pip install laion-clap`, 코랩 전용).
+>   `model/clap_zeroshot.py` (LAION-CLAP 630k-audioset-best, 같은 문장·같은 지표·같은 산출물 형식, `pip install laion-clap`; 체크포인트는 mmap 으로 읽고 추론은 no_grad — 로컬 CPU 에서 2.1 GB 로 돈다).
 >   `shared_vild/resources/prompt_bank.json` 은 Mark5.2 것(talking 항목·others 동의어)으로 맞췄다(전에는 Mark5 옛 뱅크가 남아 있었다).
 > 아래는 Mark5 원본 README 그대로.
 

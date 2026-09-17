@@ -40,5 +40,7 @@ thop==0.1.1.post2209072238
 # --- [2026-09-17] mn10 백본(third_party/efficientat)이 torchvision.ops.misc.ConvNormActivation 을 쓴다 ---
 # 로컬 venv 용 핀. ★코랩에서는 설치하지 말 것 — +cpu 휠을 넣으면 GPU torch 가 CPU torch 로 교체될 수 있다. 코랩에는 이미 있다.
 torchvision==0.19.1+cpu
-# [2026-09-17 / 10절] CLAP 제로샷(model/clap_zeroshot.py)만 필요. 체크포인트 1.86 GB(HF lukewys/laion_clap, 2026-09-17 확인)를 받으므로 코랩에서만 설치한다: pip install laion-clap
-# laion-clap
+# [2026-09-17 / 10절] CLAP 제로샷(model/clap_zeroshot.py)만 필요. 로컬 venv 에는 pip install --no-deps laion-clap==1.1.7 + braceexpand ftfy h5py
+# progressbar webdataset wget 으로 넣었다(wandb 는 추론에 안 쓰여 뺌, torch 핀 유지). 체크포인트 1.86 GB 는 ~/.cache/clap/630k-audioset-best.pt
+# (HF lukewys/laion_clap, sha256 8053c977…). 코랩은 pip install laion-clap 한 줄이면 된다.
+laion-clap==1.1.7
