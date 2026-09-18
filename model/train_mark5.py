@@ -873,6 +873,16 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     if os.path.exists(_stale):
         os.remove(_stale)
         print(f"[INFO] 이전 학습의 others 규칙 json 삭제: {_stale}")
+    # [2026-09-18 / 3차 검수 P-3] 옛 완주 표식(loss_history)·체크포인트·val/test 요약도 지운다. 안 그러면 --force 재실행이 에폭 도중에
+    # 죽었을 때 "새 중도 체크포인트 + 옛 완주 표식 + 옛 요약" 이 남아 run_experiments._needs 가 통째로 [건너뜀] 한다
+    # (비교모델 common/train_loop.fit 이 09-05 에 고친 것과 같은 구멍).
+    for _stale in (os.path.join(PROJECT_ROOT, "plots", f"loss_history_{config.run_tag}.csv"),
+                   os.path.join(PROJECT_ROOT, "model", f"student_model_{config.run_tag}.pth"),
+                   os.path.join(PROJECT_ROOT, "plots", f"performance_summary_{config.run_tag}_val.csv"),
+                   os.path.join(PROJECT_ROOT, "plots", f"performance_summary_{config.run_tag}.csv")):
+        if os.path.exists(_stale):
+            os.remove(_stale)
+            print(f"[INFO] 이전 학습의 산출물 삭제: {_stale}")
 
     train_hist, val_hist = [], []
     # [추가] train/val 직접 비교를 위해 컴포넌트별 손실 히스토리 분리 기록
