@@ -32,6 +32,9 @@ audit 이 FAIL 없이 통과해야 학습으로 넘어간다.**
   ⑤ 카테고리 균등도      클래스 안에서 한 카테고리가 과대 대표되는가              <- (2) 를 잡는 항목
   ⑥ 증강본 격리          val·test 에 증강본이 섞이지 않았는가
   ⑦ 정합성               디스크 wav 수와 provenance active 행 수가 맞는가
+  ⑧ val·test 출처 대칭   test 에 있는 (출처×하위라벨)이 train 과 val 에도 있는가  <- [추가 2026-09-21]
+                         (09-15 재구성에서 CHiME-Home 'b' 가 test 에만 들어가 construction 전문가의 val 운영점이
+                          test 에서 안 맞았다. test 에만 있는 출처는 FAIL, val 에만 있고 test 에 없는 출처는 WARN)
 
 ■ 세션이란
 
@@ -283,6 +286,49 @@ def main():
     report("OK" if ok else "FAIL", "⑦",
            f"디스크 {disk} / provenance active {len(m) + len(un)}  "
            + ", ".join(f"{k} {per_split[k]}vs{prov_per.get(k,0)}" for k in sorted(per_split)))
+
+    # ---------- ⑧ val·test 출처 대칭 [추가 2026-09-21] ----------
+    # 하위라벨 = aihub_category (CHiME 는 b/o 같은 라벨 집합, SINS 는 활동, ESC-50 은 카테고리, AI Hub 는 세부 카테고리).
+    # 클래스마다 test 의 (출처, 하위라벨) 이 train 에도 있어야 하고(학습에서 본 소리), val 에도 있어야 한다(운영점을 고른 소리).
+    # val 에만 있고 test 에 없는 것은 덜 해로우므로 WARN. unlabeled 는 라벨이 없어 제외(위에서 이미 뗐다).
+    print("\n⑧ val·test 출처 대칭 (test 에 있는 출처×하위라벨이 train·val 에도 있는가)")
+    if "source" in orig.columns and "aihub_category" in orig.columns:
+        def sub_key(r):
+            c = r.get("aihub_category")
+            c = str(c) if pd.notna(c) else ""
+            src = str(r.get("source", ""))
+            if src == "chime_home":
+                # CHiME 라벨 집합(예: cfm·bc·ov)은 화자 조합까지 갈라져 너무 잘다. 배경 종류(b 광대역·o 생활음·v TV)만 남기고
+                # 말소리 글자(c·f·m)는 s 하나로 합친다: cfm→s, cf→s, bc→bs, ov→ov, co→os. b 의 유무는 그대로 구분된다.
+                c = "".join(sorted(set(c) & set("bov"))) + ("s" if set(c) & set("cfm") else "")
+            return (src, c)
+        per = {sp: defaultdict(Counter) for sp in ("train", "val", "test")}
+        for _, r in orig.iterrows():
+            sp = r["assigned_split"]
+            if sp in per:
+                per[sp][r["target_class"]][sub_key(r)] += 1
+        def fmt(items):
+            return ", ".join(f"{k[0]}|{k[1][-14:]} {n}" for k, n in items[:6]) + (f" 외 {len(items)-6}" if len(items) > 6 else "")
+        for cls in classes:
+            tr, va, te = per["train"][cls], per["val"][cls], per["test"][cls]
+            if not te and not va:
+                continue
+            miss_train = sorted(((k, n) for k, n in te.items() if k not in tr), key=lambda x: -x[1])
+            miss_val = sorted(((k, n) for k, n in te.items() if k not in va), key=lambda x: -x[1])
+            val_only = sorted(((k, n) for k, n in va.items() if k not in te), key=lambda x: -x[1])
+            if miss_train or miss_val:
+                msg = []
+                if miss_train:
+                    msg.append(f"test 에만 있고 train 에 없음 {sum(n for _, n in miss_train)}개 [{fmt(miss_train)}]")
+                if miss_val:
+                    msg.append(f"test 에 있고 val 에 없음 {sum(n for _, n in miss_val)}개 [{fmt(miss_val)}]")
+                report("FAIL", f"⑧{cls}", "; ".join(msg))
+            elif val_only:
+                report("WARN", f"⑧{cls}", f"val 에만 있고 test 에 없음 {sum(n for _, n in val_only)}개 [{fmt(val_only)}] (train·val·test 하위라벨 {len(tr)}/{len(va)}/{len(te)}종)")
+            else:
+                report("OK", f"⑧{cls}", f"test 의 하위라벨 {len(te)}종 전부 train·val 에 있음 (train {len(tr)} / val {len(va)}종)")
+    else:
+        report("OK", "⑧", "source·aihub_category 컬럼 없음 — 검사 생략")
 
     # ---------- 총평 ----------
     n_fail = sum(1 for l, _, _ in results if l == "FAIL")
