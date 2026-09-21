@@ -35,6 +35,17 @@ audit 이 FAIL 없이 통과해야 학습으로 넘어간다.**
   ⑧ val·test 출처 대칭   test 에 있는 (출처×하위라벨)이 train 과 val 에도 있는가  <- [추가 2026-09-21]
                          (09-15 재구성에서 CHiME-Home 'b' 가 test 에만 들어가 construction 전문가의 val 운영점이
                           test 에서 안 맞았다. test 에만 있는 출처는 FAIL, val 에만 있고 test 에 없는 출처는 WARN)
+  ⑨ 저장소 교차 녹음 겹침  같은 녹음이 "학습쪽"과 "평가쪽"에 동시에 있는가 — 저장소를 가로질러 본다  <- [추가 2026-09-21 밤]
+                         (전문가 train 타겟 276클립이 Mark5.2 val·test 와 같은 AI Hub 녹음이었다. 09-15 규칙 "Mark5.2 val·test
+                          원본은 전문가 val·test 에서 제외" 가 others 풀에만 걸려 있었고 전문가 타겟(08-02 분할)은 안 봤다.
+                          teacher 가 학생의 test 녹음을 보고 배운 셈이다. ② 는 세션이 있는 출처만, 한 저장소 안에서만 봤다.)
+                         녹음 키: AI Hub·ESC-50 = 원본 파일, FSD50K = 파일 id, SINS = ex 세션, CHiME = 녹음 volume.
+                         증강본은 aug_source_file 을 따라 원본의 키를 받는다(증강본이 평가쪽에 있으면 ⑥ 이 잡는다).
+                           R1 전문가 train ∩ Mark5.2 val·test·data_eval = 0            어기면 FAIL
+                           R2 Mark5.2 train·unlabeled ∩ Mark5.2 val·test·data_eval = 0, val ∩ test = 0   FAIL
+                           R3 전문가 자기 train ∩ val·test = 0, val ∩ test = 0 (녹음 단위)   FAIL
+                           R4 전문가 val·test ∩ Mark5.2 train·unlabeled              허용 — 개수만 보고
+                         mark4.k 로 돌리면 그 전문가의 R1·R3·R4, mark5.2 로 돌리면 R2 와 전문가 8개의 R1·R3 요약.
 
 ■ 세션이란
 
@@ -80,6 +91,24 @@ def report(level, item, msg):
     results.append((level, item, msg))
     mark = {"OK": "  ", "WARN": "⚠ ", "FAIL": "✗ "}[level]
     print(f"{mark}[{level:4s}] {item} — {msg}")
+
+
+def rec_key(row):
+    """[추가 2026-09-21] ⑨ 용 녹음 식별자. 같은 녹음에서 잘라낸 클립은 어느 저장소·split 에 있든 같은 키를 받는다."""
+    src = str(row.get("source", ""))
+    if src in ("aihub", "esc50"):
+        f = row.get("aihub_src_file")
+        return ("A", str(f)) if pd.notna(f) else None
+    if src == "fsd50k":
+        f = row.get("fsd50k_fname")
+        return ("F", str(f)) if pd.notna(f) else None
+    if src == "sins":
+        m = re.search(r"ex(\d+)", str(row.get("aihub_src_file", "")))
+        return ("S", "sins:ex" + m.group(1)) if m else None
+    if src == "chime_home":
+        v = row.get("aihub_volume")
+        return ("S", "chime:" + str(v)) if pd.notna(v) else None
+    return None
 
 
 def sess_of(row):
@@ -329,6 +358,66 @@ def main():
                 report("OK", f"⑧{cls}", f"test 의 하위라벨 {len(te)}종 전부 train·val 에 있음 (train {len(tr)} / val {len(va)}종)")
     else:
         report("OK", "⑧", "source·aihub_category 컬럼 없음 — 검사 생략")
+
+    # ---------- ⑨ 저장소 교차 녹음 겹침 [추가 2026-09-21 밤] ----------
+    # 이 항목만 provenance 전체(prov)를 본다. 다른 저장소의 split 이 이 저장소의 split 과 같은 녹음을 쓰는지 봐야 하기 때문이다.
+    print("\n⑨ 저장소 교차 녹음 겹침 (같은 녹음이 학습쪽과 평가쪽에 동시에 있는가 — 전문가 8 ↔ Mark5.2)")
+    need = {"source", "aihub_src_file", "mark_version", "assigned_split", "source_type", "aug_source_file"}
+    if need <= set(prov.columns):
+        allp = prov[prov["removed_20260715"] == "active"] if "removed_20260715" in prov.columns else prov
+        origp = allp[allp["source_type"] == "original"].copy()
+        origp["rk9"] = origp.apply(rec_key, axis=1)
+        kmap = {(r.mark_version, r.assigned_split, r.local_filename): r.rk9 for r in origp.itertuples()}
+        augp = allp[allp["source_type"] != "original"].copy()
+        augp["rk9"] = [kmap.get((r.mark_version, r.assigned_split, r.aug_source_file)) for r in augp.itertuples()]
+        allk = pd.concat([origp, augp])
+        def keys(mv, splits):
+            d = allk[(allk["mark_version"] == mv) & (allk["assigned_split"].isin(splits))]
+            return set(k for k in d["rk9"] if k is not None)
+        def rows_in(mv, splits, keyset):
+            d = allk[(allk["mark_version"] == mv) & (allk["assigned_split"].isin(splits))]
+            return d[d["rk9"].isin(keyset)]
+        m52_eval = keys("mark5.2", ["val", "test"]) | keys("mark5.2_eval", ["eval_zeroshot6", "eval_boundary_B", "eval_far_heldout"])
+        m52_train = keys("mark5.2", ["train", "unlabeled"])
+        experts = sorted(v for v in allk["mark_version"].unique() if str(v).startswith("mark4."))
+        def check_expert(mv, verbose):
+            hit = rows_in(mv, ["train"], m52_eval)
+            n_r1 = len(hit)
+            if n_r1:
+                by = Counter(hit["target_class"])
+                n_o = int((hit["source_type"] == "original").sum())
+                report("FAIL", f"⑨R1 {mv}", f"train 이 Mark5.2 val·test·data_eval 녹음을 {n_r1}클립 씀(원본 {n_o} + 그 증강본 {n_r1 - n_o}) [{', '.join(f'{k} {v}' for k, v in by.most_common(4))}]")
+            elif verbose:
+                report("OK", f"⑨R1 {mv}", "train ∩ Mark5.2 val·test·data_eval 녹음 0")
+            tr, va, te = keys(mv, ["train"]), keys(mv, ["val"]), keys(mv, ["test"])
+            n_r3 = len(rows_in(mv, ["train"], va | te)) + len(rows_in(mv, ["val"], te))
+            if n_r3:
+                report("FAIL", f"⑨R3 {mv}", f"자기 train∩val·test {len(tr & (va | te))} 녹음 / val∩test {len(va & te)} 녹음 ({n_r3}클립)")
+            elif verbose:
+                report("OK", f"⑨R3 {mv}", f"train∩val·test 0, val∩test 0 (녹음 {len(tr)}/{len(va)}/{len(te)})")
+            if verbose:
+                n_r4 = len(rows_in(mv, ["val", "test"], m52_train))
+                report("OK", f"⑨R4 {mv}", f"val·test 가 Mark5.2 train·unlabeled 녹음을 {n_r4}클립 씀 (허용 — teacher 평가쪽이 학생 학습쪽과 겹치는 것은 통로가 아님)")
+            return n_r1, n_r3
+        if str(args.mark_version).startswith("mark4."):
+            check_expert(args.mark_version, verbose=True)
+        elif args.mark_version == "mark5.2":
+            n_r2 = len(rows_in("mark5.2", ["train", "unlabeled"], m52_eval)) + len(rows_in("mark5.2", ["val"], keys("mark5.2", ["test"])))
+            report("FAIL" if n_r2 else "OK", "⑨R2 mark5.2",
+                   (f"train·unlabeled 이 val·test·data_eval 녹음을 {n_r2}클립 씀" if n_r2 else
+                    f"train·unlabeled ∩ val·test·data_eval 0, val∩test 0 (녹음 학습쪽 {len(m52_train)} / 평가쪽 {len(m52_eval)})"))
+            tot1 = tot3 = 0
+            for mv in experts:
+                a1, a3 = check_expert(mv, verbose=False)
+                tot1 += a1; tot3 += a3
+            if not tot1 and not tot3:
+                report("OK", "⑨R1·R3 전문가 8", f"전문가 {len(experts)}개 모두 train ∩ Mark5.2 평가쪽 0, 자기 train∩val·test 0")
+            else:
+                report("FAIL", "⑨합계", f"R1 {tot1}클립(증강본 포함) · R3 {tot3}클립 (위 저장소별 줄 참조)")
+        else:
+            report("OK", "⑨", f"{args.mark_version} 은 교차 검사 대상 아님(mark4.k / mark5.2 만)")
+    else:
+        report("OK", "⑨", f"필요한 컬럼 없음 {sorted(need - set(prov.columns))} — 검사 생략")
 
     # ---------- 총평 ----------
     n_fail = sum(1 for l, _, _ in results if l == "FAIL")
