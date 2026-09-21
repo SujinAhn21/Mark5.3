@@ -810,6 +810,11 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     _use_pl = getattr(config, "use_pseudo_label_ce", False)
     _pl_min_conf = getattr(config, "pseudo_label_min_confidence", 0.5)
     _pl_weighting = getattr(config, "pseudo_label_confidence_weighting", True)
+    _pl_min_gap = float(getattr(config, "pseudo_label_min_gap", 0.0) or 0.0)   # [신설 2026-09-21 밤 / B]
+    if pseudo_csv is not None and _pl_min_gap > 0:
+        # [Mark5_EXP2] CSV 로 들어온 가짜 정답(자기 학습·단일 generalist 출처 비교)은 합의 정보(1등−2등 차이)가 없다 — 조건을 끈다.
+        print(f"[INFO] --pseudo_csv 경로: 1등−2등 차이 조건 {_pl_min_gap:g} 은 적용하지 않음(CSV 라벨엔 합의 정보가 없음)")
+        _pl_min_gap = 0.0
     _distill_classify = getattr(config, "distill_branch_classify", False)
     criterion = DistillationLoss(
         temperature=_temp, alpha=_alpha,
@@ -824,7 +829,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         _mode_name = "vanilla KD"
     print(f"[INFO] KD 모드: {_mode_name}"
           + (f" (dkd_alpha={_dkd_a}, dkd_beta={_dkd_b}, 타겟축=teacher argmax)" if _use_dkd and not _use_pl else "")
-          + (f" | 채택 임계값={_pl_min_conf}, 확신도 가중={_pl_weighting}" if _use_pl else f" | T={_temp}")
+          + (f" | 채택 임계값={_pl_min_conf}, 1등−2등 차이≥{_pl_min_gap:g}, 확신도 가중={_pl_weighting}" if _use_pl else f" | T={_temp}")
           + f" | alpha={_alpha}, feature_kd={config.feature_kd_weight if config.use_feature_kd else 0.0}"
           + f" | distill branch 분류손실={_distill_classify}")
     # [변경 2026-09-17] 백본 학습률 분리. config.encoder_learning_rate 가 있으면(mn10: 5e-5) 사전학습 백본만 그 값,
@@ -992,7 +997,10 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                     keep_mask = pseudo_conf >= _pl_min_conf
                 else:
                     keep_mask = torch.ones_like(pseudo_conf, dtype=torch.bool)
-
+                # [신설 2026-09-21 밤 / B] 1등 전문가와 2등 전문가의 확신도 차이(fusion_output.disagreement = top1 − top2)가
+                # 작으면 "합의" 가 아니라 "둘이 다툼" 이다. 그런 세그먼트의 argmax 는 절반쯤 틀린다(vild_config 주석의 실측).
+                if _use_pl and _pl_min_gap > 0:
+                    keep_mask = keep_mask & (fusion_output.disagreement.to(keep_mask.device) >= _pl_min_gap)
                 epoch_pseudo_total += int(keep_mask.numel())
                 epoch_pseudo_kept += int(keep_mask.sum().item())
                 epoch_pseudo_conf_sum += float(pseudo_conf.sum().item())

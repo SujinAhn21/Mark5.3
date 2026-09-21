@@ -205,6 +205,40 @@ class AudioViLDConfig:
         # [추가] eval 시 supervised_features 로짓과 distill_features 로짓을 섞는 비중.
         # 0=supervised만, 1=distill만, 0.5=평균
         self.distill_branch_eval_weight = 0.5
+        # [신설 2026-09-21 밤 / C·A] eval.py 의 val_select 가 others 규칙과 함께 고르는 두 가지.
+        #   C  distill_branch_eval_weight 후보 — 증류 헤드는 가짜 정답으로만 배우므로 0.5 고정이 최선이라는 보장이 없다.
+        #      빈 tuple 이면 위 고정값을 쓴다. val 이 고른 값은 others_threshold json 에 적히고 test 는 그 값을 읽는다.
+        #   A  클래스별 로짓 편향(others 제외 8칸): 2차 학습의 val·test CSV 로 재현하면 편향 {water_shower −1.5, construction −1.0,
+        #      water_toilet +1.25, heavy_impact·dragging +0.5, talking −0.5} 에서 val 0.8907→0.9302, test 0.9233→0.9465 (test 는 선택에 안 씀).
+        #      원인은 가짜 정답 개수가 water_shower 1,640 / construction 1,199 대 water_toilet 619 / dragging 541 로 기운 것.
+        #      격자 (−1.5, 1.5, 0.25) 좌표 상승 3회, 기준은 others 임계값과 같이 val Macro F1. 확률에 exp(편향)을 곱하고 다시 정규화한다.
+        #      class_bias_grid 를 None 으로 두면 편향을 고르지 않는다(옛 동작).
+        self.distill_eval_weight_candidates = (0.0, 0.25, 0.5, 0.75, 1.0)
+        self.class_bias_grid = (-1.5, 1.5, 0.25)
+        self.class_bias_rounds = 3
+        self.explain_topk_segments = 3
+        self.save_visual_explanations = True
+        # === [변경 2026-09-17 / Mark5.2 6절] student 인코더 선택 ===
+        #   "cnn"  : SimpleAudioEncoder(3층 CNN, mel 64x101 입력) — mark5.0 까지의 인코더. 사전학습 없음.
+        #   "mn10" : Mn10AudioEncoder(EfficientAT mn10, AudioSet 사전학습, 파형 입력) — Mark5.2 기본.
+        # 2026-09-08 결정: 백본은 노벨티와 무관하고 3층 CNN(143,488 파라미터)이 표현 병목이라 비교모델과
+        # 같은 사전학습 백본으로 바꾼다. "0.44M 가볍다" 주장은 접는다(mn10 은 4.2M·17MB 안팎).
+        # 인코더 외(세그먼트 5개·teacher 합의·두 갈래 헤드·텍스트 앵커·others 규칙·SpecAugment·feature KD)는 그대로.
+        self.encoder_type = "mn10" if self.mark_version == "mark5.2" else "cnn"
+        # mn10 세부(encoder_type == "mn10" 일 때만 쓰인다). 규격 자체(32 kHz·128 mel·hop 320)는 사전학습을
+        # 따라야 하므로 vild_model.Mn10AudioEncoder 의 상수이고, 여기서는 가중치·헤드·학습률만 고른다.
+        self.mn10_pretrained_path = None      # None 이면 <저장소>/weights/mn10_as_mAP_471.pt (저장소 릴리스 v0.0.1, MIT)
+        self.mn10_load_pretrained = True      # False 는 "사전학습 없이 같은 구조" 절제 실험용
+        self.mn10_proj_dropout = 0.3          # 풀링 960 -> Dropout -> Linear(embedding_dim). SimpleAudioEncoder 헤드의 0.3 과 같게
+        # 백본 학습률. 비교모델이 2026-09-05 학습률 선정 3회로 고른 5e-5 를 사전학습 백본에 쓰고, 새로 만드는 층
+        # (투영·branch·classifier·background)은 아래 learning_rate(1e-4) 그대로(2026-09-17 결정). None 이면 전부 learning_rate.
+        self.encoder_learning_rate = 5e-5 if self.encoder_type == "mn10" else None
+        # [추가 2026-08-17] mark4.x teacher 8개는 2026-07-13 teacher 강화 이후 4블록
+        # TeacherAudioEncoder(약 49만 파라미터)로 학습돼 있다. mark5 의 EnsembleTeacher 가
+        # 그 .pth 를 읽을 때 같은 구조로 만들어야 하므로 True 로 둔다.
+        # False 로 두면 student 용 SimpleAudioEncoder(3블록)를 만들어 state_dict 가 안 맞는다.
+        # (student 자신의 인코더는 encoder_type 이 정하고 이 값의 영향을 받지 않는다.)
+        self.use_large_teacher_encoder = True
         self.explain_topk_segments = 3
         self.save_visual_explanations = False   # [Mark5_EXP2] 반복실험에서는 세그먼트 그림을 안 남긴다
         # === [변경 2026-09-17 / Mark5.2 6절] student 인코더 선택 ===
@@ -274,6 +308,12 @@ class AudioViLDConfig:
         # 채택된 샘플에 per-sample 가중치를 준다. 가중치는 그 최대 확률값 자체.
         # 확신이 0.95 인 클립과 0.52 인 클립을 같은 무게로 배우지 않게 한다.
         self.pseudo_label_confidence_weighting = True
+        # [신설 2026-09-21 밤 / B] 채택 조건에 "1등 − 2등 전문가 확신도 차이 ≥ 이 값" 을 더한다(teacher_disagreement).
+        # 근거(2차 학습의 teacher 캐시 10,000 세그먼트를 provenance 정답과 대조): 확신도 ≥0.5 만 걸면 채택 86% 에
+        # 타겟 정확도 75%(water_toilet 51%·dragging 41%·machine_noise 56%) — 전문가 2명 이상이 0.5 넘게 손드는 세그먼트가
+        # 58% 였고 확신도로는 못 거른다(0.9~0.95 구간 79%). 차이 ≥0.4 를 더하면 채택 37%·정확도 92.5%.
+        # 0 이면 옛 동작. 태그 _G<값> 이 붙는다(예: 0.4 → _G04).
+        self.pseudo_label_min_gap = 0.4
         # distill branch 에도 분류 손실(pseudo CE)을 건다.
         # 지금까지 이 갈래는 feature KD 만 받아 분류를 배운 적이 없는데, eval 에서는
         # distill_branch_eval_weight=0.5 로 최종 확률의 절반을 차지하고 있었다.
@@ -477,6 +517,9 @@ class AudioViLDConfig:
             tag += "_DA" + f"{_t:g}".replace(".", "")
         if self.use_dkd:
             tag += "_DKD"
+        _gap = float(getattr(self, "pseudo_label_min_gap", 0.0) or 0.0)
+        if _gap > 0:
+            tag += "_G" + f"{_gap:g}".replace(".", "")
         # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그. None 이면 안 붙는다(0 도 유효 조건이라 "is not None").
         # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil. [추가 2026-09-17] labeled_n 은 _l<n> 으로 그 앞에.
         #   예: mark5.2_PL_SA_l200_u2000_s1 · mark5.2_PL_SA_l200_ceil_s3 · mark5.2_PL_SA_u0_s2

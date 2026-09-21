@@ -78,6 +78,80 @@ def _keep_topk_segments(segment_records, segment_probs, seg_weights, config):
             np.asarray(seg_weights)[keep])
 
 
+# ----------------------------------------------------------------------------------------------
+# [신설 2026-09-21 밤 / C·A] val 이 고르는 두 가지 — 증류 헤드 가중치(C)와 클래스별 로짓 편향(A).
+#   둘 다 others 임계값과 같은 자리(val_select)에서, 같은 기준(val Macro F1)으로 고르고 같은 json 에 적는다.
+#   test 는 json 을 읽어 그대로 쓴다. 근거 실측은 vild_config.py 의 distill_eval_weight_candidates / class_bias_grid 주석.
+# ----------------------------------------------------------------------------------------------
+def _clip_prob_from_segments(seg_sup, seg_dis, saliency_scores, w, class_names, config):
+    """세그먼트별 (지도 헤드 확률, 증류 헤드 확률) 을 가중치 w 로 섞어 클립 확률(others 보정 전)까지 만든다 — 1차 통과와 같은 경로."""
+    segment_probs = [(1.0 - w) * ps + w * pd_ for ps, pd_ in zip(seg_sup, seg_dis)]
+    if config.enable_temporal_smoothing:
+        segment_probs = apply_temporal_smoothing(segment_probs, config.temporal_smoothing_alpha)
+    aggregated, _ = aggregate_segment_probs(segment_probs, saliency_scores, config)
+    return apply_class_pair_calibration(aggregated, class_names, config)
+
+
+def _apply_class_bias(prob_rows, bias_vec):
+    """확률에 exp(편향)을 곱하고 다시 정규화한다(로짓에 편향을 더한 것과 같다). bias_vec 가 전부 0 이면 그대로."""
+    p = np.asarray(prob_rows, dtype=np.float64)
+    if bias_vec is None or not np.any(np.asarray(bias_vec)):
+        return p
+    q = p * np.exp(np.asarray(bias_vec, dtype=np.float64))[None, :]
+    return q / np.maximum(q.sum(axis=1, keepdims=True), 1e-12)
+
+
+def _macro_f1_np(labels, preds, n_cls):
+    """sklearn f1_score(average='macro', labels=range(n_cls), zero_division=0) 과 같은 값을 numpy 로."""
+    cm = np.bincount(labels * n_cls + preds, minlength=n_cls * n_cls).reshape(n_cls, n_cls)
+    tp = np.diag(cm).astype(np.float64); fp = cm.sum(axis=0) - tp; fn = cm.sum(axis=1) - tp
+    prec = np.where(tp + fp > 0, tp / np.maximum(tp + fp, 1), 0.0)
+    rec = np.where(tp + fn > 0, tp / np.maximum(tp + fn, 1), 0.0)
+    f1 = np.where(prec + rec > 0, 2 * prec * rec / np.maximum(prec + rec, 1e-12), 0.0)
+    return float(f1.mean())
+
+
+def _best_rule_f1(prob_rows, labels, class_names, config):
+    """주어진 확률(편향 적용 뒤)에 대해 others 규칙 후보(argmax + direct 격자) 중 최고 val Macro F1 — 빠른 탐색용(numpy).
+    최종 임계값은 select_others_threshold(동률 가운데 규칙 포함)가 다시 고른다."""
+    n_cls = len(class_names); oidx = class_names.index("others")
+    g = getattr(config, "others_threshold_grid", (0.02, 0.95, 0.01))
+    grid = np.round(np.arange(float(g[0]), float(g[1]) + 1e-9, float(g[2])), 4)
+    p = np.asarray(prob_rows); am = p.argmax(axis=1); po = p[:, oidx]
+    best = _macro_f1_np(labels, am, n_cls)
+    for t in grid:
+        best = max(best, _macro_f1_np(labels, np.where(po >= t, oidx, am), n_cls))
+    return best
+
+
+def _select_class_bias(prob_rows, labels, class_names, config):
+    """[A] 클래스별 로짓 편향(others 제외)을 좌표 상승으로 고른다. 반환 (bias_vec, f1_before, f1_after)."""
+    n_cls = len(class_names); oidx = class_names.index("others")
+    grid_spec = getattr(config, "class_bias_grid", None)
+    bias = np.zeros(n_cls)
+    f0 = _best_rule_f1(prob_rows, labels, class_names, config)
+    if not grid_spec:
+        return bias, f0, f0
+    grid = np.round(np.arange(float(grid_spec[0]), float(grid_spec[1]) + 1e-9, float(grid_spec[2])), 4)
+    best = f0
+    for _ in range(int(getattr(config, "class_bias_rounds", 3))):
+        improved = False
+        for i in range(n_cls):
+            if i == oidx:
+                continue
+            cur = bias[i]; cand_best, cand_val = best, cur
+            for gval in grid:
+                b = bias.copy(); b[i] = gval
+                f = _best_rule_f1(_apply_class_bias(prob_rows, b), labels, class_names, config)
+                if f > cand_best + 1e-12 or (abs(f - cand_best) <= 1e-12 and abs(gval) < abs(cand_val)):
+                    cand_best, cand_val = f, gval
+            if cand_val != cur:
+                bias[i] = cand_val; best = cand_best; improved = True
+        if not improved:
+            break
+    return bias, f0, best
+
+
 def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_n=None, ceiling=False,
              others_threshold=None, labeled_n=None, spill_labeled=False, pseudo_source=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
@@ -205,6 +279,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             continue
 
         segment_probs = []
+        seg_sup, seg_dis = [], []
         saliency_scores = [record["saliency"] for record in segment_records]
         with torch.no_grad():
             for record in segment_records:
@@ -236,10 +311,11 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                     distill_logits[:, others_idx] = torch.maximum(distill_logits[:, others_idx], distill_bg_logit)
 
                 w = getattr(config, "distill_branch_eval_weight", 0.5)
-                prob = (
-                    (1 - w) * torch.softmax(sup_logits, dim=-1)
-                    + w * torch.softmax(distill_logits, dim=-1)
-                ).squeeze(0).cpu().numpy()
+                # [변경 2026-09-21 밤 / C] 두 헤드의 확률을 따로 두고(seg_sup·seg_dis), 섞는 가중치 w 는 val 이 고른다.
+                p_sup = torch.softmax(sup_logits, dim=-1).squeeze(0).cpu().numpy()
+                p_dis = torch.softmax(distill_logits, dim=-1).squeeze(0).cpu().numpy()
+                seg_sup.append(p_sup); seg_dis.append(p_dis)
+                prob = (1 - w) * p_sup + w * p_dis
                 segment_probs.append(prob)
 
         if config.enable_temporal_smoothing:
@@ -253,6 +329,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
         # [변경 2026-09-07] others 판정은 임계값을 정한 뒤 2차 통과에서 한다. 여기서는 모아만 둔다.
         clip_records.append({
             "path": path, "label": label, "raw_prob": calibrated_prob.copy(),
+            "seg_sup": seg_sup, "seg_dis": seg_dis, "saliency": saliency_scores,      # [C·A] w·편향 재계산용
             # 시각화가 켜져 있을 때만, 그것도 상위 k 세그먼트만 남긴다(전부 들고 있으면 430클립에 약 160MB — 리뷰 지적 12).
             "vis": _keep_topk_segments(segment_records, segment_probs, seg_weights, config)
                    if config.save_visual_explanations else None,
@@ -290,9 +367,38 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
         thr_info.update({"rule": config.others_decision_mode,
                          "threshold": float(config.others_direct_threshold) if config.others_decision_mode == "direct" else None})
     elif _thr_mode == "val_select":
+        _lab_np = np.asarray([label_map[r["label"]] for r in clip_records], dtype=int)
+        _w_default = float(getattr(config, "distill_branch_eval_weight", 0.5))
+        _bias_vec = np.zeros(len(class_names)); _w_sel = _w_default; _wa_info = {}
         if split == "val":
+            # [신설 2026-09-21 밤 / C·A] 증류 헤드 가중치 w 와 클래스별 편향을 val Macro F1 로 고른다(others 규칙은 그 안에서 같이 훑는다).
+            _cands = list(getattr(config, "distill_eval_weight_candidates", ()) or ())
+            if _w_default not in _cands:
+                _cands = [_w_default] + _cands
+            _cands = sorted(set(float(c) for c in _cands), key=lambda c: (abs(c - _w_default), c))   # 동률이면 기본값(0.5)에 가까운 쪽
+            _w_curve = []; _best = None
+            for _w in _cands:
+                _pw = np.stack([_clip_prob_from_segments(r["seg_sup"], r["seg_dis"], r["saliency"], _w, class_names, config) for r in clip_records])
+                _b, _f0, _f1 = _select_class_bias(_pw, _lab_np, class_names, config)
+                _w_curve.append([_w, round(_f0, 6), round(_f1, 6)])
+                if _best is None or _f1 > _best[0] + 1e-12:
+                    _best = (_f1, _w, _b, _f0)
+            _f1_sel, _w_sel, _bias_vec, _f0_sel = _best
+            config.distill_branch_eval_weight = _w_sel
+            for r in clip_records:
+                r["raw_prob_prebias"] = _clip_prob_from_segments(r["seg_sup"], r["seg_dis"], r["saliency"], _w_sel, class_names, config)
+            _raw_pre = np.stack([r["raw_prob_prebias"] for r in clip_records])
+            _raw_b = _apply_class_bias(_raw_pre, _bias_vec)
+            for r, row in zip(clip_records, _raw_b):
+                r["raw_prob"] = row.copy()
+            _wa_info = {"distill_eval_weight": _w_sel, "distill_eval_weight_candidates": _cands, "distill_eval_weight_curve(w, f1_before_bias, f1_after_bias)": _w_curve,
+                        "class_bias": {n: float(_bias_vec[i]) for i, n in enumerate(class_names)},
+                        "class_bias_grid": list(getattr(config, "class_bias_grid", None) or []), "class_bias_rounds": int(getattr(config, "class_bias_rounds", 0)),
+                        "val_macro_f1_w_only": round(_f0_sel, 6), "val_macro_f1_w_and_bias": round(_f1_sel, 6)}
+            print(f"[INFO] 증류 헤드 가중치 val 선택: w={_w_sel:g} (후보 {_cands}) · 클래스 편향 {{{', '.join(f'{n} {_bias_vec[i]:+g}' for i, n in enumerate(class_names) if _bias_vec[i])}}}"
+                  f" · val Macro F1 w만 {_f0_sel:.4f} → 편향까지 {_f1_sel:.4f}")
             _raw = np.stack([r["raw_prob"] for r in clip_records])
-            _lab = [label_map[r["label"]] for r in clip_records]
+            _lab = list(_lab_np)
             rule, best_thr, best_f1, curve = select_others_threshold(_raw, _lab, class_names, config)
             config.others_decision_mode = rule
             if rule == "direct":
@@ -303,6 +409,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                              "grid": [float(g[0]), float(g[1]), float(g[2])], "n_val_clips": len(clip_records),
                              "candidates": "argmax + direct grid", "curve": curve, "run_tag": config.run_tag,
                              "checkpoint": ckpt_fingerprint, "selected_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+            thr_info.update(_wa_info)                                     # [C·A] w·편향도 같은 json 에
             with open(thr_json, "w", encoding="utf-8") as f:
                 json.dump(thr_info, f, ensure_ascii=False, indent=2)
             _shown = f"direct thr {best_thr:.2f}" if rule == "direct" else "argmax"
@@ -327,6 +434,18 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             if rule == "direct":
                 config.others_direct_threshold = float(saved["threshold"])
             thr_info.update({"rule": rule, "threshold": saved.get("threshold"), "from": thr_json})
+            # [신설 2026-09-21 밤 / C·A] val 이 고른 w·편향을 그대로 쓴다. 옛 json(둘 다 없음)이면 w 기본값·편향 0 → 옛 동작.
+            _w_sel = float(saved.get("distill_eval_weight", _w_default))
+            _cb = saved.get("class_bias") or {}
+            _bias_vec = np.asarray([float(_cb.get(n, 0.0)) for n in class_names])
+            config.distill_branch_eval_weight = _w_sel
+            for r in clip_records:
+                r["raw_prob_prebias"] = _clip_prob_from_segments(r["seg_sup"], r["seg_dis"], r["saliency"], _w_sel, class_names, config)
+            _raw_b = _apply_class_bias(np.stack([r["raw_prob_prebias"] for r in clip_records]), _bias_vec)
+            for r, row in zip(clip_records, _raw_b):
+                r["raw_prob"] = row.copy()
+            thr_info.update({"distill_eval_weight": _w_sel, "class_bias": {n: float(_bias_vec[i]) for i, n in enumerate(class_names)}})
+            print(f"[INFO] 증류 헤드 가중치·클래스 편향: val 에서 고른 w={_w_sel:g}, 편향 {{{', '.join(f'{n} {_bias_vec[i]:+g}' for i, n in enumerate(class_names) if _bias_vec[i]) or '없음'}}} 사용")
             _shown = f"direct thr {float(saved['threshold']):.2f}" if rule == "direct" else "argmax"
             print(f"[INFO] others 규칙: val 에서 고른 {_shown} 사용 ({thr_json}, 체크포인트 지문 일치)")
     else:
@@ -361,6 +480,8 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                 # [추가 2026-08-22] direct 모드가 실제로 보는 값. 스윕을 다시 돌릴 때 쓴다.
                 "Prob Others (raw)": calib_meta.get("prob_others", float("nan")),
                 **{f"Prob_{n}": float(raw_prob[i]) for i, n in enumerate(class_names)},
+                # [추가 2026-09-21 밤 / A] 편향 전 확률(w 만 적용). 편향을 안 골랐으면 Prob_* 와 같다.
+                **{f"PreBias_Prob_{n}": float(rec.get("raw_prob_prebias", raw_prob)[i]) for i, n in enumerate(class_names)},
             }
         )
         calibration_rows.append({
