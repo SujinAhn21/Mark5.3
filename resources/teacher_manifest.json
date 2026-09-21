@@ -1,0 +1,326 @@
+{
+  "generated_at": "2026-09-21 19:20:34",
+  "src_root": "/mnt/d/workspace/journal/codes",
+  "teachers": {
+    "mark4.1": {
+      "encoder": {
+        "file": "best_teacher_encoder_mark4.1.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.1/model/best_teacher_encoder_mark4.1.pth",
+        "bytes": 1974195,
+        "sha1": "5875bcd36ad5f2147f4d82b69a5908109fa8aeea",
+        "sha256": "aaae8261881579df4b9b38a8bdf40515b9987a94fe86211542eb11f43e67b095",
+        "mtime": "2026-09-21 19:12:54",
+        "target_threshold_json": "Mark4_series/Mark4.1/plots/target_threshold_mark4.1.json",
+        "target_threshold": 0.65,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9976744186046511,
+          "val_macro_precision": 0.9976851851851851,
+          "val_macro_recall": 0.9976744186046511,
+          "val_macro_f1": 0.9976744060270744,
+          "val_others_fpr": 0.004651162790697674
+        },
+        "threshold_selected_at": "2026-09-21 06:17:34",
+        "resources_status": "동일(덮어쓰지 않음)"
+      },
+      "classifier": {
+        "file": "best_teacher_classifier_mark4.1.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.1/model/best_teacher_classifier_mark4.1.pth",
+        "bytes": 5457,
+        "sha1": "f6d7abfbec0fc865d14974017856f2c53edf3a69",
+        "sha256": "b31a41133379fae6ca76fb1da908d1bacb3e25dfa11fcc483b27e920205231c1",
+        "mtime": "2026-09-21 19:13:36",
+        "target_threshold_json": "Mark4_series/Mark4.1/plots/target_threshold_mark4.1.json",
+        "target_threshold": 0.65,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9976744186046511,
+          "val_macro_precision": 0.9976851851851851,
+          "val_macro_recall": 0.9976744186046511,
+          "val_macro_f1": 0.9976744060270744,
+          "val_others_fpr": 0.004651162790697674
+        },
+        "threshold_selected_at": "2026-09-21 06:17:34",
+        "resources_status": "교체"
+      }
+    },
+    "mark4.2": {
+      "encoder": {
+        "file": "best_teacher_encoder_mark4.2.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.2/model/best_teacher_encoder_mark4.2.pth",
+        "bytes": 1974195,
+        "sha1": "ac848e27ce9e718d77ea5e341a01c0748e6311bd",
+        "sha256": "db28d57f356d1ee9f1ef3137e5e680a279968b53b71466cd637c64a38bb03f74",
+        "mtime": "2026-09-21 19:13:48",
+        "target_threshold_json": "Mark4_series/Mark4.2/plots/target_threshold_mark4.2.json",
+        "target_threshold": 0.71,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9744186046511628,
+          "val_macro_precision": 0.9744288681204569,
+          "val_macro_recall": 0.9744186046511627,
+          "val_macro_f1": 0.9744184662978166,
+          "val_others_fpr": 0.027906976744186046
+        },
+        "threshold_selected_at": "2026-09-21 08:06:37",
+        "resources_status": "교체"
+      },
+      "classifier": {
+        "file": "best_teacher_classifier_mark4.2.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.2/model/best_teacher_classifier_mark4.2.pth",
+        "bytes": 5457,
+        "sha1": "977ae5c51367821d27c10d37ea5208016b16730b",
+        "sha256": "7c3c0751cd8c5b73472aa47fb3c120dd2c275ee868ac87ce67b8522da1842a8f",
+        "mtime": "2026-09-21 19:13:56",
+        "target_threshold_json": "Mark4_series/Mark4.2/plots/target_threshold_mark4.2.json",
+        "target_threshold": 0.71,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9744186046511628,
+          "val_macro_precision": 0.9744288681204569,
+          "val_macro_recall": 0.9744186046511627,
+          "val_macro_f1": 0.9744184662978166,
+          "val_others_fpr": 0.027906976744186046
+        },
+        "threshold_selected_at": "2026-09-21 08:06:37",
+        "resources_status": "교체"
+      }
+    },
+    "mark4.3": {
+      "encoder": {
+        "file": "best_teacher_encoder_mark4.3.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.3/model/best_teacher_encoder_mark4.3.pth",
+        "bytes": 1974195,
+        "sha1": "8223e453094edeeda73d3e6ea3b3c3313620b1de",
+        "sha256": "f5b938461b68439638712968b13689c1af6d6d7c8b1ad2686f4ae83963843cda",
+        "mtime": "2026-09-21 19:14:58",
+        "target_threshold_json": "Mark4_series/Mark4.3/plots/target_threshold_mark4.3.json",
+        "target_threshold": 0.59,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9674418604651163,
+          "val_macro_precision": 0.9674823132342443,
+          "val_macro_recall": 0.9674418604651163,
+          "val_macro_f1": 0.9674411561093804,
+          "val_others_fpr": 0.037209302325581395
+        },
+        "threshold_selected_at": "2026-09-21 07:57:20",
+        "resources_status": "교체"
+      },
+      "classifier": {
+        "file": "best_teacher_classifier_mark4.3.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.3/model/best_teacher_classifier_mark4.3.pth",
+        "bytes": 5457,
+        "sha1": "02689e4de7ed3bebc8f14794f07afae2c07cd096",
+        "sha256": "47ed70cf240c843dc537ce5fa0ac044e18aaf012af949a06c8f2c8d6ae4ae104",
+        "mtime": "2026-09-21 19:15:40",
+        "target_threshold_json": "Mark4_series/Mark4.3/plots/target_threshold_mark4.3.json",
+        "target_threshold": 0.59,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9674418604651163,
+          "val_macro_precision": 0.9674823132342443,
+          "val_macro_recall": 0.9674418604651163,
+          "val_macro_f1": 0.9674411561093804,
+          "val_others_fpr": 0.037209302325581395
+        },
+        "threshold_selected_at": "2026-09-21 07:57:20",
+        "resources_status": "교체"
+      }
+    },
+    "mark4.4": {
+      "encoder": {
+        "file": "best_teacher_encoder_mark4.4.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.4/model/best_teacher_encoder_mark4.4.pth",
+        "bytes": 1974195,
+        "sha1": "bacfb2df94ae73ca8167b55d573e33b51cc596c9",
+        "sha256": "9abe877381ce375268cbb4850f9e1828a5ebf44df7f5ae3825706e5b31902ad6",
+        "mtime": "2026-09-21 19:15:52",
+        "target_threshold_json": "Mark4_series/Mark4.4/plots/target_threshold_mark4.4.json",
+        "target_threshold": 0.44,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9534883720930233,
+          "val_macro_precision": 0.9549054925023328,
+          "val_macro_recall": 0.9534883720930232,
+          "val_macro_f1": 0.9534521206347832,
+          "val_others_fpr": 0.07441860465116279
+        },
+        "threshold_selected_at": "2026-09-21 07:52:09",
+        "resources_status": "교체"
+      },
+      "classifier": {
+        "file": "best_teacher_classifier_mark4.4.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.4/model/best_teacher_classifier_mark4.4.pth",
+        "bytes": 5457,
+        "sha1": "608c9bff5e06511aaca8fd8961a86f11eaa3e2fa",
+        "sha256": "71d9a7eb7a8968daa6860c92202c42d9b76b4cb5a67333e8e1ff99e868267c19",
+        "mtime": "2026-09-21 19:16:42",
+        "target_threshold_json": "Mark4_series/Mark4.4/plots/target_threshold_mark4.4.json",
+        "target_threshold": 0.44,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9534883720930233,
+          "val_macro_precision": 0.9549054925023328,
+          "val_macro_recall": 0.9534883720930232,
+          "val_macro_f1": 0.9534521206347832,
+          "val_others_fpr": 0.07441860465116279
+        },
+        "threshold_selected_at": "2026-09-21 07:52:09",
+        "resources_status": "교체"
+      }
+    },
+    "mark4.5": {
+      "encoder": {
+        "file": "best_teacher_encoder_mark4.5.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.5/model/best_teacher_encoder_mark4.5.pth",
+        "bytes": 1974195,
+        "sha1": "a2bac5e82a9e25ebaa27139f2a7627abaaf8f388",
+        "sha256": "b860812654fca5c4c1dd547c57fc9ec3452246892d3672c71bea709b2314c63d",
+        "mtime": "2026-09-21 19:17:00",
+        "target_threshold_json": "Mark4_series/Mark4.5/plots/target_threshold_mark4.5.json",
+        "target_threshold": 0.49,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.958139534883721,
+          "val_macro_precision": 0.9584966117473857,
+          "val_macro_recall": 0.958139534883721,
+          "val_macro_f1": 0.958131383070798,
+          "val_others_fpr": 0.027906976744186046
+        },
+        "threshold_selected_at": "2026-09-21 08:23:58",
+        "resources_status": "교체"
+      },
+      "classifier": {
+        "file": "best_teacher_classifier_mark4.5.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.5/model/best_teacher_classifier_mark4.5.pth",
+        "bytes": 5457,
+        "sha1": "b3e611314ef55f04aaca46905ed0e106bad551f4",
+        "sha256": "554f5da071e2f152a177092c8c449b339b2d078ec52a31f4c4a6b0d91ca5060a",
+        "mtime": "2026-09-21 19:17:40",
+        "target_threshold_json": "Mark4_series/Mark4.5/plots/target_threshold_mark4.5.json",
+        "target_threshold": 0.49,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.958139534883721,
+          "val_macro_precision": 0.9584966117473857,
+          "val_macro_recall": 0.958139534883721,
+          "val_macro_f1": 0.958131383070798,
+          "val_others_fpr": 0.027906976744186046
+        },
+        "threshold_selected_at": "2026-09-21 08:23:58",
+        "resources_status": "교체"
+      }
+    },
+    "mark4.6": {
+      "encoder": {
+        "file": "best_teacher_encoder_mark4.6.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.6/model/best_teacher_encoder_mark4.6.pth",
+        "bytes": 1974195,
+        "sha1": "ac0b08e8999f623f11e67cb3a8e01e4e40e59dde",
+        "sha256": "aaa503b7c4258667037fad6085a2824d4590b4fd57c18d72b83f8a0d2a76157f",
+        "mtime": "2026-09-21 19:17:50",
+        "target_threshold_json": "Mark4_series/Mark4.6/plots/target_threshold_mark4.6.json",
+        "target_threshold": 0.51,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9930232558139535,
+          "val_macro_precision": 0.9930339217722395,
+          "val_macro_recall": 0.9930232558139536,
+          "val_macro_f1": 0.9930232180812228,
+          "val_others_fpr": 0.004651162790697674
+        },
+        "threshold_selected_at": "2026-09-21 08:31:27",
+        "resources_status": "교체"
+      },
+      "classifier": {
+        "file": "best_teacher_classifier_mark4.6.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.6/model/best_teacher_classifier_mark4.6.pth",
+        "bytes": 5457,
+        "sha1": "ab3e5fa1a4d257ecbe1d7f6d50d6a82ae639eff6",
+        "sha256": "30a1863a64b95453d746b910890d3d6c870cd1535d6086f3144db59fbef719ed",
+        "mtime": "2026-09-21 19:18:32",
+        "target_threshold_json": "Mark4_series/Mark4.6/plots/target_threshold_mark4.6.json",
+        "target_threshold": 0.51,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9930232558139535,
+          "val_macro_precision": 0.9930339217722395,
+          "val_macro_recall": 0.9930232558139536,
+          "val_macro_f1": 0.9930232180812228,
+          "val_others_fpr": 0.004651162790697674
+        },
+        "threshold_selected_at": "2026-09-21 08:31:27",
+        "resources_status": "교체"
+      }
+    },
+    "mark4.7": {
+      "encoder": {
+        "file": "best_teacher_encoder_mark4.7.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.7/model/best_teacher_encoder_mark4.7.pth",
+        "bytes": 1974195,
+        "sha1": "218c188a30af81c9b18959a2d1c3b28112be5d5a",
+        "sha256": "54b759cf6af3b18f26286c17a95148edaa61df71d9c4e666f46906bbbedae68b",
+        "mtime": "2026-09-21 19:18:50",
+        "target_threshold_json": "Mark4_series/Mark4.7/plots/target_threshold_mark4.7.json",
+        "target_threshold": 0.61,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9883720930232558,
+          "val_macro_precision": 0.9883826583592938,
+          "val_macro_recall": 0.9883720930232558,
+          "val_macro_f1": 0.9883720301353712,
+          "val_others_fpr": 0.013953488372093023
+        },
+        "threshold_selected_at": "2026-09-21 09:06:27",
+        "resources_status": "교체"
+      },
+      "classifier": {
+        "file": "best_teacher_classifier_mark4.7.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.7/model/best_teacher_classifier_mark4.7.pth",
+        "bytes": 5457,
+        "sha1": "bc081474ea0852c07c9cce7f208f38bb4dd9ac28",
+        "sha256": "724df4d52f087dc1379d36d574ec592116f0cdbdfb5ca20bd9c390d75424f79a",
+        "mtime": "2026-09-21 19:19:30",
+        "target_threshold_json": "Mark4_series/Mark4.7/plots/target_threshold_mark4.7.json",
+        "target_threshold": 0.61,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9883720930232558,
+          "val_macro_precision": 0.9883826583592938,
+          "val_macro_recall": 0.9883720930232558,
+          "val_macro_f1": 0.9883720301353712,
+          "val_others_fpr": 0.013953488372093023
+        },
+        "threshold_selected_at": "2026-09-21 09:06:27",
+        "resources_status": "교체"
+      }
+    },
+    "mark4.8": {
+      "encoder": {
+        "file": "best_teacher_encoder_mark4.8.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.8/model/best_teacher_encoder_mark4.8.pth",
+        "bytes": 1974195,
+        "sha1": "ebe10724fbb8c89aba3ff0da1c239aaa781bb933",
+        "sha256": "b1817f6d6307023a7a4a5943e423412bfb1d49eaecd86efa7fcab6c648bfe59c",
+        "mtime": "2026-09-21 19:19:46",
+        "target_threshold_json": "Mark4_series/Mark4.8/plots/target_threshold_mark4.8.json",
+        "target_threshold": 0.5374,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9465116279069767,
+          "val_macro_precision": 0.9469854469854471,
+          "val_macro_recall": 0.9465116279069767,
+          "val_macro_f1": 0.9464974492970013,
+          "val_others_fpr": 0.037209302325581395
+        },
+        "threshold_selected_at": "2026-09-21 09:19:30",
+        "resources_status": "교체"
+      },
+      "classifier": {
+        "file": "best_teacher_classifier_mark4.8.pth",
+        "source": "/mnt/d/workspace/journal/codes/Mark4_series/Mark4.8/model/best_teacher_classifier_mark4.8.pth",
+        "bytes": 5457,
+        "sha1": "922a67b6c72aa3107fda9b28ff052bc9db720485",
+        "sha256": "ac40635369e3ad156b89a6332fdbb7afdd8a91c8d9f6ebe5177373d3cef2ef5c",
+        "mtime": "2026-09-21 19:19:54",
+        "target_threshold_json": "Mark4_series/Mark4.8/plots/target_threshold_mark4.8.json",
+        "target_threshold": 0.5374,
+        "student_val_metrics_at_threshold": {
+          "val_accuracy": 0.9465116279069767,
+          "val_macro_precision": 0.9469854469854471,
+          "val_macro_recall": 0.9465116279069767,
+          "val_macro_f1": 0.9464974492970013,
+          "val_others_fpr": 0.037209302325581395
+        },
+        "threshold_selected_at": "2026-09-21 09:19:30",
+        "resources_status": "교체"
+      }
+    }
+  }
+}
