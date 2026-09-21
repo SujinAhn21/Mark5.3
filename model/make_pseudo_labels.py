@@ -114,6 +114,7 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
     class_names = config.get_classes_for_evaluation()
     student_input = getattr(config, "student_input", "mel")
     w = getattr(config, "distill_branch_eval_weight", 0.5)
+    class_bias = np.zeros(len(class_names))          # [2026-09-22 / A] json 에서 덮어쓴다(없으면 0 = 옛 동작)
 
     # others 규칙: 그 회차의 val 자동 선택 json 을 쓴다(eval.py test 와 같은 규칙).
     # [검수 P5 / 2026-09-17] json 이 없으면 멈추고, 있으면 체크포인트 sha256 을 대조한다(eval.py·zeroshot_eval.py 와 같은 규칙).
@@ -131,6 +132,10 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
         config.others_decision_mode = saved.get("rule", config.others_decision_mode)
         if config.others_decision_mode == "direct" and saved.get("threshold") is not None:
             config.others_direct_threshold = float(saved["threshold"])
+        # [2026-09-22 / C·A] test 와 같은 운영점 = 같은 증류 헤드 가중치 w 와 같은 클래스 편향(json 에 없으면 옛 동작: w 기본값·편향 0).
+        w = float(saved.get("distill_eval_weight", w))
+        _cb = saved.get("class_bias") or {}
+        class_bias = np.asarray([float(_cb.get(n, 0.0)) for n in class_names], dtype=np.float64)
         rule_desc = f"val 선택 json({config.others_decision_mode}"
     elif allow_config_rule:
         print(f"[WARN] {os.path.basename(thr_json)} 이 없어 config 기본 규칙을 씁니다(--allow_config_rule). 실험용 라벨이 아닙니다.")
@@ -142,7 +147,8 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
         rule_desc += f", thr {config.others_direct_threshold:g})"
     else:
         rule_desc += ")"
-    print(f"[INFO] self 라벨링: {os.path.basename(ckpt_path)} · 입력 {student_input} · others 규칙 {rule_desc}")
+    print(f"[INFO] self 라벨링: {os.path.basename(ckpt_path)} · 입력 {student_input} · others 규칙 {rule_desc} · w={w:g} · "
+          f"편향 {{{', '.join(f'{n} {class_bias[i]:+g}' for i, n in enumerate(class_names) if class_bias[i]) or '없음'}}}")
 
     parser = AudioParser(config, segment_mode=True)
     out = []
@@ -170,6 +176,8 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
                 seg_probs = apply_temporal_smoothing(seg_probs, config.temporal_smoothing_alpha)
             agg, _ = aggregate_segment_probs(seg_probs, sal, config)
             cal = apply_class_pair_calibration(agg, class_names, config)
+            if np.any(class_bias):                      # [2026-09-22 / A] eval.py 와 같은 자리에서 편향(확률 × exp(b), 정규화)
+                cal = cal * np.exp(class_bias); cal = cal / max(float(cal.sum()), 1e-12)
             cal, pred, _ = apply_others_calibration(cal.copy(), class_names, config)
             cal, pred, _ = apply_abstention(cal, class_names, config, pred)
             out.append((item["path"], class_names[int(pred)], float(np.max(cal))))
@@ -192,9 +200,11 @@ def _label_with_generalist(config, ckpt_path, baseline_dir, pool, device, allow_
     brule = importlib.import_module("common.others_rule")
     tag = os.path.splitext(os.path.basename(ckpt_path))[0]           # 비교모델 체크포인트 이름 = run_tag (common/naming.artifact_paths)
     rule_json = brule.rule_json_path(os.path.join(bdir, "plots"), tag)
+    bbias = None
     if os.path.isfile(rule_json):
         rule, thr, _saved = brule.load_rule_json(rule_json, tag, ckpt_path)      # run_tag·sha256 다르면 RuntimeError
-        rule_desc = f"val 선택 json {brule.describe(rule, thr)}"
+        bbias = brule.bias_from_saved(_saved, list(bpaths.CLASS_NAMES)) if hasattr(brule, "bias_from_saved") else None   # [2026-09-22 / A]
+        rule_desc = f"val 선택 json {brule.describe(rule, thr)}" + (f" · {brule.describe_bias(bbias, list(bpaths.CLASS_NAMES))}" if bbias is not None else "")
     elif allow_config_rule:
         rule, thr = "argmax", None
         rule_desc = "argmax(--allow_config_rule, json 없음 — 실험용 라벨이 아닙니다)"
@@ -217,6 +227,8 @@ def _label_with_generalist(config, ckpt_path, baseline_dir, pool, device, allow_
         for i, item in enumerate(pool, 1):
             wav = torch.from_numpy(bdata.load_clip(item["path"])).unsqueeze(0).to(device)
             prob = torch.softmax(model(wav), dim=-1).squeeze(0).cpu().numpy()
+            if bbias is not None and np.any(bbias):
+                prob = brule.apply_class_bias(prob[None, :], bbias)[0]           # [2026-09-22 / A] 비교모델 eval.py 와 같은 편향
             k = int(brule.predict_rule(prob[None, :], bnames, rule, thr)[0])      # eval.py 와 같은 판정
             out.append((item["path"], bnames[k], float(prob[k])))
             if i % 200 == 0:

@@ -13,7 +13,9 @@ Mark5 는 학습 중 매 epoch, 증강된 세그먼트를 teacher 8명이 보고
 세그먼트 단위 규칙은 Mark5 와 같다
   - teacher 8개 · 합의 조립(담당 칸 = margin, others 칸 = -max(margin), teacher_fusion.py:150-200)
   - 세그먼트 확신도 = 1 - uncertainty = 전문가 8명의 양성 확률 최댓값 (teacher_fusion.py:211)
-  - 세그먼트 채택 = 확신도 >= 0.5 (train_mark5.py:614, 748). 이 규칙에서는 others 가 argmax 이면
+  - 세그먼트 채택 = 확신도 >= 0.5 (train_mark5.py:614, 748) **그리고 [2026-09-22 / B] 1등−2등 전문가 확신도 차이(teacher_disagreement)
+    >= config.pseudo_label_min_gap(0.4)** — Mark5.2 train_mark5.py 의 keep_mask 와 같은 조건. 비교모델(pl 조건)이 우리와 같은 품질의
+    가짜 정답을 받아야 공정하다(2차 캐시 실측: 차이 조건 없이 타겟 정확도 75%, ≥0.4 면 92.5%). 이 규칙에서는 others 가 argmax 이면
     확신도가 반드시 0.5 미만이라 채택 세그먼트의 argmax 는 항상 타겟 8종이다(해석적으로 증명됨:
     others 칸 = -M, 확신도 = sigmoid(M) 이므로 others 가 이기려면 M < 0 → 확신도 < 0.5).
 클립 단위 규칙 (이 스크립트가 새로 정한 것 — 비교모델은 3초 클립 전체를 한 번에 받는다)
@@ -114,6 +116,8 @@ def main():
     ap = argparse.ArgumentParser(description="unlabeled 클립에 teacher 8명의 합의 라벨을 오프라인으로 매긴다")
     ap.add_argument("--mark_version", type=str, default="mark5.2")   # [변경 2026-09-17] 기본 mark5.2
     ap.add_argument("--min_conf", type=float, default=None, help="세그먼트 채택 임계값(기본: config.pseudo_label_min_confidence=0.5)")
+    ap.add_argument("--min_gap", type=float, default=None,
+                    help="[2026-09-22 / B] 세그먼트 채택 추가 조건: 1등−2등 전문가 확신도 차이 >= 이 값(기본: config.pseudo_label_min_gap=0.4, 0 이면 옛 동작)")
     ap.add_argument("--min_segments", type=int, default=3, help="클립 채택에 필요한 채택 세그먼트 수(5개 중, 기본 3=과반)")
     ap.add_argument("--clips_per_batch", type=int, default=8, help="teacher 한 번 호출에 묶는 클립 수(세그먼트 5개씩)")
     ap.add_argument("--limit", type=int, default=0, help="동작 확인용: 앞에서 N 개만. 산출물 이름에 _limitN 이 붙는다")
@@ -127,6 +131,7 @@ def main():
     set_seed(args.seed, deterministic=bool(getattr(config, "cudnn_deterministic", True)))
     device = config.device
     min_conf = args.min_conf if args.min_conf is not None else float(getattr(config, "pseudo_label_min_confidence", 0.5))
+    min_gap = args.min_gap if args.min_gap is not None else float(getattr(config, "pseudo_label_min_gap", 0.0) or 0.0)
     others_rule = getattr(config, "fusion_others_rule", "min")
     score_mode = getattr(config, "fusion_score_mode", "margin")
     if getattr(config, "use_distribution_alignment", False):
@@ -135,7 +140,7 @@ def main():
     label_map = config.get_target_label_map()
     others_idx = class_names.index("others")
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[INFO] 합의 라벨 생성: mark_version={args.mark_version}, device={device}, 세그먼트 채택 임계값={min_conf}, "
+    print(f"[INFO] 합의 라벨 생성: mark_version={args.mark_version}, device={device}, 세그먼트 채택 임계값={min_conf}, 1등−2등 차이>={min_gap:g}, "
           f"클립 채택 = 채택 세그먼트 >= {args.min_segments}/5, 라벨 = 채택 세그먼트 다수결, 분포 정렬=off, 증강=없음")
     if score_mode == "margin":
         print("[INFO] teacher fusion: 담당 칸 = margin(target-others), others 칸 = -max(margin)  (others_rule 은 이 모드에서 미사용)")
@@ -186,20 +191,22 @@ def main():
             out = teacher(batch, label_map)
         probs_all = torch.softmax(out.logits, dim=1).cpu().numpy()                  # [sumK, 9]
         conf_all = (1.0 - out.uncertainty).detach().cpu().numpy().astype(np.float64)
+        gap_all = out.disagreement.detach().cpu().numpy().astype(np.float64)       # [2026-09-22 / B] 1등−2등 전문가 확신도 차이
         pos = 0
         for row, recs in pending:
             K = len(recs)
-            probs, conf = probs_all[pos:pos + K], conf_all[pos:pos + K]
+            probs, conf, gap = probs_all[pos:pos + K], conf_all[pos:pos + K], gap_all[pos:pos + K]
             pos += K
             path = row["path"]
             seg_argmax = probs.argmax(axis=1)
-            kept = conf >= min_conf
+            kept = (conf >= min_conf) & (gap >= min_gap)                            # [2026-09-22 / B] train_mark5.py keep_mask 와 같은 조건
             n_kept = int(kept.sum())
             seg_total += K
             seg_kept_total += n_kept
             for i, r in enumerate(recs):
                 seg_rows.append({"path": path, "segment_index": r["segment_index"], "start_frame": r["start_frame"],
                                  "saliency": round(float(r["saliency"]), 6), "confidence": round(float(conf[i]), 6),
+                                 "disagreement": round(float(gap[i]), 6),          # [2026-09-22 / B]
                                  "kept": int(kept[i]), "argmax": class_names[int(seg_argmax[i])],
                                  **{f"prob_{c}": round(float(probs[i, j]), 6) for j, c in enumerate(class_names)}})
             mean_prob = probs.mean(axis=0)                     # 참고용(라벨 결정에는 쓰지 않음)
@@ -263,7 +270,7 @@ def main():
     n_read = len(rows) - n_bad
     stats = {
         "generated_at": generated_at, "mark_version": args.mark_version,
-        "rule": {"segment_min_conf": min_conf, "clip_min_segments": args.min_segments,
+        "rule": {"segment_min_conf": min_conf, "segment_min_gap": min_gap, "clip_min_segments": args.min_segments,
                  "clip_label": "majority vote of argmax over kept segments (tie -> larger confidence sum)",
                  "clip_confidence": "mean confidence of kept segments",
                  "score_mode": score_mode, "others_rule": others_rule if score_mode != "margin" else "n/a (margin mode)",

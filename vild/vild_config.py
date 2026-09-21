@@ -217,29 +217,6 @@ class AudioViLDConfig:
         self.class_bias_grid = (-1.5, 1.5, 0.25)
         self.class_bias_rounds = 3
         self.explain_topk_segments = 3
-        self.save_visual_explanations = True
-        # === [변경 2026-09-17 / Mark5.2 6절] student 인코더 선택 ===
-        #   "cnn"  : SimpleAudioEncoder(3층 CNN, mel 64x101 입력) — mark5.0 까지의 인코더. 사전학습 없음.
-        #   "mn10" : Mn10AudioEncoder(EfficientAT mn10, AudioSet 사전학습, 파형 입력) — Mark5.2 기본.
-        # 2026-09-08 결정: 백본은 노벨티와 무관하고 3층 CNN(143,488 파라미터)이 표현 병목이라 비교모델과
-        # 같은 사전학습 백본으로 바꾼다. "0.44M 가볍다" 주장은 접는다(mn10 은 4.2M·17MB 안팎).
-        # 인코더 외(세그먼트 5개·teacher 합의·두 갈래 헤드·텍스트 앵커·others 규칙·SpecAugment·feature KD)는 그대로.
-        self.encoder_type = "mn10" if self.mark_version == "mark5.2" else "cnn"
-        # mn10 세부(encoder_type == "mn10" 일 때만 쓰인다). 규격 자체(32 kHz·128 mel·hop 320)는 사전학습을
-        # 따라야 하므로 vild_model.Mn10AudioEncoder 의 상수이고, 여기서는 가중치·헤드·학습률만 고른다.
-        self.mn10_pretrained_path = None      # None 이면 <저장소>/weights/mn10_as_mAP_471.pt (저장소 릴리스 v0.0.1, MIT)
-        self.mn10_load_pretrained = True      # False 는 "사전학습 없이 같은 구조" 절제 실험용
-        self.mn10_proj_dropout = 0.3          # 풀링 960 -> Dropout -> Linear(embedding_dim). SimpleAudioEncoder 헤드의 0.3 과 같게
-        # 백본 학습률. 비교모델이 2026-09-05 학습률 선정 3회로 고른 5e-5 를 사전학습 백본에 쓰고, 새로 만드는 층
-        # (투영·branch·classifier·background)은 아래 learning_rate(1e-4) 그대로(2026-09-17 결정). None 이면 전부 learning_rate.
-        self.encoder_learning_rate = 5e-5 if self.encoder_type == "mn10" else None
-        # [추가 2026-08-17] mark4.x teacher 8개는 2026-07-13 teacher 강화 이후 4블록
-        # TeacherAudioEncoder(약 49만 파라미터)로 학습돼 있다. mark5 의 EnsembleTeacher 가
-        # 그 .pth 를 읽을 때 같은 구조로 만들어야 하므로 True 로 둔다.
-        # False 로 두면 student 용 SimpleAudioEncoder(3블록)를 만들어 state_dict 가 안 맞는다.
-        # (student 자신의 인코더는 encoder_type 이 정하고 이 값의 영향을 받지 않는다.)
-        self.use_large_teacher_encoder = True
-        self.explain_topk_segments = 3
         self.save_visual_explanations = False   # [Mark5_EXP2] 반복실험에서는 세그먼트 그림을 안 남긴다
         # === [변경 2026-09-17 / Mark5.2 6절] student 인코더 선택 ===
         #   "cnn"  : SimpleAudioEncoder(3층 CNN, mel 64x101 입력) — mark5.0 까지의 인코더. 사전학습 없음.
@@ -517,8 +494,10 @@ class AudioViLDConfig:
             tag += "_DA" + f"{_t:g}".replace(".", "")
         if self.use_dkd:
             tag += "_DKD"
+        # [수정 2026-09-22 / 검수] 1등−2등 차이 조건(_G<값>)은 가짜 정답 CE 를 쓸 때만 실제로 걸리므로(train_mark5.py 의
+        # `_use_pl and _pl_min_gap > 0`) 그때만 붙인다. 가짜 정답 CE 없이 돌리는 절제 회차에 _G04 가 붙는 일이 없게.
         _gap = float(getattr(self, "pseudo_label_min_gap", 0.0) or 0.0)
-        if _gap > 0:
+        if _gap > 0 and getattr(self, "use_pseudo_label_ce", False):
             tag += "_G" + f"{_gap:g}".replace(".", "")
         # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그. None 이면 안 붙는다(0 도 유효 조건이라 "is not None").
         # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil. [추가 2026-09-17] labeled_n 은 _l<n> 으로 그 앞에.

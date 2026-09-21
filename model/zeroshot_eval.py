@@ -138,6 +138,10 @@ def apply_rule_from_json(config, ckpt_sha=None, allow_config_rule=False):
         config.others_decision_mode = saved.get("rule", config.others_decision_mode)
         if config.others_decision_mode == "direct" and saved.get("threshold") is not None:
             config.others_direct_threshold = float(saved["threshold"])
+        # [2026-09-22 / C] 두 헤드 섞는 가중치도 test 와 같게 json 에서(없으면 config 기본 0.5). 클래스 편향(A)은 제로샷에 걸지 않는다 —
+        # 9클래스 val 로 고른 사전확률 보정을 새 앵커 6종이 든 15앵커 argmax 에 적용할 근거가 없다(비교모델 zeroshot_eval 도 같음).
+        if saved.get("distill_eval_weight") is not None:
+            config.distill_branch_eval_weight = float(saved["distill_eval_weight"])
         return f"val 선택 json({config.others_decision_mode}" + (f", thr {config.others_direct_threshold:g})" if config.others_decision_mode == "direct" else ")")
     if not allow_config_rule:
         raise SystemExit(f"[ERROR] {thr_json} 이 없습니다. eval.py --split val 을 먼저 돌려 others 규칙을 골라야 test·eval 과 같은 운영점으로 "

@@ -69,13 +69,25 @@ def _resolve_dataset_csv_path(split: str):
     raise FileNotFoundError(f"[ERROR] {split} 인덱스 파일을 찾을 수 없습니다: {candidates}")
 
 
-def _keep_topk_segments(segment_records, segment_probs, seg_weights, config):
-    """save_visual_explanation 이 실제로 그리는 상위 k 세그먼트만 남긴다(가중치 순서는 보존)."""
-    k = int(getattr(config, "explain_topk_segments", 3))
-    order = np.argsort(np.asarray(seg_weights))[::-1][:k]
-    keep = sorted(int(i) for i in order)
-    return ([segment_records[i] for i in keep], [segment_probs[i] for i in keep],
-            np.asarray(seg_weights)[keep])
+_VIS_KEYS = ("tensor", "segment_index", "start_frame", "end_frame")
+
+
+def _slim_segment_records(segment_records):
+    """save_visual_explanation 이 쓰는 필드만 남긴 세그먼트 기록(파형 wave 는 뺀다 — 세그먼트당 64KB 로 가장 크다).
+    [수정 2026-09-22 / 검수] 예전엔 1차 통과(w=config 기본값)의 가중치로 상위 k 만 남겼는데, 최종 판정은 val 이 고른 w·편향으로
+    하므로 그림 안의 세그먼트 확률·가중치와 최종 확률이 서로 어긋났다. 이제 전체 세그먼트를 얇게 들고 있다가 2차 통과에서
+    val 이 고른 w 로 _segment_mix 를 다시 돌려 그린다(클립당 세그먼트 5개 × mel 64×101 ≈ 130KB)."""
+    return [{k: r[k] for k in _VIS_KEYS} for r in segment_records]
+
+
+def _segment_mix(seg_sup, seg_dis, saliency_scores, w, config):
+    """세그먼트별 (지도 헤드 확률, 증류 헤드 확률) 을 w 로 섞고 temporal smoothing 까지 한 세그먼트 확률과,
+    aggregate_segment_probs 의 (클립 확률, 세그먼트 가중치) 를 돌려준다 — 1차 통과와 같은 경로."""
+    segment_probs = [(1.0 - w) * ps + w * pd_ for ps, pd_ in zip(seg_sup, seg_dis)]
+    if config.enable_temporal_smoothing:
+        segment_probs = apply_temporal_smoothing(segment_probs, config.temporal_smoothing_alpha)
+    aggregated, seg_weights = aggregate_segment_probs(segment_probs, saliency_scores, config)
+    return segment_probs, aggregated, seg_weights
 
 
 # ----------------------------------------------------------------------------------------------
@@ -85,10 +97,7 @@ def _keep_topk_segments(segment_records, segment_probs, seg_weights, config):
 # ----------------------------------------------------------------------------------------------
 def _clip_prob_from_segments(seg_sup, seg_dis, saliency_scores, w, class_names, config):
     """세그먼트별 (지도 헤드 확률, 증류 헤드 확률) 을 가중치 w 로 섞어 클립 확률(others 보정 전)까지 만든다 — 1차 통과와 같은 경로."""
-    segment_probs = [(1.0 - w) * ps + w * pd_ for ps, pd_ in zip(seg_sup, seg_dis)]
-    if config.enable_temporal_smoothing:
-        segment_probs = apply_temporal_smoothing(segment_probs, config.temporal_smoothing_alpha)
-    aggregated, _ = aggregate_segment_probs(segment_probs, saliency_scores, config)
+    _, aggregated, _ = _segment_mix(seg_sup, seg_dis, saliency_scores, w, config)
     return apply_class_pair_calibration(aggregated, class_names, config)
 
 
@@ -119,8 +128,13 @@ def _best_rule_f1(prob_rows, labels, class_names, config):
     grid = np.round(np.arange(float(g[0]), float(g[1]) + 1e-9, float(g[2])), 4)
     p = np.asarray(prob_rows); am = p.argmax(axis=1); po = p[:, oidx]
     best = _macro_f1_np(labels, am, n_cls)
+    # [수정 2026-09-22 / 검수] direct 규칙의 "others 아님" 쪽은 실제 규칙(apply_others_calibration)과 같이 others 열을 빼고
+    # 나머지 8개 중 argmax 다(비교모델 best_rule_f1 도 같음). 9클래스 argmax 를 쓰면 Prob_others < t 인데 argmax 가 others 인
+    # 클립을 others 로 남겨, 편향·w 탐색이 배포 규칙과 다른 F1 표면 위에서 돌았다(val 430클립·격자 94개 중 69개에서 어긋남).
+    masked = p.copy(); masked[:, oidx] = -1.0
+    am8 = masked.argmax(axis=1)
     for t in grid:
-        best = max(best, _macro_f1_np(labels, np.where(po >= t, oidx, am), n_cls))
+        best = max(best, _macro_f1_np(labels, np.where(po >= t, oidx, am8), n_cls))
     return best
 
 
@@ -263,6 +277,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
 
     all_labels, all_preds, all_probs = [], [], []
     all_raw_probs = []
+    all_prebias_probs = []   # [2026-09-22 / A] 편향 전 확률 — ROC AUC·ROC 곡선은 이것으로(운영점·편향과 무관한 모델 자체의 순위)
     calibration_rows = []
     prediction_rows = []   # [추가 2026-08-17] 샘플별 확률까지 남기는 행(운영점 재계산용)
     clip_records = []      # [변경 2026-09-07] 1차 통과: 클립마다 others 보정 전 확률만 모은다(임계값은 그 뒤에 정한다)
@@ -331,8 +346,8 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             "path": path, "label": label, "raw_prob": calibrated_prob.copy(),
             "seg_sup": seg_sup, "seg_dis": seg_dis, "saliency": saliency_scores,      # [C·A] w·편향 재계산용
             # 시각화가 켜져 있을 때만, 그것도 상위 k 세그먼트만 남긴다(전부 들고 있으면 430클립에 약 160MB — 리뷰 지적 12).
-            "vis": _keep_topk_segments(segment_records, segment_probs, seg_weights, config)
-                   if config.save_visual_explanations else None,
+            # [수정 2026-09-22 / 검수] 그림은 2차 통과에서 val 이 고른 w 로 다시 만들므로 여기서는 얇은 세그먼트 기록만 둔다.
+            "vis": _slim_segment_records(segment_records) if config.save_visual_explanations else None,
         })
 
     # [변경 2026-09-07] 라벨 경고와 "샘플 0개" 검사를 임계값 결정보다 앞에 둔다(리뷰 지적 21).
@@ -366,6 +381,29 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                 config.others_direct_threshold = float(others_threshold)
         thr_info.update({"rule": config.others_decision_mode,
                          "threshold": float(config.others_direct_threshold) if config.others_decision_mode == "direct" else None})
+        # [수정 2026-09-22 / 검수] 고정 규칙은 others 판정만 고정한다. val 이 고른 w·클래스 편향(json)은 같은 체크포인트 것이면
+        # 그대로 쓰고, json 이 없거나 다른 체크포인트 것이면 w 기본값·편향 0(옛 동작)으로 두되 어느 쪽인지 로그와 thr_info 에 남긴다.
+        _w_default = float(getattr(config, "distill_branch_eval_weight", 0.5))
+        _w_sel, _bias_vec, _wb_from = _w_default, np.zeros(len(class_names)), None
+        if os.path.exists(thr_json):
+            with open(thr_json, encoding="utf-8") as f:
+                _saved_fx = json.load(f)
+            if _saved_fx.get("run_tag") == config.run_tag and (_saved_fx.get("checkpoint") or {}).get("sha256") == ckpt_fingerprint["sha256"]:
+                _w_sel = float(_saved_fx.get("distill_eval_weight", _w_default))
+                _cb = _saved_fx.get("class_bias") or {}
+                _bias_vec = np.asarray([float(_cb.get(n, 0.0)) for n in class_names])
+                _wb_from = thr_json
+        config.distill_branch_eval_weight = _w_sel
+        for r in clip_records:
+            r["raw_prob_prebias"] = _clip_prob_from_segments(r["seg_sup"], r["seg_dis"], r["saliency"], _w_sel, class_names, config)
+        _raw_b = _apply_class_bias(np.stack([r["raw_prob_prebias"] for r in clip_records]), _bias_vec)
+        for r, row in zip(clip_records, _raw_b):
+            r["raw_prob"] = row.copy()
+        thr_info.update({"distill_eval_weight": _w_sel, "class_bias": {n: float(_bias_vec[i]) for i, n in enumerate(class_names)},
+                         "w_and_bias_from": _wb_from})
+        print(f"[INFO] 고정 규칙 모드: 증류 헤드 가중치 w={_w_sel:g}, 클래스 편향 "
+              f"{{{', '.join(f'{n} {_bias_vec[i]:+g}' for i, n in enumerate(class_names) if _bias_vec[i]) or '없음'}}} — "
+              + (f"{os.path.basename(_wb_from)} 의 값(체크포인트 지문 일치)" if _wb_from else "json 없음/다른 체크포인트 → 기본값(옛 동작)"))
     elif _thr_mode == "val_select":
         _lab_np = np.asarray([label_map[r["label"]] for r in clip_records], dtype=int)
         _w_default = float(getattr(config, "distill_branch_eval_weight", 0.5))
@@ -466,6 +504,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
         all_preds.append(pred)
         all_probs.append(calibrated_prob)
         all_raw_probs.append(raw_prob)      # [변경 2026-09-07] ROC AUC 는 규칙 적용 전 확률로 잰다(리뷰 지적 7)
+        all_prebias_probs.append(np.asarray(rec.get("raw_prob_prebias", raw_prob)))   # [2026-09-22 / A] 편향 전
         prediction_rows.append(
             {
                 "Filename": os.path.basename(path),
@@ -495,8 +534,10 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             "entropy": calib_meta["entropy"],
         })
         if rec["vis"] is not None:
-            segment_records, segment_probs, seg_weights = rec["vis"]
-            save_visual_explanation(path, segment_records, segment_probs, seg_weights, class_names, calibrated_prob, pred, config, plot_dir)
+            # [수정 2026-09-22 / 검수] 세그먼트 확률·가중치를 최종 판정과 같은 w(config.distill_branch_eval_weight = val 이 고른 값)로 다시 만든다.
+            segment_probs, _, seg_weights = _segment_mix(rec["seg_sup"], rec["seg_dis"], rec["saliency"],
+                                                         float(getattr(config, "distill_branch_eval_weight", 0.5)), config)
+            save_visual_explanation(path, rec["vis"], segment_probs, seg_weights, class_names, calibrated_prob, pred, config, plot_dir)
 
     print(f"[INFO] 유효 {split} 샘플: {len(all_labels)}개")
 
@@ -527,7 +568,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
     plt.close()
 
     # [추가] mark4 eval.py와 동일한 형태로 Accuracy/P/R/F1/ROC AUC를 CSV로 저장(기존엔 콘솔 print만 하고 파일에 안 남았음).
-    all_probs_arr = np.array(all_raw_probs)   # [변경 2026-09-07] 규칙 적용 전 확률(운영점과 무관한 AUC)
+    all_probs_arr = np.array(all_prebias_probs)   # [변경 2026-09-07] 규칙 적용 전 확률(운영점과 무관한 AUC) · [2026-09-22] 편향 전 확률
     precision, recall, f1, _ = precision_recall_fscore_support(
         all_labels, all_preds, average=None, labels=list(range(len(class_names))), zero_division=0
     )
