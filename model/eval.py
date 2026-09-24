@@ -167,7 +167,7 @@ def _select_class_bias(prob_rows, labels, class_names, config):
 
 
 def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_n=None, ceiling=False,
-             others_threshold=None, labeled_n=None, spill_labeled=False, pseudo_source=None):
+             others_threshold=None, labeled_n=None, spill_labeled=False, pseudo_source=None, lr=None, encoder_lr=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
 
     eval 은 학습을 하지 않지만 **run_tag 로 체크포인트를 찾기 때문에** 학습과 같은 조건을
@@ -186,6 +186,11 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
     config.labeled_n = labeled_n       # [신설 2026-09-17 / 8절] 학습 때 --labeled_n 을 줬으면 같은 값을 줘야 _l<n> 체크포인트를 찾는다
     config.spill_labeled = bool(spill_labeled)   # _sp
     config.pseudo_source = pseudo_source         # _ps<이름>
+    # [신설 2026-09-25 / LR] 학습 때 준 --lr/--encoder_lr 과 같은 값을 줘야 run_tag(_lr/_elr)가 맞아 그 체크포인트를 찾는다.
+    # 평가는 학습률을 쓰지 않는다 — 오직 파일 이름 때문이다.
+    _lr_txt = config.apply_cli_learning_rates(lr, encoder_lr)
+    if _lr_txt:
+        print(f"[LR] 명령줄 학습률: {_lr_txt} (체크포인트 이름 맞추기용) · run_tag {config.run_tag}")
     device = config.device
     parser = AudioParser(config, segment_mode=True)
 
@@ -685,6 +690,8 @@ if __name__ == "__main__":
     parser.add_argument("--pseudo_source", type=str, default=None, help="학습 때 --pseudo_source 를 줬으면 같이(_ps 태그).")
     parser.add_argument("--ceiling", action="store_true",
                         help="천장 조건으로 학습한 체크포인트(_ceil)를 평가할 때 준다.")
+    parser.add_argument("--lr", type=float, default=None, help="[LR 2026-09-25] 학습 때 준 --lr 과 같은 값(run_tag _lr<값>)")
+    parser.add_argument("--encoder_lr", type=float, default=None, help="[LR 2026-09-25] 학습 때 준 --encoder_lr 과 같은 값(run_tag _elr<값>)")
     # [신설 2026-09-07 / Mark5_EXP2] 기본은 val 에서 고른 임계값(config.others_threshold_mode=val_select).
     # 이 값을 주면 그 값으로 고정해 평가한다(옛 결과 재현·수동 점검용). json 은 건드리지 않는다.
     parser.add_argument("--others_threshold", type=str, default=None,
@@ -693,4 +700,5 @@ if __name__ == "__main__":
     evaluate(mark_version=args.mark_version, split=args.split,
              seed_value=args.seed, unlabeled_n=args.unlabeled_n, ceiling=args.ceiling,
              others_threshold=args.others_threshold, labeled_n=args.labeled_n,
-             spill_labeled=args.spill_labeled, pseudo_source=args.pseudo_source)
+             spill_labeled=args.spill_labeled, pseudo_source=args.pseudo_source,
+             lr=args.lr, encoder_lr=args.encoder_lr)

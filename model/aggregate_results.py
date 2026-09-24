@@ -178,6 +178,9 @@ def _parse_tag_full(tag):
     return m.group("base"), n, int(m.group("s")), cond, l, bool(m.group("sp")), m.group("ps")
 
 
+# [신설 2026-09-25 / LR] 집계에서 뺄 seed. 0 = 학습률 선정(select_lr.py) 회차.
+EXCLUDE_SEEDS = {0}
+
 _FULL_LABELED = None
 
 
@@ -214,6 +217,11 @@ def collect(mark_version, split, allow_mixed=False):
             continue                              # test 를 모을 때 _val 파일은 제외
         base, n, s, cond, lab, sp, ps = _parse_tag_full(tag)
         if cond is None:
+            continue
+        # [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py)은 seed 0 으로 9회를 돌려 plots/ 에 _s0 요약(val)을 남긴다.
+        # 본실험은 seed 1~5 이므로 seed 0 은 집계에서 뺀다. 안 빼면 --split val 집계가 설정 9종 혼합으로 멈추거나,
+        # --allow_mixed_config 로 넘길 때 선정 회차가 본실험 평균에 섞인다. 비교모델 aggregate_baseline.py 의 --seeds 필터와 같은 취지.
+        if s in EXCLUDE_SEEDS:
             continue
 
         ok, missing = is_complete(path)           # [M1] 잘린 파일 검출

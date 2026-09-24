@@ -31,7 +31,14 @@ _CONFIG_KEYS = [
     "sample_rate",
     "fft_size",
     "hop_length",
+    "learning_rate",           # [LR 2026-09-25] provenance 용 — 학습률 선정 뒤 "이 파일은 어느 학습률로 만들었나" 를 파일 안에 남긴다.
+    "encoder_learning_rate",   #   apply_config_metadata 는 이 둘을 건너뛴다(아래 _PROVENANCE_ONLY_KEYS).
 ]
+
+# [LR 2026-09-25] 기록만 하고 되돌려 적용하지 않는 키. 학습률은 "이 파일을 만들 때 쓴 값"이지 "이 파일을 읽는 쪽이 써야 할 값"이
+# 아니다. train_mark5.py 의 EnsembleTeacher 가 teacher ckpt 8개를 apply_config_metadata 로 읽는데, 앞으로 teacher 가 이 키를 갖고
+# 저장되면 student 의 학습률(과 run_tag)이 teacher 값으로 조용히 바뀐다. 2026-09-25 실측: 지금 teacher ckpt 에는 이 키가 없다.
+_PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate"}
 
 
 def extract_config_metadata(config) -> dict:
@@ -60,6 +67,8 @@ def apply_config_metadata(config, ckpt: dict):
     """
     meta = ckpt.get("config_metadata", {})
     for key, val in meta.items():
+        if key in _PROVENANCE_ONLY_KEYS:      # [LR 2026-09-25] 학습률은 기록용 — 읽는 쪽 config 에 넣지 않는다
+            continue
         if not hasattr(config, key):
             continue
         class_attr = getattr(type(config), key, None)

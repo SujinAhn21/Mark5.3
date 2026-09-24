@@ -405,6 +405,13 @@ class AudioViLDConfig:
         self.audio_dir = os.path.join("data_wav")
         self.prompt_bank_path = os.path.join(SHARED_DIR, "resources", "prompt_bank.json")
 
+        # === [신설 2026-09-25 / LR] 학습률 기본값 스냅샷 ===
+        # run_tag 의 lr_tag 가 "명령줄(--lr/--encoder_lr)이 기본값과 다른 값을 줬는가" 를 판단하는 기준이다.
+        # 위에서 정한 learning_rate(1e-4)·encoder_learning_rate(mn10: 5e-5) 를 그대로 복사한다.
+        # 이 줄 뒤에서 두 값을 바꾸는 코드가 생기면 스냅샷도 그 뒤로 옮겨야 한다(2026-09-25 기준 없음).
+        self._default_lrs = (float(self.learning_rate),
+                             None if getattr(self, "encoder_learning_rate", None) is None else float(self.encoder_learning_rate))
+
         # === 내부 캐시 ===
         self._text_emb = None
         self._eval_text_emb = None # 평가용 텍스트 임베딩 캐시 추가
@@ -499,6 +506,11 @@ class AudioViLDConfig:
         _gap = float(getattr(self, "pseudo_label_min_gap", 0.0) or 0.0)
         if _gap > 0 and getattr(self, "use_pseudo_label_ce", False):
             tag += "_G" + f"{_gap:g}".replace(".", "")
+        # [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py). 명령줄로 기본값과 **다른** 학습률을 줬을 때만
+        # _lr<새 층>·_elr<백본> 이 붙는다(기본값이면 옛 태그 그대로 — 지금까지의 산출물과 재개 판정이 안 깨진다).
+        # 표기는 비교모델 common/naming.py 와 같은 f"{lr:g}"(예: 5e-05 · 0.0002). 자리는 설정 태그의 맨 끝, 실험 조건 태그
+        # (_l/_u/_ceil/_sp/_ps/_s) 앞 — aggregate_results._TAG_RE 는 이 앞부분을 통째로 '설정(base)' 으로 읽는다.
+        tag += self.lr_tag
         # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그. None 이면 안 붙는다(0 도 유효 조건이라 "is not None").
         # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil. [추가 2026-09-17] labeled_n 은 _l<n> 으로 그 앞에.
         #   예: mark5.2_PL_SA_l200_u2000_s1 · mark5.2_PL_SA_l200_ceil_s3 · mark5.2_PL_SA_u0_s2
@@ -522,6 +534,41 @@ class AudioViLDConfig:
         if _s is not None:
             tag += f"_s{int(_s)}"
         return tag
+
+    def apply_cli_learning_rates(self, lr=None, encoder_lr=None) -> str:
+        """[신설 2026-09-25 / LR] 명령줄 --lr(새로 만드는 층)·--encoder_lr(사전학습 백본) 을 config 에 넣는다. None 은 그대로(기본값).
+        run_tag 가 만들어지기 전(학습·평가 모두 config 생성 직후)에 불러야 산출물 이름이 맞는다. 기본값과 같은 값을 줘도 태그는
+        안 바뀐다(lr_tag 는 값으로 비교). 돌려주는 값: 바뀐 것이 있으면 로그용 한 줄, 없으면 ''."""
+        changed = []
+        if lr is not None:
+            if float(lr) <= 0:
+                raise ValueError(f"[ERROR] --lr 은 양수여야 합니다: {lr}")
+            self.learning_rate = float(lr)
+            changed.append(f"새 층 {float(lr):g}")
+        if encoder_lr is not None:
+            if float(encoder_lr) <= 0:
+                raise ValueError(f"[ERROR] --encoder_lr 은 양수여야 합니다: {encoder_lr}")
+            if getattr(self, "encoder_type", "cnn") != "mn10":
+                raise ValueError("[ERROR] --encoder_lr 은 사전학습 백본(encoder_type=mn10, mark5.2)에서만 뜻이 있습니다. "
+                                 f"지금 encoder_type={getattr(self, 'encoder_type', 'cnn')!r} — 백본 학습률 분리가 없는 구성입니다.")
+            self.encoder_learning_rate = float(encoder_lr)
+            changed.append(f"백본 {float(encoder_lr):g}")
+        return " / ".join(changed)
+
+    @property
+    def lr_tag(self) -> str:
+        """[신설 2026-09-25 / LR] 학습률이 __init__ 기본값과 다를 때만 '_lr<g>'(새 층)·'_elr<g>'(백본) 를 돌려준다. 같으면 ''.
+        train_mark5.py / eval.py 가 --lr / --encoder_lr 로 config 값을 덮어쓰면 run_tag 가 이 값으로 갈린다.
+        기본값 스냅샷(_default_lrs)이 없는 옛 config 객체에서는 항상 '' (옛 동작)."""
+        d_lr, d_elr = getattr(self, "_default_lrs", (None, None))
+        out = ""
+        cur = getattr(self, "learning_rate", None)
+        if d_lr is not None and cur is not None and float(cur) != d_lr:
+            out += f"_lr{float(cur):g}"
+        enc = getattr(self, "encoder_learning_rate", None)
+        if d_elr is not None and enc is not None and float(enc) != d_elr:
+            out += f"_elr{float(enc):g}"
+        return out
 
     @property
     def others_entropy_threshold(self) -> float:

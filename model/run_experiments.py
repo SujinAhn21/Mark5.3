@@ -87,6 +87,7 @@
 
 import argparse
 import csv
+import json
 import os
 import subprocess
 import sys
@@ -169,7 +170,7 @@ def _summary_is_complete(path):
         return False
 
 
-def _run_tag(mark_version, seed, unlabeled_n, ceiling=False, labeled_n=None, spill=False, ps=None):
+def _run_tag(mark_version, seed, unlabeled_n, ceiling=False, labeled_n=None, spill=False, ps=None, lr=None, encoder_lr=None):
     """config 의 run_tag 를 그대로 쓴다(파일명 규칙을 두 곳에 적어두면 어긋난다)."""
     from vild_config import AudioViLDConfig
     c = AudioViLDConfig(mark_version=mark_version)
@@ -179,7 +180,37 @@ def _run_tag(mark_version, seed, unlabeled_n, ceiling=False, labeled_n=None, spi
     c.labeled_n = labeled_n          # [신설 2026-09-17 / 8절] _l<n>
     c.spill_labeled = bool(spill)    # _sp
     c.pseudo_source = ps             # _ps<이름>
+    c.apply_cli_learning_rates(lr, encoder_lr)   # [신설 2026-09-25 / LR] 기본값과 다를 때만 _lr/_elr (train·eval 과 같은 규칙)
     return c.run_tag
+
+
+# [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py) 산출물. 있으면 본실험 전 회차에 자동으로 --lr/--encoder_lr 을 넘긴다.
+SELECTED_LR_JSON = os.path.join(PROJECT_ROOT, "plots", "lr_selected.json")
+
+
+def _resolve_learning_rates(args):
+    """(새 층 lr, 백본 lr, 출처 설명). 우선순위: 명령줄 --lr/--encoder_lr(하나라도 주면 json 은 안 읽는다) > plots/lr_selected.json
+    (--ignore_selected_lr 이 아니면) > None(config 기본값 = 옛 동작). 선정값이 기본값과 같으면 태그가 안 바뀌어 끝난 회차는 [건너뜀] 이 되고,
+    다르면 태그에 _lr/_elr 이 붙어 전 회차를 새로 돈다(옛 산출물은 안 덮인다)."""
+    if args.lr is not None or args.encoder_lr is not None:
+        return args.lr, args.encoder_lr, "명령줄 --lr/--encoder_lr"
+    if args.ignore_selected_lr or not os.path.isfile(SELECTED_LR_JSON):
+        return None, None, ("config 기본값 (--ignore_selected_lr)" if args.ignore_selected_lr else "config 기본값 (lr_selected.json 없음)")
+    try:
+        with open(SELECTED_LR_JSON, encoding="utf-8") as f:
+            sel = json.load(f)
+        _ = float(sel["lr"])          # 필수 키가 있는지 여기서 확인한다
+    except Exception as e:
+        raise SystemExit(f"[ERROR] {SELECTED_LR_JSON} 을 읽을 수 없습니다({type(e).__name__}: {e}). "
+                         "select_lr.py 를 다시 돌리거나 --ignore_selected_lr 을 주십시오.")
+    if sel.get("model") != args.mark_version:
+        raise SystemExit(f"[ERROR] {SELECTED_LR_JSON} 은 model={sel.get('model')!r} 로 만든 것인데 지금 --mark_version 은 "
+                         f"{args.mark_version!r} 입니다. select_lr.py 를 다시 돌리거나 --ignore_selected_lr 을 주십시오.")
+    lr = float(sel["lr"])
+    elr = None if sel.get("encoder_lr") is None else float(sel["encoder_lr"])
+    src = (f"plots/lr_selected.json (선정 {sel.get('selected_at')} · {sel.get('criterion')} · seed {sel.get('sweep_seed')}"
+           + (" · 기본값과 같음" if sel.get("selected_is_default") else " · 기본값과 다름 → run_tag 에 _lr/_elr") + ")")
+    return lr, elr, src
 
 
 # [신설 2026-09-17 / 8절] 논문 회차 계획(체크리스트 8절). (labeled_n, unlabeled_n|"ceil") 조합 x seed.
@@ -361,7 +392,14 @@ def main():
                          "--unlabeled_ns 는 무시된다.")
     ap.add_argument("--ceiling_csv", type=str, default="ceiling_labels.csv",
                     help="천장용 라벨 CSV(프로젝트 루트 기준). model/make_ceiling_labels.py 가 만든다.")
+    # [신설 2026-09-25 / LR] 학습률. 안 주면 plots/lr_selected.json(select_lr.py 산출)을 읽고, 그것도 없으면 config 기본값.
+    ap.add_argument("--lr", type=float, default=None, help="새 층 학습률을 직접 지정(주면 lr_selected.json 을 안 읽는다)")
+    ap.add_argument("--encoder_lr", type=float, default=None, help="백본 학습률을 직접 지정(주면 lr_selected.json 을 안 읽는다)")
+    ap.add_argument("--ignore_selected_lr", action="store_true", help="lr_selected.json 이 있어도 무시하고 config 기본값으로 돈다")
     args = ap.parse_args()
+    sel_lr, sel_elr, lr_src = _resolve_learning_rates(args)
+    _lr_args = ((["--lr", repr(float(sel_lr))] if sel_lr is not None else [])
+                + (["--encoder_lr", repr(float(sel_elr))] if sel_elr is not None else []))   # repr: round-trip 보장(:g 는 6자리)
 
     if args.ceiling:
         _cp = args.ceiling_csv if os.path.isabs(args.ceiling_csv) else os.path.join(PROJECT_ROOT, args.ceiling_csv)
@@ -436,6 +474,9 @@ def main():
             print(f" labeled  : {args.labeled_ns} (0=전량)")
             print(f" unlabeled: {args.unlabeled_ns}")
         print(f" seeds    : {args.seeds}")
+        print(" 학습률   : " + (f"새 층 {sel_lr:g} · 백본 {sel_elr:g}" if sel_lr is not None and sel_elr is not None
+                             else f"새 층 {'기본' if sel_lr is None else f'{sel_lr:g}'} · 백본 {'기본' if sel_elr is None else f'{sel_elr:g}'}")
+              + f"  ← {lr_src}")
         if timeout_sec:
             print(f" 단계 제한: {args.step_timeout_min}분")
         if master_path:
@@ -448,7 +489,8 @@ def main():
 
         todo, done = [], []
         for l, n, s, sp, ps in combos:
-            tag = _run_tag(args.mark_version, s, None if n == "ceil" else n, ceiling=(n == "ceil"), labeled_n=l, spill=sp, ps=ps)
+            tag = _run_tag(args.mark_version, s, None if n == "ceil" else n, ceiling=(n == "ceil"), labeled_n=l, spill=sp, ps=ps,
+                           lr=sel_lr, encoder_lr=sel_elr)
             need = _needs(args.mark_version, tag, args.force, args.skip_test)
             (todo if any(need) else done).append((l, n, s, sp, ps, tag, need))
 
@@ -495,11 +537,11 @@ def main():
             _ps = ["--pseudo_csv", PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s), "--pseudo_source", ps] if ps else []
             if n == "ceil":
                 # 천장: 학습은 CSV 경로를, 평가는 --ceiling 플래그를 받아 같은 태그(_ceil_s<k>)를 만든다.
-                common = ["--mark_version", args.mark_version, "--seed", str(s)] + _lab
+                common = ["--mark_version", args.mark_version, "--seed", str(s)] + _lab + _lr_args   # [LR] train·eval 둘 다
                 train_args = common + ["--ceiling_csv", args.ceiling_csv]
                 eval_args = common + ["--ceiling"]
             else:
-                common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)] + _lab
+                common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)] + _lab + _lr_args
                 train_args = common + _sp + _ps
                 eval_args = common + _sp + (["--pseudo_source", ps] if ps else [])
             failed_stage = None

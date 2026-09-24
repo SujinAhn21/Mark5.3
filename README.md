@@ -7,6 +7,10 @@
 > - `--pseudo_csv/--pseudo_source`: teacher 8개 대신 CSV 라벨(자기학습 self / 단일 generalist gen). `model/make_pseudo_labels.py` 가 만든다. feature KD 없음.
 > - 실행기 `model/run_experiments.py --preset paper`(55회: labeled 전량·200·500·1,000 × u0/u2000/ceil + l200 곡선 u500·u1000) ·
 >   `--preset plsource`(15회: l200+3,800 에서 합의/self/gen) · 또는 `--labeled_ns … --unlabeled_ns … --seeds …`.
+> - **학습률 선정(2026-09-25)** `model/select_lr.py`: 새 층 {2e-4,1e-4,5e-5} × 백본 {1e-4,5e-5,2e-5} = 9회를 seed 0 · `--unlabeled_n 2000` 으로 학습해
+>   val Macro F1 로 고른다. 비교모델 `--phase sweep` 과 같은 것은 **축당 후보 3개 · seed 0 분리 · val Macro F1 · test 미사용**이고, 다른 것은
+>   **축 개수(1축 3회 vs 2축 9회)** 와 **선정 조건(비교모델은 cond=sup, 제안모델은 본실험 조건 u2000)** 이다 — 논문에 둘 다 적는다. 결과 `plots/lr_selected.json` 이 있으면 `run_experiments.py` 가
+>   자동으로 `--lr/--encoder_lr` 을 넘긴다(`--ignore_selected_lr` 로 끔). 학습률이 config 기본값과 다를 때만 run_tag 에 `_lr<값>`·`_elr<값>` 이 붙는다.
 > - 집계 `model/aggregate_results.py [--baseline_raw <비교모델 aggregate_raw csv>…]`: 표 1·곡선·천장·검정(기존) +
 >   라벨 효율 표(`paper_table_label_eff_*`) · l200 곡선 · 출처 비교 표(`paper_table_plsource_*`) · 비교모델 짝지은 검정(`aggregate_tests_vs_baseline_*`).
 > - 상한(ceil) 라벨 CSV 는 새 데이터 기준으로 `model/make_ceiling_labels.py` 로 다시 만들어야 한다(저장소의 ceiling_labels.csv 는 mark5.0 시절 것).

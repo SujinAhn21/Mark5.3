@@ -498,7 +498,7 @@ def _stable_file_split(path, val_ratio=0.1):
 
 
 def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceiling_csv=None, labeled_n=None,
-                pseudo_csv=None, pseudo_source=None, spill_labeled=False):
+                pseudo_csv=None, pseudo_source=None, spill_labeled=False, lr=None, encoder_lr=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 실험 조건으로 받는다.
 
     두 인자 모두 None 이면 기존 Mark5 와 완전히 같은 동작이다
@@ -529,6 +529,11 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         raise ValueError("[ERROR] --pseudo_csv 는 천장 조건과 함께 쓸 수 없습니다(천장은 unlabeled 를 쓰지 않음).")
     config.pseudo_source = pseudo_source
     config.spill_labeled = bool(spill_labeled)
+    # [신설 2026-09-25 / LR] 명령줄 학습률(--lr 새 층 / --encoder_lr 백본). 기본값과 다르면 run_tag 에 _lr/_elr 이 붙으므로
+    # 태그가 처음 쓰이기 전에 넣는다. 옵티마이저(아래 "[변경 2026-09-17] 백본 학습률 분리")는 config 값을 읽으니 그대로다.
+    _lr_txt = config.apply_cli_learning_rates(lr, encoder_lr)
+    if _lr_txt:
+        print(f"[LR] 명령줄 학습률: {_lr_txt} · run_tag {config.run_tag}")
     if spill_labeled and labeled_n is None:
         raise ValueError("[ERROR] --spill_labeled 는 --labeled_n 과 함께 써야 합니다(남은 labeled 를 unlabeled 로 돌리는 옵션).")
     if is_ceiling and unlabeled_n not in (None, 0):
@@ -1231,7 +1236,14 @@ if __name__ == "__main__":
                         help="--pseudo_csv 의 출처 이름(self | gen). run_tag 에 _ps<이름> 이 붙는다.")
     parser.add_argument("--spill_labeled", action="store_true",
                         help="--labeled_n 으로 뽑고 남은 labeled 를 라벨 없이 unlabeled 풀에 합친다(태그 _sp).")
+    # [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py)용. 안 주면 config 기본값(새 층 1e-4 · 백본 5e-5)·옛 태그 그대로.
+    # run_experiments.py 는 plots/lr_selected.json 이 있으면 이 두 값을 자동으로 넘긴다.
+    parser.add_argument("--lr", type=float, default=None,
+                        help="[LR 2026-09-25] 새로 만드는 층(투영·branch·background)의 학습률. 기본값과 다르면 run_tag 에 _lr<값>")
+    parser.add_argument("--encoder_lr", type=float, default=None,
+                        help="[LR 2026-09-25] 사전학습 백본(mn10)의 학습률. 기본값과 다르면 run_tag 에 _elr<값>. eval 에도 같은 값을 줄 것")
     args = parser.parse_args()
     train_mark5(seed_value=args.seed, mark_version=args.mark_version,
                 unlabeled_n=args.unlabeled_n, ceiling_csv=args.ceiling_csv, labeled_n=args.labeled_n,
-                pseudo_csv=args.pseudo_csv, pseudo_source=args.pseudo_source, spill_labeled=args.spill_labeled)
+                pseudo_csv=args.pseudo_csv, pseudo_source=args.pseudo_source, spill_labeled=args.spill_labeled,
+                lr=args.lr, encoder_lr=args.encoder_lr)

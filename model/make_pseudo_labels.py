@@ -249,6 +249,9 @@ def main():
     ap.add_argument("--out", type=str, default=None)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--allow_config_rule", action="store_true", help="동작 확인용: val 선택 json 이 없어도 진행(self: config 기본 규칙, gen: argmax)")
+    # [신설 2026-09-25 / LR] self 의 학습 run_tag 를 맞추는 용도(gen 은 비교모델 체크포인트라 영향 없음).
+    ap.add_argument("--lr", type=float, default=None, help="[LR] self student 학습 때 준 --lr 과 같은 값(run_tag _lr<값>)")
+    ap.add_argument("--encoder_lr", type=float, default=None, help="[LR] self student 학습 때 준 --encoder_lr 과 같은 값(run_tag _elr<값>)")
     args = ap.parse_args()
 
     config = AudioViLDConfig(mark_version=args.mark_version)
@@ -258,6 +261,11 @@ def main():
         config.experiment_seed = args.seed
         config.labeled_n = args.labeled_n
         config.unlabeled_n = 0 if args.unlabeled_n is None else args.unlabeled_n
+        _lr_txt = config.apply_cli_learning_rates(args.lr, args.encoder_lr)   # [LR 2026-09-25] run_tag 를 그 회차와 맞춘다
+        if _lr_txt:
+            print(f"[LR] 명령줄 학습률: {_lr_txt} (self 회차 run_tag 맞추기용) · run_tag {config.run_tag}")
+    elif args.lr is not None or args.encoder_lr is not None:
+        raise SystemExit("[ERROR] --lr/--encoder_lr 은 --source self 에서만 뜻이 있습니다(gen 은 비교모델 체크포인트라 run_tag 를 쓰지 않습니다).")
     pool = _pool(config, args.labeled_n, args.seed, args.spill_labeled, args.limit)
     ckpt = args.ckpt if os.path.isabs(args.ckpt) else os.path.join(PROJECT_ROOT, args.ckpt)
     if not os.path.isfile(ckpt):

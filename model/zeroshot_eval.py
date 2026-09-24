@@ -328,6 +328,9 @@ def main():
     ap.add_argument("--ceiling", action="store_true")
     ap.add_argument("--spill_labeled", action="store_true")
     ap.add_argument("--pseudo_source", type=str, default=None)
+    # [신설 2026-09-25 / LR] 학습 때 준 --lr/--encoder_lr 과 같은 값. 안 주면 config 기본값의 태그를 찾는다(옛 동작).
+    ap.add_argument("--lr", type=float, default=None, help="[LR] 학습 때 준 --lr 과 같은 값(run_tag _lr<값>)")
+    ap.add_argument("--encoder_lr", type=float, default=None, help="[LR] 학습 때 준 --encoder_lr 과 같은 값(run_tag _elr<값>)")
     ap.add_argument("--zeroshot_bank", type=str, default=os.path.join(SHARED_DIR, "resources", "zeroshot_prompt_bank.json"))
     ap.add_argument("--limit", type=int, default=None, help="동작 확인용: 세트마다 라벨별 앞 N 클립만(산출물 이름에 _limitN)")
     ap.add_argument("--allow_config_rule", action="store_true", help="동작 확인용: val 선택 json 이 없어도 config 기본 others 규칙으로 진행")
@@ -337,6 +340,9 @@ def main():
     config.experiment_seed = args.seed; config.unlabeled_n = None if args.ceiling else args.unlabeled_n
     config.ceiling = args.ceiling; config.labeled_n = args.labeled_n
     config.spill_labeled = args.spill_labeled; config.pseudo_source = args.pseudo_source
+    _lr_txt = config.apply_cli_learning_rates(args.lr, args.encoder_lr)   # [LR 2026-09-25] run_tag 를 학습 때와 맞춘다
+    if _lr_txt:
+        print(f"[LR] 명령줄 학습률: {_lr_txt} (체크포인트 이름 맞추기용)")
     device = config.device
     tag = config.run_tag
     suffix = f"_limit{args.limit}" if args.limit else ""
