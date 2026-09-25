@@ -1243,7 +1243,20 @@ if __name__ == "__main__":
     parser.add_argument("--encoder_lr", type=float, default=None,
                         help="[LR 2026-09-25] 사전학습 백본(mn10)의 학습률. 기본값과 다르면 run_tag 에 _elr<값>. eval 에도 같은 값을 줄 것")
     args = parser.parse_args()
-    train_mark5(seed_value=args.seed, mark_version=args.mark_version,
-                unlabeled_n=args.unlabeled_n, ceiling_csv=args.ceiling_csv, labeled_n=args.labeled_n,
-                pseudo_csv=args.pseudo_csv, pseudo_source=args.pseudo_source, spill_labeled=args.spill_labeled,
-                lr=args.lr, encoder_lr=args.encoder_lr)
+    # [신설 2026-09-26] 화면에 찍히는 것을 logFiles/<run_tag>__train.log 에도 그대로 남긴다.
+    # run_tag 를 알아야 파일 이름이 정해지므로 config 를 먼저 한 번 만든다(텍스트 임베딩은 이때 안 만들어진다).
+    from run_logger import RunLogger
+    _c = AudioViLDConfig(mark_version=args.mark_version)
+    _c.experiment_seed = args.seed
+    _is_ceil = bool(args.ceiling_csv)
+    _c.ceiling = _is_ceil
+    _c.unlabeled_n = None if _is_ceil else args.unlabeled_n
+    _c.labeled_n = args.labeled_n
+    _c.pseudo_source = args.pseudo_source
+    _c.spill_labeled = bool(args.spill_labeled)
+    _c.apply_cli_learning_rates(args.lr, args.encoder_lr)
+    with RunLogger(PROJECT_ROOT, _c.run_tag, "train"):
+        train_mark5(seed_value=args.seed, mark_version=args.mark_version,
+                    unlabeled_n=args.unlabeled_n, ceiling_csv=args.ceiling_csv, labeled_n=args.labeled_n,
+                    pseudo_csv=args.pseudo_csv, pseudo_source=args.pseudo_source, spill_labeled=args.spill_labeled,
+                    lr=args.lr, encoder_lr=args.encoder_lr)

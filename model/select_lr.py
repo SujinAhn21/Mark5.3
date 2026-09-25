@@ -273,8 +273,11 @@ def _sh(cmd, log_path=None, timeout_sec=None):
     proc, killer, timed_out = None, None, []
     try:
         try:
+            # [신설 2026-09-26] 자식(train_mark5·eval)도 스스로 <run_tag>__*.log 를 남기게 됐다. 여기서 이미 같은
+            # 파일에 받아 적고 있으므로, 환경변수로 자식 쪽 기록을 끈다(같은 줄이 두 번 들어가지 않게).
+            _env = dict(os.environ); _env["MARK5_CHILD_LOG_BY_PARENT"] = "1"
             proc = subprocess.Popen(cmd, cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    universal_newlines=True, bufsize=1, encoding="utf-8", errors="replace")
+                                    universal_newlines=True, bufsize=1, encoding="utf-8", errors="replace", env=_env)
         except Exception as e:
             print(f"[FAIL] 실행 자체가 안 됐습니다: {e}")
             return False

@@ -708,8 +708,19 @@ if __name__ == "__main__":
     parser.add_argument("--others_threshold", type=str, default=None,
                         help="others 규칙을 고정: 실수(direct 임계값) 또는 'argmax'. 주지 않으면 val 에서 고른 값 사용")
     args = parser.parse_args()
-    evaluate(mark_version=args.mark_version, split=args.split,
-             seed_value=args.seed, unlabeled_n=args.unlabeled_n, ceiling=args.ceiling,
-             others_threshold=args.others_threshold, labeled_n=args.labeled_n,
-             spill_labeled=args.spill_labeled, pseudo_source=args.pseudo_source,
-             lr=args.lr, encoder_lr=args.encoder_lr)
+    # [신설 2026-09-26] logFiles/<run_tag>__eval_<split>.log 에도 남긴다.
+    from run_logger import RunLogger
+    _c = AudioViLDConfig(mark_version=args.mark_version)
+    _c.experiment_seed = args.seed
+    _c.ceiling = bool(args.ceiling)
+    _c.unlabeled_n = None if args.ceiling else args.unlabeled_n
+    _c.labeled_n = args.labeled_n
+    _c.spill_labeled = bool(args.spill_labeled)
+    _c.pseudo_source = args.pseudo_source
+    _c.apply_cli_learning_rates(args.lr, args.encoder_lr)
+    with RunLogger(PROJECT_ROOT, _c.run_tag, f"eval_{args.split}"):
+        evaluate(mark_version=args.mark_version, split=args.split,
+                 seed_value=args.seed, unlabeled_n=args.unlabeled_n, ceiling=args.ceiling,
+                 others_threshold=args.others_threshold, labeled_n=args.labeled_n,
+                 spill_labeled=args.spill_labeled, pseudo_source=args.pseudo_source,
+                 lr=args.lr, encoder_lr=args.encoder_lr)
