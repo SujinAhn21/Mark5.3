@@ -95,6 +95,17 @@ def load_student(config, device):
     if bs is not None:
         branch.load_state_dict(bs, strict=False)
     text_head = ViLDTextHead(config).to(device)
+    # [이식 2026-09-26 / Mark5.2] classifier_state_dict 를 헤드에 로드한다. 학습형 로짓 스케일(LT)을 켠 뒤로는
+    # 이 줄이 없으면 학습된 온도가 평가에서 조용히 무시된다.
+    _cls_state = ckpt.get("classifier_state_dict")
+    if getattr(text_head, "learnable", False):
+        if not _cls_state or "logit_scale" not in _cls_state:
+            raise RuntimeError("[ERROR] 체크포인트에 logit_scale 이 없습니다 — 학습형 로짓 스케일이 없던 "
+                               "2026-09-24 이전 코드로 학습한 모델이거나 run_tag 가 어긋난 것입니다.")
+        text_head.load_state_dict(_cls_state)
+        print(f"[LT] 학습형 로짓 스케일 로드: T={text_head.temperature:.4f} (초기 {getattr(config, 'logit_temperature', 0.07)})")
+    elif _cls_state:
+        text_head.load_state_dict(_cls_state, strict=False)
     bg = None
     if config.use_background_embedding and ckpt.get("background_state_dict") is not None:
         bg = LearnableBackgroundEmbedding(config.embedding_dim).to(device)

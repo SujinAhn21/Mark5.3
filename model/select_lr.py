@@ -31,7 +31,7 @@
 
 run_tag
   학습률이 기본값과 다를 때만 _lr<값>·_elr<값> 이 붙는다(vild_config.lr_tag). 그래서 기본값 조합은 회차 꼬리표로만 구분한다.
-    Mark5.2   : <설정>[_AC][_LT][_lr..][_elr..]_lrsel_s0        (--tag_suffix _lrsel_s0)
+    Mark5.2   : <설정>_AC_LT[_lr..][_elr..]_lrsel_s0            (--tag_suffix _lrsel_s0 · AC/LT 는 본 모델 기본이라 언제나 붙는다)
     Mark5_EXP2: <설정>[_lr..][_elr..]_u2000_s0                   (--seed 0 --unlabeled_n 2000 — 본실험 표 1 조건과 같은 조건)
   seed 0 은 본실험(1~5)에 없으므로 어느 산출물과도 안 겹친다.
 
@@ -41,12 +41,11 @@ run_tag
   끝난 단계는 건너뛴다. 세션이 끊기면 같은 명령을 다시 돌리면 된다. 학습을 새로 시작하는 회차는 옛 val 산출물을 먼저 지운다.
 
 --extra 로 넘길 수 있는 것(태그 계산에 반영해야 하므로 화이트리스트)
-  Mark5.2   : --anchor_center · --learn_temp          (AC+LT 를 채택했으면 그 구조에서 선정한다)
+  Mark5.2   : (없음 — 앵커 중심화·학습형 로짓 스케일은 2026-09-26 부터 본 모델 기본이라 인자로 켜고 끄지 않는다)
   Mark5_EXP2: --unlabeled_n N · --labeled_n N          (안 주면 --unlabeled_n 2000 을 넣는다)
 
 예)  python model/select_lr.py --dry_run
      python model/select_lr.py                                             # 3x3 = 9회
-     python model/select_lr.py --extra "--anchor_center --learn_temp"      # AC+LT 구조에서 (Mark5.2)
      python model/select_lr.py --lrs 2e-4 1e-4 5e-5 --encoder_lrs 1e-4 5e-5 2e-5
      python model/select_lr.py --force                                     # 끝난 회차도 다시
 """
@@ -93,7 +92,7 @@ def _repo_kind(mark_version):
     return "exp2" if hasattr(_config(mark_version), "experiment_seed") else "mark52"
 
 
-_WHITELIST = {"mark52": {"--anchor_center": 0, "--learn_temp": 0},
+_WHITELIST = {"mark52": {},
               "exp2": {"--unlabeled_n": 1, "--labeled_n": 1}}
 
 
@@ -125,8 +124,7 @@ def _parse_extra(extra, kind):
 def _tag(mark_version, kind, cfg, lr, encoder_lr, seed):
     c = _config(mark_version)
     if kind == "mark52":
-        c.anchor_centering = bool(cfg.get("--anchor_center", False))
-        c.learnable_logit_scale = bool(cfg.get("--learn_temp", False))
+        # [확정 2026-09-26] AC/LT 는 config 기본값으로 언제나 켜져 있다(태그에도 _AC_LT 가 고정으로 붙는다).
         c.run_tag_suffix = f"_lrsel_s{seed}"
     else:
         c.experiment_seed = seed
@@ -354,7 +352,7 @@ def main():
     ap.add_argument("--lrs", type=float, nargs="+", default=DEFAULT_LRS, help="새 층 학습률 후보")
     ap.add_argument("--encoder_lrs", type=float, nargs="+", default=DEFAULT_ENCODER_LRS, help="백본 학습률 후보")
     ap.add_argument("--sweep_seed", type=int, default=SWEEP_SEED, help="선정용 seed(본실험 1~5 와 겹치지 않게 0)")
-    ap.add_argument("--extra", type=str, default="", help='train·eval 에 그대로 넘길 인자(화이트리스트). 예: "--anchor_center --learn_temp"')
+    ap.add_argument("--extra", type=str, default="", help='train·eval 에 그대로 넘길 인자(화이트리스트). Mark5_EXP2 예: "--unlabeled_n 2000"')
     ap.add_argument("--force", action="store_true", help="끝난 회차도 다시 돈다")
     ap.add_argument("--dry_run", action="store_true", help="계획만 출력")
     ap.add_argument("--step_timeout_min", type=float, default=None, help="한 단계 시간 제한(분)")

@@ -236,6 +236,17 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
     else:
         print("[WARN] branch_state_dict가 없어 기본 branch head로 평가합니다. 새 모델 재학습이 권장됩니다.")
     text_head = ViLDTextHead(config).to(device)
+    # [이식 2026-09-26 / Mark5.2] classifier_state_dict 를 헤드에 로드한다. 학습형 로짓 스케일(LT)을 켠 뒤로는
+    # 이 줄이 없으면 학습된 온도가 평가에서 조용히 무시된다.
+    _cls_state = checkpoint.get("classifier_state_dict")
+    if getattr(text_head, "learnable", False):
+        if not _cls_state or "logit_scale" not in _cls_state:
+            raise RuntimeError("[ERROR] 체크포인트에 logit_scale 이 없습니다 — 학습형 로짓 스케일이 없던 "
+                               "2026-09-24 이전 코드로 학습한 모델이거나 run_tag 가 어긋난 것입니다.")
+        text_head.load_state_dict(_cls_state)
+        print(f"[LT] 학습형 로짓 스케일 로드: T={text_head.temperature:.4f} (초기 {getattr(config, 'logit_temperature', 0.07)})")
+    elif _cls_state:
+        text_head.load_state_dict(_cls_state, strict=False)
     text_emb = config.get_class_text_embeddings(for_evaluation=True).to(device)
 
     # [추가] 학습형 background(others) 임베딩 로드. use_background_embedding=False거나

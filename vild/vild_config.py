@@ -412,9 +412,18 @@ class AudioViLDConfig:
         self._default_lrs = (float(self.learning_rate),
                              None if getattr(self, "encoder_learning_rate", None) is None else float(self.encoder_learning_rate))
 
+        # [이식 2026-09-26 / Mark5.2] 앵커 중심화(AC)·학습형 로짓 스케일(LT)은 본 모델의 구성 요소다. 끄는 경로는 없고
+        # run_tag 에는 언제나 _AC_LT 가 붙는다(AC/LT 없이 돌린 2026-09-24 이전 산출물과 이름이 겹치지 않게).
+        #  anchor_centering    : 텍스트 앵커에서 평가용 9클래스 앵커의 평균 벡터를 뺀다(제로샷 목록에도 같은 벡터를 뺀다).
+        #  learnable_logit_scale: ViLDTextHead 의 temperature 를 CLIP 처럼 학습 파라미터로(vild_model.py 주석 참조).
+        self.anchor_centering = True
+        self.learnable_logit_scale = True
+
         # === 내부 캐시 ===
         self._text_emb = None
         self._eval_text_emb = None # 평가용 텍스트 임베딩 캐시 추가
+        self._eval_text_emb_raw = None   # [이식 2026-09-26] 중심화 전 원본(평가용 9클래스). 평균 벡터의 근거.
+        self._anchor_mean = None         # [이식 2026-09-26] 앵커 중심화용 평균 벡터 [1, D]. 한 번 정하면 고정.
         self._prompt_texts = None
         self.prompt_templates = get_prompt_templates(self.prompt_bank_path)
         self.class_synonyms = get_class_synonyms(self.prompt_bank_path)
@@ -510,6 +519,8 @@ class AudioViLDConfig:
         # _lr<새 층>·_elr<백본> 이 붙는다(기본값이면 옛 태그 그대로 — 지금까지의 산출물과 재개 판정이 안 깨진다).
         # 표기는 비교모델 common/naming.py 와 같은 f"{lr:g}"(예: 5e-05 · 0.0002). 자리는 설정 태그의 맨 끝, 실험 조건 태그
         # (_l/_u/_ceil/_sp/_ps/_s) 앞 — aggregate_results._TAG_RE 는 이 앞부분을 통째로 '설정(base)' 으로 읽는다.
+        # [이식 2026-09-26 / Mark5.2] 앵커 중심화·학습형 로짓 스케일은 본 모델의 구성 요소라 언제나 붙는다.
+        tag += "_AC_LT"
         tag += self.lr_tag
         # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그. None 이면 안 붙는다(0 도 유효 조건이라 "is not None").
         # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil. [추가 2026-09-17] labeled_n 은 _l<n> 으로 그 앞에.
@@ -607,32 +618,56 @@ class AudioViLDConfig:
     def get_prompt_texts_for_class(self, class_name: str) -> list:
         return get_prompt_texts_for_class(class_name, self.prompt_bank_path)
 
+    def _encode_class_prompts(self, classes) -> torch.Tensor:
+        """[이식 2026-09-26 / Mark5.2] 클래스 목록을 프롬프트 평균 임베딩 [C, D] 로. 중심화는 하지 않는다."""
+        model = SentenceTransformer('all-MiniLM-L6-v2', device=self.device)
+        aggregated = []
+        for class_name in classes:
+            prompts = self.get_prompt_texts_for_class(class_name)
+            emb = model.encode(prompts, convert_to_tensor=True).to(self.device)
+            aggregated.append(emb.mean(dim=0))
+        return torch.stack(aggregated, dim=0)
+
+    def get_anchor_mean(self) -> torch.Tensor:
+        """[이식 2026-09-26 / Mark5.2] 앵커 중심화용 평균 벡터 [1, D]. 평가용 9클래스(get_classes_for_evaluation) 앵커의
+        평균으로 한 번 정해 캐시한다. 학습·평가·제로샷 어느 목록을 임베딩하든 이 같은 벡터를 빼야 공간이 일치한다."""
+        if self._anchor_mean is None:
+            if self._eval_text_emb_raw is None:
+                self._eval_text_emb_raw = self._encode_class_prompts(self.get_classes_for_evaluation())
+            self._anchor_mean = self._eval_text_emb_raw.mean(dim=0, keepdim=True)
+        return self._anchor_mean
+
+    def _apply_anchor_centering(self, emb: torch.Tensor) -> torch.Tensor:
+        """[이식 2026-09-26 / Mark5.2] 언제나 적용한다(끄는 경로 없음)."""
+        return emb - self.get_anchor_mean().to(emb.device)
+
+    @staticmethod
+    def _mean_offdiag_cosine(emb: torch.Tensor) -> float:
+        n = torch.nn.functional.normalize(emb.detach().float(), dim=1)
+        S = n @ n.T
+        C = S.shape[0]
+        return float((S.sum() - S.diagonal().sum()) / max(C * (C - 1), 1))
+
     def get_class_text_embeddings(self, for_evaluation: bool = False) -> torch.Tensor:
         """
         클래스 이름에 대한 텍스트 임베딩을 생성하여 반환함.
         :param for_evaluation: True일 경우, 평가용 클래스 목록을 사용하여 임베딩을 생성함.
+        [이식 2026-09-26 / Mark5.2] 평가용 9클래스 평균 벡터를 뺀 값을 돌려준다(앵커 중심화는 언제나 적용).
+        정규화는 ViLDTextHead 가 하므로 여기서는 하지 않는다.
         """
         if for_evaluation:
             # 평가용 임베딩 생성 및 캐싱
             if self._eval_text_emb is None:
-                classes = self.get_classes_for_evaluation()
-                model = SentenceTransformer('all-MiniLM-L6-v2', device=self.device)
-                aggregated = []
-                for class_name in classes:
-                    prompts = self.get_prompt_texts_for_class(class_name)
-                    emb = model.encode(prompts, convert_to_tensor=True).to(self.device)
-                    aggregated.append(emb.mean(dim=0))
-                self._eval_text_emb = torch.stack(aggregated, dim=0)
+                if self._eval_text_emb_raw is None:
+                    self._eval_text_emb_raw = self._encode_class_prompts(self.get_classes_for_evaluation())
+                raw = self._eval_text_emb_raw
+                self._eval_text_emb = self._apply_anchor_centering(raw)
+                print(f"[AC] 앵커 중심화: 평가용 {raw.shape[0]}클래스 코사인 평균 {self._mean_offdiag_cosine(raw):+.4f} "
+                      f"→ {self._mean_offdiag_cosine(self._eval_text_emb):+.4f}")
             return self._eval_text_emb
         else:
             # 학습용(기존) 임베딩 생성 및 캐싱
             if self._text_emb is None:
-                classes = self.get_classes_for_text_prompts()
-                model = SentenceTransformer('all-MiniLM-L6-v2', device=self.device)
-                aggregated = []
-                for class_name in classes:
-                    prompts = self.get_prompt_texts_for_class(class_name)
-                    emb = model.encode(prompts, convert_to_tensor=True).to(self.device)
-                    aggregated.append(emb.mean(dim=0))
-                self._text_emb = torch.stack(aggregated, dim=0)
+                raw = self._encode_class_prompts(self.get_classes_for_text_prompts())
+                self._text_emb = self._apply_anchor_centering(raw)
             return self._text_emb

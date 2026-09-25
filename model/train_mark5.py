@@ -214,7 +214,7 @@ class EnsembleTeacher:
 
             classifier_ckpt = load_checkpoint(_resolve_resource_path(paths["classifier_path"]), map_location=device)
             apply_config_metadata(config, classifier_ckpt)
-            classifier = ViLDTextHead(config).to(self.device)
+            classifier = ViLDTextHead(config, learnable=False).to(self.device)   # [이식 2026-09-26] teacher 는 고정 T(저장본에 파라미터 없음)
             classifier.load_state_dict(resolve_state_dict(classifier_ckpt, "classifier_state_dict", "head_state_dict", "head"))
             classifier.eval()
             if "text_embeddings" in classifier_ckpt:

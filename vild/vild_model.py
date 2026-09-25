@@ -1,5 +1,7 @@
 # vild_model.py
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -201,9 +203,29 @@ class ViLDTextHead(nn.Module):
     - CrossEntropyLoss 또는 soft label 학습 시 softmax 적용은 외부에서 처리
     """
 
-    def __init__(self, config):
+    def __init__(self, config, learnable=None):
         super().__init__()
-        self.temperature = getattr(config, 'logit_temperature', 0.07)
+        t = float(getattr(config, 'logit_temperature', 0.07))
+        # [이식 2026-09-26 / Mark5.2] 학습형 로짓 스케일(CLIP·ViLD 원본 방식). 전에는 temperature 가 파이썬 float 고정값이라
+        # 학습되지 않았다. log 공간 파라미터, 초기값 log(1/T) 라 첫 스텝은 고정 T 와 완전히 같다. 상한 log(100)(CLIP 과 동일).
+        # learnable=None 이면 config.learnable_logit_scale 을 따른다. teacher(2-class 전문가)는 저장된 상태에 이 파라미터가
+        # 없으므로 호출부가 learnable=False 를 명시해 부른다.
+        if learnable is None:
+            learnable = bool(getattr(config, 'learnable_logit_scale', False))
+        self.learnable = bool(learnable)
+        if self.learnable:
+            self.logit_scale = nn.Parameter(torch.tensor(math.log(1.0 / t), dtype=torch.float32))
+            self._temperature = None
+        else:
+            self._temperature = t
+
+    @property
+    def temperature(self):
+        """실효 temperature. 고정이면 config 값, 학습형이면 1/exp(logit_scale)(상한 반영). eval.py 의 background
+        override 경로가 text_head.temperature 로 나누므로 학습형에서도 float 을 돌려줘야 한다."""
+        if self.learnable:
+            return 1.0 / float(self.logit_scale.detach().clamp(max=math.log(100.0)).exp())
+        return self._temperature
 
     def forward(self, region_embeddings, class_text_embeddings):
         """
