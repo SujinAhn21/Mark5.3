@@ -24,7 +24,7 @@
   <out_root>/<role>/<category>/esc50_<category>_<원본stem>.wav
   <out_root>/esc50_manifest.csv   provenance 와 같은 열 이름(+role·esc10·license). 아직 data_provenance.xlsx 에는 넣지 않는다 —
                                   어느 클립을 어느 split 에 배정할지는 다음 단계(데이터 재구성 스크립트)가 정하면서 넣는다.
-  out_root 기본값은 ~/workspace/esc50_clips (WSL 홈, aihub_raw 등 원본과 같은 층). 매니페스트 사본은 codes/esc50_clips/ 에 둔다.
+  out_root 기본값은 /mnt/d/workspace/journal/datasets_raw/esc50_clips (USB, aihub_raw 등 원본과 같은 층. WSL 에서는 /mnt/d 를 drvfs 로 연결해야 보인다). 매니페스트 사본은 codes/esc50_clips/ 에 둔다.
   전문가 8개·Mark5_EXP2 가 같은 풀을 나눠 쓴다. 구글 드라이브(NewProject/codes/experiments/esc50_clips, 2026-09-08 이전 이름 AImodels)에는 수진님이 올린다.
 
 사용:
@@ -104,10 +104,10 @@ def pick_window(x, sr):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--esc50_root", type=str, default=os.path.expanduser("~/workspace/esc50_raw/ESC-50-master"))
+    ap.add_argument("--esc50_root", type=str, default=os.path.expanduser("/mnt/d/workspace/journal/datasets_raw/esc50_raw/ESC-50-master"))
     # 기본 출력은 WSL 홈(ext4). USB(FAT32/9p)에 384MB 를 작은 파일로 쓰면 매우 느리고, 오디오는 어차피 git 에 안 올린다.
     # 매니페스트 CSV 만 codes/esc50_clips/ 에 사본을 둔다(provenance 와 같은 층). 드라이브 업로드는 수진님이 한다.
-    ap.add_argument("--out_root", type=str, default=os.path.expanduser("~/workspace/esc50_clips"))
+    ap.add_argument("--out_root", type=str, default=os.path.expanduser("/mnt/d/workspace/journal/datasets_raw/esc50_clips"))
     ap.add_argument("--manifest_copy_dir", type=str, default=os.path.join(CODES_ROOT, "esc50_clips"),
                     help="매니페스트 CSV 사본을 둘 폴더(빈 문자열이면 안 만듦)")
     ap.add_argument("--roles", nargs="+", default=list(ROLES), choices=list(ROLES))

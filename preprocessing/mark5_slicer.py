@@ -427,14 +427,14 @@ def unlabeled_out_path(idx):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--aihub_root", type=str,
-                    default=os.path.expanduser("~/workspace/aihub_raw/71296/extracted"))
+                    default=os.path.expanduser("/mnt/d/workspace/journal/datasets_raw/aihub_raw/71296/extracted"))
     ap.add_argument("--sins_root", type=str,
-                    default=os.path.expanduser("~/workspace/sins_raw"))
+                    default=os.path.expanduser("/mnt/d/workspace/journal/datasets_raw/sins_raw"))
     ap.add_argument("--sins_manifest", type=str,
                     default=os.path.join(PROJECT_ROOT, "..", "Mark4.5",
                                          "preprocessing", "sins_manifest.csv"))
     ap.add_argument("--chime_chunk_dir", type=str,
-                    default=os.path.expanduser("~/workspace/chime_home_raw/chime_home/chunks"))
+                    default=os.path.expanduser("/mnt/d/workspace/journal/datasets_raw/chime_home_raw/chime_home/chunks"))
     ap.add_argument("--chime_manifest", type=str,
                     default=os.path.join(PROJECT_ROOT, "..", "Mark4.5",
                                          "preprocessing", "chime_manifest.csv"))
