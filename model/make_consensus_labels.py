@@ -35,6 +35,12 @@ Mark5 와 다른 것 (논문에 그대로 밝힌다)
   - 분포 정렬은 끈다(2026-08-23 부터 꺼져 있고, EMA 상태가 순서에 따라 달라져 오프라인 생성에 맞지 않음).
   - 채택률은 Mark5 학습 로그의 세그먼트 채택률(증강 view, 약 0.92)과 직접 비교할 수 없다
     (단위와 조건이 다르다). stats 에 세그먼트·클립 채택률을 따로 적는다.
+[2026-09-29 밤 / 클립 전문가] teacher 8개가 클립 단위(Mark4.x clip_input=True, mel 64×301)로 학습된 것이면 — .pth 의 provenance 로
+  자동 판정(train_mark5.detect_teacher_clip_input) — 클립당 teacher 출력이 1개(K=1)라 조각 다수결이 없다. 그때의 규칙:
+  - 클립 채택 = 그 출력 1개가 확신도 >= min_conf 그리고 1등−2등 차이 >= min_gap (--min_segments 는 1 로 강제, 위 조각 규칙의 K=1 특수형)
+  - 클립 라벨 = 그 출력의 argmax(타겟 8종), 확신도 = 그 출력의 확신도, vote_agreement = 1.0
+  Mark5.2 학습(train_mark5.py, 클립 teacher)의 채택 규칙과 같다. consensus_segments.csv 는 클립당 1행(segment_index 0)으로 같은 형식.
+  stats.rule.teacher_input 에 "clip"/"segment" 가 적힌다.
 
 결정성: fusion 에 학습 파라미터가 없고(optimizer 에는 student 만 들어감, train_mark5.py:633) 파서·teacher
 에 난수가 없으며 증강도 없으므로 결과는 seed 와 무관하다. cudnn deterministic 을 켜 GPU 끝자리도 고정한다.
@@ -70,9 +76,11 @@ for p in (PROJECT_ROOT, os.path.join(PROJECT_ROOT, "utils"), os.path.join(PROJEC
     if p not in sys.path:
         sys.path.append(p)
 
-from train_mark5 import EnsembleTeacher, specialist_config_for, _resolve_csv_path, _resolve_resource_path  # noqa: E402
+from train_mark5 import (EnsembleTeacher, specialist_config_for, detect_teacher_clip_input,  # noqa: E402
+                         _resolve_csv_path, _resolve_resource_path)
 from vild_config import AudioViLDConfig                       # noqa: E402
 from vild_parser_teacher import AudioParser                   # noqa: E402
+from vild_parser_common import _normalize_visual_tensor       # noqa: E402  [클립 전문가] 클립 뷰를 teacher 프레임 수(301)로 맞출 때
 from seed_utils import set_seed                               # noqa: E402
 
 _SOURCE_ALIAS = {"data_labeled": "data_source_labeled", "data_unlabeled": "data_source_unlabeled",
@@ -118,7 +126,7 @@ def main():
     ap.add_argument("--min_conf", type=float, default=None, help="세그먼트 채택 임계값(기본: config.pseudo_label_min_confidence=0.5)")
     ap.add_argument("--min_gap", type=float, default=None,
                     help="[2026-09-22 / B] 세그먼트 채택 추가 조건: 1등−2등 전문가 확신도 차이 >= 이 값(기본: config.pseudo_label_min_gap=0.4, 0 이면 옛 동작)")
-    ap.add_argument("--min_segments", type=int, default=3, help="클립 채택에 필요한 채택 세그먼트 수(5개 중, 기본 3=과반)")
+    ap.add_argument("--min_segments", type=int, default=3, help="클립 채택에 필요한 채택 세그먼트 수(5개 중, 기본 3=과반). 전문가가 클립 단위(K=1)면 1 로 강제")
     ap.add_argument("--clips_per_batch", type=int, default=8, help="teacher 한 번 호출에 묶는 클립 수(세그먼트 5개씩)")
     ap.add_argument("--limit", type=int, default=0, help="동작 확인용: 앞에서 N 개만. 산출물 이름에 _limitN 이 붙는다")
     ap.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "consensus_labels.csv"))
@@ -140,8 +148,20 @@ def main():
     label_map = config.get_target_label_map()
     others_idx = class_names.index("others")
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    # ---- teacher 8개 목록(train_mark5.py 와 같은 목록·같은 설정) + [2026-09-29 밤] 입력 단위 판정(클립 64×301 / 조각 64×101×5) ----
+    specialist_config = specialist_config_for(config)   # [2026-09-17] mark5.2 는 talking 키
+    teacher_clip, teacher_frames = detect_teacher_clip_input(specialist_config)
+    if teacher_clip:
+        if args.min_segments != 1:
+            print(f"[INFO] 전문가가 클립 단위라 --min_segments {args.min_segments} 대신 1 을 쓴다(클립당 teacher 출력 1개 · K=1).")
+            args.min_segments = 1
+        print(f"[TEACHER] 전문가 8개 = 클립 단위(mel {config.n_mels}×{teacher_frames}) → 클립당 teacher 출력 1개(K=1). "
+              f"채택 = 확신도 ≥ {min_conf} & 1등−2등 차이 ≥ {min_gap:g} — Mark5.2 학습(train_mark5.py)의 클립 teacher 규칙과 같다")
+    else:
+        print(f"[TEACHER] 전문가 8개 = 조각 단위(mel {config.n_mels}×{config.segment_length} × 최대 {getattr(config, 'max_segments', 5)})")
+    _k_txt = "1/1" if teacher_clip else f"{args.min_segments}/5"
     print(f"[INFO] 합의 라벨 생성: mark_version={args.mark_version}, device={device}, 세그먼트 채택 임계값={min_conf}, 1등−2등 차이>={min_gap:g}, "
-          f"클립 채택 = 채택 세그먼트 >= {args.min_segments}/5, 라벨 = 채택 세그먼트 다수결, 분포 정렬=off, 증강=없음")
+          f"클립 채택 = 채택 세그먼트 >= {_k_txt}, 라벨 = 채택 세그먼트 다수결, 분포 정렬=off, 증강=없음")
     if score_mode == "margin":
         print("[INFO] teacher fusion: 담당 칸 = margin(target-others), others 칸 = -max(margin)  (others_rule 은 이 모드에서 미사용)")
     else:
@@ -157,9 +177,8 @@ def main():
     seg_path = os.path.join(aux_dir, f"consensus_segments{suffix}.csv")
     stats_path = os.path.join(aux_dir, f"consensus_labels_stats{suffix}.json")
 
-    # ---- teacher 8개 (train_mark5.py 와 같은 목록·같은 설정) + 신원 기록 ----
+    # ---- teacher 8개 신원 기록(목록은 위에서 만들었다) ----
     teacher_files = []
-    specialist_config = specialist_config_for(config)   # [2026-09-17] mark5.2 는 talking 키
     for name, spec in specialist_config.items():
         for key in ("encoder_path", "classifier_path"):
             teacher_files.append({"specialist": name, **_file_identity(_resolve_resource_path(spec[key]))})
@@ -238,7 +257,14 @@ def main():
             n_missing += 1
             all_rows.append({"path": path, "keep": 0, "note": "file_missing"})
             continue
-        records = parser.load_and_segment_with_metadata(local)
+        if teacher_clip:
+            # [클립 전문가] 클립 전체 mel 뷰 하나를 teacher 프레임 수(301)로 맞춰 조각 1개짜리 기록으로 — train_mark5.SemiSupervisedDataset 과 같은 텐서.
+            _o = parser.load_clip_with_segments(local)
+            _t = None if _o is None else _normalize_visual_tensor(_o["clip_record"]["tensor"],
+                                                                  (config.num_input_channels, config.n_mels, teacher_frames))
+            records = [] if _t is None else [{"tensor": _t, "segment_index": 0, "start_frame": 0, "saliency": _o["clip_record"]["saliency"]}]
+        else:
+            records = parser.load_and_segment_with_metadata(local)
         if not records:
             n_parse_fail += 1
             all_rows.append({"path": path, "keep": 0, "note": "parse_fail"})
@@ -270,7 +296,9 @@ def main():
     n_read = len(rows) - n_bad
     stats = {
         "generated_at": generated_at, "mark_version": args.mark_version,
-        "rule": {"segment_min_conf": min_conf, "segment_min_gap": min_gap, "clip_min_segments": args.min_segments,
+        "rule": {"teacher_input": ("clip" if teacher_clip else "segment"),          # [2026-09-29 밤] 전문가 입력 단위(.pth provenance 로 판정)
+                 "teacher_clip_frames": (teacher_frames if teacher_clip else None),
+                 "segment_min_conf": min_conf, "segment_min_gap": min_gap, "clip_min_segments": args.min_segments,
                  "clip_label": "majority vote of argmax over kept segments (tie -> larger confidence sum)",
                  "clip_confidence": "mean confidence of kept segments",
                  "score_mode": score_mode, "others_rule": others_rule if score_mode != "margin" else "n/a (margin mode)",

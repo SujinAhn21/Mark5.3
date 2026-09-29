@@ -1,10 +1,9 @@
 # vild_model.py
 
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 class SimpleAudioEncoder(nn.Module):
     """
@@ -206,10 +205,12 @@ class ViLDTextHead(nn.Module):
     def __init__(self, config, learnable=None):
         super().__init__()
         t = float(getattr(config, 'logit_temperature', 0.07))
-        # [이식 2026-09-26 / Mark5.2] 학습형 로짓 스케일(CLIP·ViLD 원본 방식). 전에는 temperature 가 파이썬 float 고정값이라
-        # 학습되지 않았다. log 공간 파라미터, 초기값 log(1/T) 라 첫 스텝은 고정 T 와 완전히 같다. 상한 log(100)(CLIP 과 동일).
+        # [신설 2026-09-24 / F] 학습형 로짓 스케일(CLIP·ViLD 원본 방식). 전에는 temperature 가 파이썬 float 고정값이라
+        # 학습되지 않았다. 2026-09-24 실측: 같은 백본·같은 데이터에서 Mark5.2 의 log(1등/2등) 평균이 3.48 로
+        # EfficientAT(7.90)의 절반 — 확률이 평평해 정답을 2등에 두고 1등을 놓치는 경우가 83.7%(EfficientAT 64.0%).
+        # log 공간 파라미터, 초기값 log(1/T) 라 첫 스텝은 고정 T 와 완전히 같다. 상한 log(100)(CLIP 과 동일).
         # learnable=None 이면 config.learnable_logit_scale 을 따른다. teacher(2-class 전문가)는 저장된 상태에 이 파라미터가
-        # 없으므로 호출부가 learnable=False 를 명시해 부른다.
+        # 없으므로 train_mark5.py 가 learnable=False 를 명시해 부른다.
         if learnable is None:
             learnable = bool(getattr(config, 'learnable_logit_scale', False))
         self.learnable = bool(learnable)
@@ -240,8 +241,38 @@ class ViLDTextHead(nn.Module):
         text_norm = F.normalize(class_text_embeddings, dim=1)
 
         logits = torch.matmul(region_norm, text_norm.T)  # [B, C]
-        logits = logits / self.temperature
+        if self.learnable:
+            logits = logits * self.logit_scale.clamp(max=math.log(100.0)).exp()
+        else:
+            logits = logits / self._temperature
         return logits
+
+
+class LinearClassHead(nn.Module):
+    """[신설 2026-09-29 / 헤드 진단 H] 텍스트 앵커 대신 nn.Linear(embedding_dim, num_classes) 로 로짓을 만드는 헤드.
+
+    왜: ablation A1·A2·A4(2026-09-28)·A3(2026-09-29, seed 1)가 전부 본 모델과 1클립 차이라, EfficientAT-pl 과의 2%p 차이의
+    남은 후보가 분류 헤드(텍스트 앵커 코사인 + AC/LT)였다. 비교모델 EfficientAT 의 mlp 헤드 마지막 층(nn.Linear(960, 9))과
+    같은 방식으로 바꿔 1회 학습해 보는 진단용이다. 우리 경로는 mn10 960 → proj Linear(960→384) → branch Linear(384→384)+LN+ReLU
+    까지 있으므로 마지막 Linear(384→9) 하나만 더하면 깊이가 비교모델과 비슷해진다.
+
+    ViLDTextHead 와 같은 호출 모양 forward(region_emb, class_text_emb) 을 받되 class_text_emb 는 쓰지 않는다 — 학습·평가·효율 측정의
+    호출처를 바꾸지 않기 위해서다. 제로샷(텍스트 임베딩만 바꿔 새 클래스 판정)·앵커 중심화·학습형 로짓 스케일은 이 헤드에서 뜻이 없다.
+    learnable=False · temperature=1.0 은 eval.py 의 logit_scale 로드 분기·background override 경로가 그대로 지나가게 하는 값이다.
+    """
+
+    learnable = False
+
+    def __init__(self, embedding_dim, num_classes):
+        super().__init__()
+        self.linear = nn.Linear(int(embedding_dim), int(num_classes))
+
+    @property
+    def temperature(self):
+        return 1.0
+
+    def forward(self, region_embeddings, class_text_embeddings=None):
+        return self.linear(region_embeddings)   # [B, C]
 
 
 class LearnableBackgroundEmbedding(nn.Module):
@@ -323,14 +354,25 @@ class Mn10AudioEncoder(nn.Module):
                 raise RuntimeError(f"[ERROR] mn10 가중치 키 불일치 — missing={missing}, unexpected={list(res.unexpected_keys)}")
             self.pretrained_loaded = True
             self.pretrained_source = weights_path
-        # 저자 mlp 헤드는 쓰지 않으므로 통째로 떼어낸다(state_dict·파라미터 수에 1.23M 이 헛되이 남지 않게).
-        # _forward_impl 이 self.classifier(x) 를 부르므로 Identity 로 바꿔 둔다(그 출력은 버린다).
         feat_dim = int(self.core.classifier[2].in_features)       # mlp 헤드 첫 Linear 의 입력 = 960 (mn10)
-        self.core.classifier = nn.Identity()
-        self.proj = nn.Sequential(
-            nn.Dropout(getattr(config, "mn10_proj_dropout", 0.3)),
-            nn.Linear(feat_dim, config.embedding_dim),
-        )
+        # [신설 2026-09-29 밤 / PH] head_pretrained_hidden=True 면 저자 mlp 헤드의 사전학습 은닉층(AdaptiveAvgPool → Flatten →
+        # Linear(960→1280) → Hardswish → Dropout)을 살리고 527-class 마지막 Linear 만 뗀다. _forward_impl 의 첫 반환값이 그 은닉 출력
+        # [B, 1280] 이 되고, 그 위에 무작위 층은 텍스트 공간 투영 Linear(1280→384) 하나뿐이다(EfficientAT 비교모델이 은닉층 위에 새
+        # Linear 하나만 얹는 것과 같은 깊이). 2026-09-29 격차 분석: 옛 구조는 이 은닉층을 버리고 무작위 층 둘(proj·branch)+ReLU 병목을
+        # 끼워 넣었었다(Kumar et al. ICLR 2022 — 무작위 헤드가 사전학습 특징을 왜곡). 사전학습 Dropout(0.2)이 이미 있어 proj 에는 Dropout 을 안 둔다.
+        self.use_pretrained_hidden = bool(getattr(config, "head_pretrained_hidden", False))
+        if self.use_pretrained_hidden:
+            hidden_dim = int(self.core.classifier[2].out_features)                       # 960
+            self.core.classifier = nn.Sequential(*list(self.core.classifier.children())[:-1])   # 마지막 Linear(→527) 만 제거
+            self.proj = nn.Sequential(nn.Linear(hidden_dim, config.embedding_dim))
+        else:
+            # 저자 mlp 헤드는 쓰지 않으므로 통째로 떼어낸다(state_dict·파라미터 수에 1.23M 이 헛되이 남지 않게).
+            # _forward_impl 이 self.classifier(x) 를 부르므로 Identity 로 바꿔 둔다(그 출력은 버린다).
+            self.core.classifier = nn.Identity()
+            self.proj = nn.Sequential(
+                nn.Dropout(getattr(config, "mn10_proj_dropout", 0.3)),
+                nn.Linear(feat_dim, config.embedding_dim),
+            )
         self.register_buffer("window", torch.hann_window(self.WIN_LENGTH, periodic=False), persistent=False)
         self.register_buffer("preemphasis", torch.as_tensor([[[-0.97, 1.0]]]), persistent=False)
         mel_basis, _ = torchaudio.compliance.kaldi.get_mel_banks(
@@ -389,12 +431,14 @@ class Mn10AudioEncoder(nn.Module):
         mel = self.frontend(x)
         if augment and self.training:
             mel = self.spec_augment(mel)
-        _logits, features = self.core(mel.unsqueeze(1))          # features: 풀링된 [B, 960]
-        # 원본 _forward_impl 이 features 를 .squeeze() 하므로 배치가 1이면 [960] 이 된다(원본은 자기 헤드 출력으로
-        # 배치 차원을 되살리는데 헤드를 Identity 로 바꿔 그 분기가 안 탄다). eval 은 늘 배치 1 이라 여기서 되살린다.
-        if features.dim() == 1:
-            features = features.unsqueeze(0)
-        return self.proj(features)
+        head_out, features = self.core(mel.unsqueeze(1))         # features: 풀링된 [B, 960] · head_out: classifier 출력
+        # [PH] 사전학습 은닉층을 살렸으면 classifier 출력(Hardswish·Dropout 뒤 [B, 960])을, 아니면 풀링 특징을 투영한다.
+        x = head_out if self.use_pretrained_hidden else features
+        # 원본 _forward_impl 이 .squeeze() 하므로 배치가 1이면 [960] 이 된다(원본은 자기 헤드 출력으로 배치 차원을
+        # 되살리는데 헤드가 Identity 면 그 분기가 안 탄다). eval 은 늘 배치 1 이라 여기서 되살린다.
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+        return self.proj(x)
 
     @staticmethod
     def get_min_input_shape(config=None):
@@ -412,4 +456,14 @@ def build_audio_encoder(config):
         # [신설 2026-09-17] Mark5.2 기본 백본. config.student_input 이 "waveform" 이어야 파서가 파형 세그먼트를 준다.
         return Mn10AudioEncoder(config)
     return SimpleAudioEncoder(config)
+
+
+def build_student_head(config):
+    """[신설 2026-09-29 / 헤드 진단 H] student 분류 헤드 선택 지점(단일 스위치). config.student_head 가 "linear" 면
+    LinearClassHead(진단용, --linear_head), 아니면 ViLDTextHead(본 모델, 텍스트 앵커). train_mark5.py·eval.py·profile_efficiency.py 가
+    같은 함수를 써야 체크포인트의 classifier_state_dict 구조가 맞는다.
+    teacher(train_mark5.EnsembleTeacher)의 헤드는 여기를 거치지 않는다 — Mark4.x 저장본은 ViLDTextHead(learnable=False) 고정."""
+    if getattr(config, "student_head", "text_anchor") == "linear":
+        return LinearClassHead(config.embedding_dim, len(config.get_classes_for_evaluation()))
+    return ViLDTextHead(config)
     

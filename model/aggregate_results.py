@@ -257,16 +257,20 @@ def collect(mark_version, split, allow_mixed=False):
                         ascending=[False, True, True, False, True, True]).reset_index(drop=True)
 
     # [H3] 설정이 다른 결과가 섞였는지 검사
-    configs = sorted(df["config"].unique())
-    if len(configs) > 1:
-        print("\n[ERROR] 설정이 다른 실험 결과가 섞여 있습니다:")
-        for c in configs:
-            print(f"  {c}  ({(df['config'] == c).sum()}건)")
-        if not allow_mixed:
-            print("[ERROR] 이대로 집계하면 조건별 평균이 오염됩니다.")
-            print("        섞을 의도였다면 --allow_mixed_config 를 주십시오.")
-            sys.exit(1)
-        print("[WARN] --allow_mixed_config 로 그대로 진행합니다.")
+    # [2026-09-29 밤 / 묶음] 검사는 '본 조건 묶음(spill 아님 — 표 1~7)' 과 'pseudo-label 출처 비교 묶음(_sp — 표 8)' 을 따로 한다.
+    #   출처 비교의 self/gen 회차는 CSV 가짜 정답 경로라 전문가 확신도가 없어 OR·NEG 를 쓸 수 없고(train_mark5.py 가 멈춤), 그래서
+    #   합의 조건도 같은 플래그(PH·LP·HW 만)로 돌린다 → 이 묶음의 base 는 본 조건과 다를 수 있다. 각 묶음 안에서는 하나여야 한다.
+    for _grp, _mask in (("본 조건", ~df["spill"].astype(bool)), ("pseudo-label 출처 비교(_sp)", df["spill"].astype(bool))):
+        configs = sorted(df.loc[_mask, "config"].unique())
+        if len(configs) > 1:
+            print(f"\n[ERROR] [{_grp}] 설정이 다른 실험 결과가 섞여 있습니다:")
+            for c in configs:
+                print(f"  {c}  ({(df.loc[_mask, 'config'] == c).sum()}건)")
+            if not allow_mixed:
+                print("[ERROR] 이대로 집계하면 조건별 평균이 오염됩니다.")
+                print("        섞을 의도였다면 --allow_mixed_config 를 주십시오.")
+                sys.exit(1)
+            print("[WARN] --allow_mixed_config 로 그대로 진행합니다.")
 
     return df
 

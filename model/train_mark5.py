@@ -29,10 +29,12 @@ from vild_model import (
     LearnableBackgroundEmbedding,
     ViLDTextHead,
     build_audio_encoder,
+    build_student_head,
     build_teacher_encoder,
 )
 from vild_head import DualBranchStudentHead
 from vild_parser_teacher import AudioParser
+from vild_parser_common import _normalize_visual_tensor   # [2026-09-29 밤] 클립 teacher 입력을 teacher_clip_frames 로 맞출 때
 from teacher_fusion import WeightedTeacherFusion
 from seed_utils import set_seed
 SHARED_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "shared_vild"))
@@ -107,20 +109,9 @@ def _align_teacher_arch(config, state_dict, class_name, ckpt_name):
     return detected_large
 
 
-# [변경 2026-09-05] teacher 8개 목록을 모듈 상수로 올렸다. 내용은 그대로다.
-# model/make_consensus_labels.py(비교모델용 합의 라벨 생성기)가 같은 목록을 써야 하는데, 함수 안의
-# 지역 변수라 import 가 안 돼 복제할 수밖에 없었다. 목록이 둘로 갈리면 다른 teacher 조합으로 라벨이
-# 만들어져도 아무도 모른다(code-reviewer 지적). 여기 하나만 고치면 양쪽에 반영된다.
-SPECIALIST_CONFIG = {
-    "heavy_impact": {"mark_version": "mark4.1", "encoder_path": "best_teacher_encoder_mark4.1.pth", "classifier_path": "best_teacher_classifier_mark4.1.pth"},
-    "dragging": {"mark_version": "mark4.2", "encoder_path": "best_teacher_encoder_mark4.2.pth", "classifier_path": "best_teacher_classifier_mark4.2.pth"},
-    "construction": {"mark_version": "mark4.3", "encoder_path": "best_teacher_encoder_mark4.3.pth", "classifier_path": "best_teacher_classifier_mark4.3.pth"},
-    "machine_noise": {"mark_version": "mark4.4", "encoder_path": "best_teacher_encoder_mark4.4.pth", "classifier_path": "best_teacher_classifier_mark4.4.pth"},
-    "media_talking": {"mark_version": "mark4.5", "encoder_path": "best_teacher_encoder_mark4.5.pth", "classifier_path": "best_teacher_classifier_mark4.5.pth"},
-    "water_toilet": {"mark_version": "mark4.6", "encoder_path": "best_teacher_encoder_mark4.6.pth", "classifier_path": "best_teacher_classifier_mark4.6.pth"},
-    "water_shower": {"mark_version": "mark4.7", "encoder_path": "best_teacher_encoder_mark4.7.pth", "classifier_path": "best_teacher_classifier_mark4.7.pth"},
-    "dog_bark": {"mark_version": "mark4.8", "encoder_path": "best_teacher_encoder_mark4.8.pth", "classifier_path": "best_teacher_classifier_mark4.8.pth"},
-}
+# [변경 2026-09-05] teacher 8개 목록은 model/make_consensus_labels.py(비교모델용 합의 라벨 생성기)와 한 곳에서 공유해야 한다
+# (목록이 둘로 갈리면 다른 teacher 조합으로 라벨이 만들어져도 아무도 모른다 — code-reviewer 지적).
+# [이식 2026-09-29 / Mark5.2] 그 한 곳이 아래 specialist_config_for(config) 함수다(옛 모듈 상수 SPECIALIST_CONFIG 는 이 함수 안으로 들어갔다).
 
 
 def select_labeled_subset(labeled_files, labeled_n, seed, classes):
@@ -162,17 +153,6 @@ def load_pseudo_csv(path, classes):
     return lookup
 
 
-def specialist_config_for(config):
-    """[신설 2026-09-17] config.classes 에 맞춘 teacher 목록. mark5.2 는 media_talking 대신 talking 이 담당 칸 이름이라
-    키를 바꿔 준다(fusion 이 키 = 클래스 이름으로 담당 칸을 찾는다). mark5.0 은 그대로. make_consensus_labels.py 도 이것을 쓴다."""
-    out = {}
-    for k, v in SPECIALIST_CONFIG.items():
-        if k == "media_talking" and "talking" in config.classes and "media_talking" not in config.classes:
-            k = "talking"
-        out[k] = v
-    return out
-
-
 class _CsvFusion:
     """[신설 2026-09-17 / 8절] CSV pseudo-label 을 fusion 출력과 같은 모양으로 감싼다(train 루프가 둘을 같은 코드로 다룬다).
     logits: one-hot [B, C] · features: None · uncertainty = 1 - confidence · disagreement 0 · specialist_weights 없음."""
@@ -184,12 +164,50 @@ class _CsvFusion:
         self.specialist_weights = {}
 
 
+def specialist_config_for(config):
+    """[분리 2026-09-29 밤] teacher 8개 목록(train_mark5 안에 인라인이던 dict). Mark5_EXP2 의 같은 이름 함수와 맞춘다 — make_consensus_labels.py 가 쓴다.
+    mark5.2 는 4.5 가 talking, mark5.0 은 media_talking."""
+    talking_key = "talking" if "talking" in config.get_classes_for_evaluation() else "media_talking"
+    return {
+        "heavy_impact": {"mark_version": "mark4.1", "encoder_path": "best_teacher_encoder_mark4.1.pth", "classifier_path": "best_teacher_classifier_mark4.1.pth"},
+        "dragging": {"mark_version": "mark4.2", "encoder_path": "best_teacher_encoder_mark4.2.pth", "classifier_path": "best_teacher_classifier_mark4.2.pth"},
+        "construction": {"mark_version": "mark4.3", "encoder_path": "best_teacher_encoder_mark4.3.pth", "classifier_path": "best_teacher_classifier_mark4.3.pth"},
+        "machine_noise": {"mark_version": "mark4.4", "encoder_path": "best_teacher_encoder_mark4.4.pth", "classifier_path": "best_teacher_classifier_mark4.4.pth"},
+        talking_key: {"mark_version": "mark4.5", "encoder_path": "best_teacher_encoder_mark4.5.pth", "classifier_path": "best_teacher_classifier_mark4.5.pth"},
+        "water_toilet": {"mark_version": "mark4.6", "encoder_path": "best_teacher_encoder_mark4.6.pth", "classifier_path": "best_teacher_classifier_mark4.6.pth"},
+        "water_shower": {"mark_version": "mark4.7", "encoder_path": "best_teacher_encoder_mark4.7.pth", "classifier_path": "best_teacher_classifier_mark4.7.pth"},
+        "dog_bark": {"mark_version": "mark4.8", "encoder_path": "best_teacher_encoder_mark4.8.pth", "classifier_path": "best_teacher_classifier_mark4.8.pth"},
+    }
+
+
+def detect_teacher_clip_input(specialist_config):
+    """[신설 2026-09-29 밤 / 클립 전문가] teacher .pth 8개의 provenance(config_metadata.clip_input · clip_frames)를 읽어
+    "이 전문가들은 클립 전체(64×301)를 보고 학습됐나" 를 판정한다. Mark4.x 가 2026-09-29 부터 clip_input=True 로 저장한다.
+    8개가 섞여 있으면(일부만 클립) 학습을 멈춘다 — 조각 teacher 와 클립 teacher 를 한 앙상블에 섞으면 입력 모양이 다르다.
+    돌려주는 값: (clip_input: bool, clip_frames: int). 옛 파일(키 없음)은 조각 단위(False, 301)."""
+    flags, frames = {}, set()
+    for name, paths in specialist_config.items():
+        meta = load_checkpoint(_resolve_resource_path(paths["encoder_path"]), map_location="cpu").get("config_metadata") or {}
+        flags[name] = bool(meta.get("clip_input", False))
+        if flags[name]:
+            frames.add(int(meta.get("clip_frames", 301)))
+    if len(set(flags.values())) > 1:
+        raise RuntimeError(f"[ERROR] teacher 8개의 입력 단위가 섞여 있습니다(클립={[k for k, v in flags.items() if v]} / "
+                           f"조각={[k for k, v in flags.items() if not v]}). 8개를 같은 방식(Mark4.x clip_input)으로 다시 학습해 넣으십시오.")
+    if len(frames) > 1:
+        raise RuntimeError(f"[ERROR] teacher 의 clip_frames 가 서로 다릅니다: {sorted(frames)}")
+    clip = all(flags.values())
+    return clip, (frames.pop() if frames else 301)
+
+
 class EnsembleTeacher:
     def __init__(self, specialist_config, device, others_rule="min", score_mode="margin",
                  use_distribution_alignment=False, dist_align_tau=0.5, dist_align_momentum=0.999):
         self.device = device
         self.specialists = {}
         self.embedding_dim = None
+        # [2026-09-29 밤] teacher 입력 단위(클립/조각)는 .pth provenance 로 판정 — train_mark5 가 dataset 을 만들기 전에 같은 함수를 부른다.
+        self.clip_input, self.clip_frames = detect_teacher_clip_input(specialist_config)
         self.fusion = None  # WeightedTeacherFusion은 배치마다 재생성하지 않고 1회 생성 후 재사용
         self.others_rule = others_rule  # [추가 2026-08-18] fusion 의 others 칸 조립 규칙
         self.score_mode = score_mode    # [추가 2026-08-22] 담당 칸 점수: "raw" | "margin"
@@ -260,6 +278,13 @@ class SemiSupervisedDataset(Dataset):
         self.parser = parser
         self.config = config
         self.is_labeled = is_labeled
+        # [신설 2026-09-29 / ablation A3] 클립 모드: 샘플 하나 = 클립 하나(teacher 조각 K개를 [K, C, n_mels, T] 로 쌓고,
+        # student 는 클립 파형 [student_clip_samples] 하나). 조각 모드는 샘플 하나 = 조각 하나(2026-09-28 이전 동작 그대로).
+        # [2026-09-29 밤 / 클립 전문가] teacher 가 클립 단위(config.teacher_clip_input)면 teacher 텐서는 조각 K개 대신 클립 전체 mel
+        # [1, C, n_mels, teacher_clip_frames] 하나(K=1). 조각 모드 student 와 클립 teacher 의 조합은 train_mark5 가 앞에서 막는다.
+        self.clip_mode = bool(getattr(config, "student_clip_input", False))
+        self.teacher_clip = bool(getattr(config, "teacher_clip_input", False))
+        self.teacher_frames = int(getattr(config, "teacher_clip_frames", 301) or 301)
         valid_labels = set(config.get_classes_for_evaluation()) if is_labeled else None
 
         skipped_label_counter = {}
@@ -271,6 +296,36 @@ class SemiSupervisedDataset(Dataset):
                 skipped_label_counter[label] = skipped_label_counter.get(label, 0) + 1
                 continue
             try:
+                if self.clip_mode:
+                    out = parser.load_clip_with_segments(path)
+                    if out is None:
+                        continue
+                    segs = out["segments"]
+                    if self.teacher_clip:
+                        # teacher 도 클립 전체를 본다: 클립 뷰 [C, n_mels, T] 를 teacher_clip_frames 로 맞춰(길면 자르고 짧으면 0) K=1 로 쌓는다.
+                        clip_t = _normalize_visual_tensor(out["clip_record"]["tensor"],
+                                                          (config.num_input_channels, config.n_mels, self.teacher_frames))
+                        if clip_t is None:
+                            print(f"[ERROR] 클립 텐서 모양 불일치: {path}")
+                            continue
+                        teacher_t = clip_t.unsqueeze(0)                                       # [1, C, n_mels, 301]
+                        sal, starts = [out["clip_record"]["saliency"]], [0]
+                    else:
+                        teacher_t = torch.stack([r["tensor"] for r in segs], dim=0)         # [K, C, n_mels, T] teacher 조각 K개
+                        sal, starts = [r["saliency"] for r in segs], [r["start_frame"] for r in segs]
+                    metadata = {
+                        "path": path,
+                        "label": label if is_labeled else "unlabeled",
+                        "segment_index": -1,                      # 클립 단위 표시
+                        "start_frame": 0,
+                        "end_frame": out["clip_record"]["end_frame"],
+                        "saliency": sal,                                     # teacher 입력 단위별(조각 K개 또는 클립 1개)
+                        "segment_start_frames": starts,
+                    }
+                    self.samples.append((teacher_t,                                          # teacher 용
+                                         out["clip_wave"],                                   # [48000] student 용
+                                         label if is_labeled else -1, metadata))
+                    continue
                 segment_records = parser.load_and_segment_with_metadata(path)
                 for record in segment_records:
                     seg = record["tensor"]
@@ -377,10 +432,14 @@ class DistillationLoss(nn.Module):
 
     def __init__(self, temperature, alpha, feature_kd_weight=0.0,
                  use_dkd=False, dkd_alpha=1.0, dkd_beta=1.0,
-                 use_pseudo_label_ce=False):
+                 use_pseudo_label_ce=False, hard_weight=None):
         super().__init__()
         self.temperature = temperature
         self.alpha = alpha
+        # [신설 2026-09-29 밤 / HW] 정답 라벨 CE 의 가중치. None 이면 옛 (1−α)(Hinton KD 관례 — 같은 샘플에 hard·soft 를 함께 걸 때 두 항의
+        # 합을 1 로 맞추는 것). 우리는 정답 라벨은 labeled 조각에, 가짜 정답은 unlabeled 조각에 따로 걸므로 그 관례가 뜻이 없고 지도 신호의
+        # 기울기만 0.7 배로 줄인다(2026-09-29 격차 분석). --hard_weight 1.0 이면 α 는 unlabeled 항에만 곱힌다.
+        self.hard_weight = None if hard_weight is None else float(hard_weight)
         self.feature_kd_weight = feature_kd_weight
         self.use_dkd = use_dkd
         self.dkd_alpha = dkd_alpha
@@ -393,7 +452,9 @@ class DistillationLoss(nn.Module):
         self.soft = nn.KLDivLoss(reduction="batchmean")
 
     def forward(self, student_logits, hard_targets=None, teacher_logits=None,
-                student_features=None, teacher_features=None, pseudo_weights=None):
+                student_features=None, teacher_features=None, pseudo_weights=None, pseudo_targets=None):
+        # [신설 2026-09-29 / A3] pseudo_targets 를 주면(클립 모드: 조각 다수결 라벨) teacher_logits 의 argmax 대신 그것으로 CE 를 건다.
+        # 안 주면(조각 모드) 옛 동작(argmax) 그대로. pseudo-label CE 모드에서만 쓰인다.
         total = torch.tensor(0.0, device=student_logits.device)
         hard_loss = torch.tensor(0.0, device=student_logits.device)
         soft_loss = torch.tensor(0.0, device=student_logits.device)
@@ -401,7 +462,7 @@ class DistillationLoss(nn.Module):
 
         if hard_targets is not None and len(hard_targets) > 0:
             hard_loss = self.hard(student_logits, hard_targets)
-            total = total + (1 - self.alpha) * hard_loss
+            total = total + ((1 - self.alpha) if self.hard_weight is None else self.hard_weight) * hard_loss
 
         if teacher_logits is not None and len(teacher_logits) > 0:
             if self.use_pseudo_label_ce:
@@ -410,7 +471,8 @@ class DistillationLoss(nn.Module):
                 # KL 이 나르는 정보가 0.0113 nats 뿐인데, 같은 teacher 의 argmax 는
                 # non-others 에서 0.8940 로 맞는다. 즉 정보는 분포가 아니라 argmax 에 있다.
                 # 분포를 따라하게 하면 teacher 의 애매함과 오류까지 함께 배운다.
-                pseudo_targets = teacher_logits.argmax(dim=1)
+                if pseudo_targets is None:
+                    pseudo_targets = teacher_logits.argmax(dim=1)
                 per_sample = self.pseudo(student_logits, pseudo_targets)
                 if pseudo_weights is not None:
                     # 가중 평균. 분모가 0 에 가까우면(전부 저확신) 손실을 0 으로 둔다.
@@ -443,6 +505,47 @@ class DistillationLoss(nn.Module):
             total = total + self.feature_kd_weight * feat_loss
 
         return total, hard_loss, soft_loss, feat_loss
+
+
+def merge_segments_to_clip(fusion_output, n_clips, n_seg, min_conf, min_gap, min_segments):
+    """[신설 2026-09-29 / ablation A3] teacher 융합 출력(조각 n_clips×n_seg 개, 클립별로 조각이 이어져 나열된 순서)을 클립 단위로 합친다.
+
+    규칙은 비교모델 합의 라벨 스크립트(Mark5_EXP2/model/make_consensus_labels.py, 2026-09-05·09-22)와 같다 — 비교모델(pl)이 그 CSV 로
+    학습하므로 Mark5.2 도 같은 규칙으로 합쳐야 "같은 재료를 같은 규칙으로" 비교가 된다. 2026-09-28 드라이브 consensus_segments.csv
+    (unlabeled 2,000클립×5조각) 실측: 확률 평균·확신도 가중 평균 등 다른 후보와 라벨 차이가 1,286클립 중 0~2개라 결과는 사실상 같다.
+      조각 채택  : 확신도(1 − uncertainty) >= min_conf  그리고  1등−2등 전문가 확신도 차이(disagreement) >= min_gap  (0 이면 그 조건 없음)
+      클립 채택  : 채택 조각 수 >= min_segments (5개 중 3 = 과반)
+      클립 라벨  : 채택 조각 argmax 의 다수결, 동점이면 그 라벨 조각들의 확신도 합이 큰 쪽 (score = 표 수 + 확신도 합/(K+1) 의 argmax —
+                   확신도 합/(K+1) < 1 이라 표 수를 뒤집지 못하고 동점만 가른다. 표 수·확신도 합까지 같으면 클래스 인덱스가 작은 쪽)
+      클립 확신도: 채택 조각 확신도의 평균 (pseudo_label_confidence_weighting 의 가중치)
+      클립 특징  : 채택 조각 융합 특징의 확신도 가중 평균 (feature KD 목표. 융합 특징 자체가 전문가 확신도 가중 평균이라 같은 방식)
+      클립 로짓  : 채택 조각 융합 로짓의 확신도 가중 평균 — 참고용. 가짜 정답 CE 는 위 다수결 라벨(pseudo_targets)을 쓴다.
+    돌려주는 dict: keep [n] bool · label [n] long · conf [n] · features [n, D] · logits [n, C] · n_kept [n] · seg_keep [n, K] · seg_conf [n, K] · seg_gap [n, K]
+    채택 조각이 하나도 없는 클립은 conf 0 · features/logits 0 이고 keep 이 False 라 학습에서 빠진다."""
+    logits = fusion_output.logits.view(n_clips, n_seg, -1)
+    feats = fusion_output.features.view(n_clips, n_seg, -1)
+    conf = (1.0 - fusion_output.uncertainty).view(n_clips, n_seg).to(logits.device)
+    gap = fusion_output.disagreement.view(n_clips, n_seg).to(logits.device)
+    seg_keep = torch.ones_like(conf, dtype=torch.bool)
+    if min_conf > 0:
+        seg_keep = seg_keep & (conf >= min_conf)
+    if min_gap > 0:
+        seg_keep = seg_keep & (gap >= min_gap)
+    n_kept = seg_keep.sum(dim=1)
+    keep = n_kept >= int(min_segments)
+    num_classes = logits.shape[-1]
+    seg_argmax = logits.argmax(dim=2)                                                  # [n, K]
+    onehot = F.one_hot(seg_argmax, num_classes=num_classes).to(logits.dtype) * seg_keep.unsqueeze(-1).to(logits.dtype)
+    votes = onehot.sum(dim=1)                                                          # [n, C] 채택 조각의 표 수
+    conf_sum = (onehot * conf.unsqueeze(-1)).sum(dim=1)                                # [n, C] 그 라벨 조각들의 확신도 합
+    label = (votes + conf_sum / (float(n_seg) + 1.0)).argmax(dim=1)
+    w = conf * seg_keep.to(conf.dtype)                                                 # [n, K] 채택 조각만 확신도, 나머지 0
+    denom = w.sum(dim=1, keepdim=True).clamp_min(1e-6)
+    clip_conf = w.sum(dim=1) / n_kept.clamp_min(1).to(w.dtype)                         # 채택 조각 확신도 평균(채택 0 이면 0)
+    clip_feat = (feats * w.unsqueeze(-1)).sum(dim=1) / denom
+    clip_logits = (logits * w.unsqueeze(-1)).sum(dim=1) / denom
+    return {"keep": keep, "label": label, "conf": clip_conf, "features": clip_feat, "logits": clip_logits,
+            "n_kept": n_kept, "seg_keep": seg_keep, "seg_conf": conf, "seg_gap": gap}
 
 
 def apply_spec_augment(mel_batch, num_freq_masks, freq_mask_param,
@@ -498,8 +601,13 @@ def _stable_file_split(path, val_ratio=0.1):
 
 
 def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceiling_csv=None, labeled_n=None,
-                pseudo_csv=None, pseudo_source=None, spill_labeled=False, lr=None, encoder_lr=None):
+                pseudo_csv=None, pseudo_source=None, spill_labeled=False, lr=None, encoder_lr=None,
+                no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
+                segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
+                others_from_reject=None, neg_pl=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 실험 조건으로 받는다.
+    [이식 2026-09-29 / Mark5.2] ablation A1~A4·H 와 격차 분석 대응 묶음(PH·LP-FT·HW·OR·NEG) 플래그를 받는다(vild_config.apply_cli_ablation).
+    아무 플래그도 안 주면 mark5.2 기본(클립 입력·조각 teacher 또는 클립 teacher 자동 판정) 그대로다.
 
     두 인자 모두 None 이면 기존 Mark5 와 완전히 같은 동작이다
     (seed 42 · unlabeled 전량 · run_tag 에 조건 태그 없음).
@@ -532,16 +640,76 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     # [신설 2026-09-25 / LR] 명령줄 학습률(--lr 새 층 / --encoder_lr 백본). 기본값과 다르면 run_tag 에 _lr/_elr 이 붙으므로
     # 태그가 처음 쓰이기 전에 넣는다. 옵티마이저(아래 "[변경 2026-09-17] 백본 학습률 분리")는 config 값을 읽으니 그대로다.
     _lr_txt = config.apply_cli_learning_rates(lr, encoder_lr)
+    # [신설 2026-09-28 / ablation A1·A2·A4] 우리 부품을 하나씩 끄는 플래그(vild_config.apply_cli_ablation). run_tag 에
+    # _noFKD/_noGAP/_noDB 가 붙어 본 모델 산출물과 따로 쌓인다. 아래 criterion·keep_mask·distill 분류 손실은 config 값을 읽으니 그대로다.
+    _ab_txt = config.apply_cli_ablation(no_feature_kd=no_feature_kd, pl_min_gap=pl_min_gap, no_distill_branch=no_distill_branch,
+                                        clip_input=clip_input, linear_head=linear_head, segment_input=segment_input,
+                                        head_pretrained_hidden=head_pretrained_hidden, lp_epochs=lp_epochs, hard_weight=hard_weight,
+                                        others_from_reject=others_from_reject, neg_pl=neg_pl)
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} · run_tag {config.run_tag}")
+    if _ab_txt:
+        print(f"[ABLATION] {_ab_txt} · run_tag {config.run_tag}")
     if spill_labeled and labeled_n is None:
         raise ValueError("[ERROR] --spill_labeled 는 --labeled_n 과 함께 써야 합니다(남은 labeled 를 unlabeled 로 돌리는 옵션).")
     if is_ceiling and unlabeled_n not in (None, 0):
         # 천장은 정의상 unlabeled 를 쓰지 않는다. 다른 값을 같이 주면 조건이 모호해지므로 멈춘다.
         raise ValueError(f"[ERROR] --ceiling_csv 와 --unlabeled_n={unlabeled_n} 을 함께 줄 수 없습니다. "
                          "천장 조건은 unlabeled 를 쓰지 않습니다(--unlabeled_n 을 빼십시오).")
+    # [Mark5_EXP2] CSV 가짜 정답 경로(--pseudo_csv, 8절 출처 비교)에는 전문가 8명의 확신도가 없다. OR(전원 거절)·NEG(부정 라벨)는 그 확신도로
+    # 정하는 장치라 이 경로에서는 정의되지 않는다 — 조용히 끄면 run_tag(_OR/_NEG)가 거짓이 되므로 멈춘다. PH·LP·HW 는 teacher 와 무관해 그대로 된다.
+    if pseudo_csv is not None and (float(getattr(config, "others_from_reject_tau", 0.0) or 0.0) > 0
+                                   or float(getattr(config, "neg_pl_tau", 0.0) or 0.0) > 0):
+        raise ValueError("[ERROR] --pseudo_csv(CSV 가짜 정답) 경로에는 전문가 확신도가 없어 --others_from_reject / --neg_pl 을 쓸 수 없습니다. "
+                         "두 플래그를 빼고 돌리십시오(PH·LP·HW 는 함께 쓸 수 있습니다).")
 
     set_seed(effective_seed, deterministic=getattr(config, "cudnn_deterministic", False))
+
+    print(f"[AC/LT] anchor_centering={config.anchor_centering} learnable_logit_scale={config.learnable_logit_scale} · run_tag {config.run_tag}")
+    # [신설 2026-09-29 / 헤드 진단 H] 선형 헤드면 위 AC/LT 값은 헤드가 안 쓰므로 뜻이 없다(텍스트 임베딩은 만들되 헤드가 무시한다).
+    if getattr(config, "student_head", "text_anchor") == "linear":
+        print(f"[H] student 분류 헤드 = 선형(nn.Linear {config.embedding_dim}→{len(config.get_classes_for_evaluation())}) — "
+              f"텍스트 앵커·AC/LT 미사용, 제로샷 불가(진단용). 두 갈래(지도·증류)가 같은 Linear 를 공유한다")
+    # [신설 2026-09-29 / A3] 클립 모드 — 학습 단위가 조각에서 클립으로 바뀐다(배치 16 = 클립 16개, 에폭당 스텝 수 1/K). teacher 는 조각 그대로.
+    _clip_mode = bool(getattr(config, "student_clip_input", False))
+    _clip_min_segments = int(getattr(config, "clip_min_segments", 3))
+    # [2026-09-29 밤 / 클립 전문가] teacher .pth 8개의 provenance 로 입력 단위를 판정해 config 에 적는다(dataset 이 이 값으로 teacher 텐서를 만든다).
+    specialist_config = specialist_config_for(config)
+    _teacher_clip, _teacher_frames = detect_teacher_clip_input(specialist_config)
+    config.teacher_clip_input = bool(_teacher_clip)
+    config.teacher_clip_frames = int(_teacher_frames)
+    if _teacher_clip:
+        if not _clip_mode:
+            raise ValueError("[ERROR] teacher 8개가 클립 단위(Mark4.x clip_input)로 학습됐는데 student 가 조각 입력(--segment_input)입니다. "
+                             "클립 teacher 는 클립 student 와만 짝이 됩니다(조각마다 teacher 라벨을 매길 수 없음).")
+        _clip_min_segments = 1
+        print(f"[TEACHER] 전문가 8개 = 클립 단위(mel {config.n_mels}×{_teacher_frames}) → 클립당 teacher 출력 1개(K=1), "
+              f"채택 = 확신도 ≥ {getattr(config, 'pseudo_label_min_confidence', 0.5)} & 1등−2등 차이 ≥ {getattr(config, 'pseudo_label_min_gap', 0.0):g}")
+    else:
+        print(f"[TEACHER] 전문가 8개 = 조각 단위(mel {config.n_mels}×{config.segment_length} × {config.max_segments})")
+    if _clip_mode:
+        print(f"[A3] 학습 단위 = 클립(파형 {getattr(config, 'student_clip_samples', 48000)}샘플 통째). teacher 조각 {1 if _teacher_clip else config.max_segments}개 → "
+              f"클립 합치기: 조각 채택(확신도·1등−2등 차이) ≥{_clip_min_segments}개면 채택, 라벨 = 채택 조각 다수결, "
+              f"확신도 = 채택 조각 평균, 특징 = 채택 조각 확신도 가중 평균 (merge_segments_to_clip)")
+    # [2026-09-29 밤 / 격차 분석 대응 묶음] 켜진 것만 로그에 남긴다(플래그 없으면 옛 동작).
+    if getattr(config, "head_pretrained_hidden", False):
+        print("[PH] 헤드 단순화: mn10 사전학습 은닉층(960→1280+Hardswish+Dropout) 유지 → Linear(1280→384) 투영 하나 → 앵커. supervised branch = Identity")
+    _lp_epochs = int(getattr(config, "lp_epochs", 0) or 0)
+    if _lp_epochs > 0:
+        print(f"[LP-FT] 처음 {_lp_epochs}에폭은 백본(mn10 core) 고정(requires_grad·BN 통계) → 투영·branch·헤드·BG 만 학습 → 그 뒤 전체 해제. "
+              f"LP 구간은 early stopping 에 세지 않고 FT 첫 에폭에서 best 를 다시 잰다")
+    if getattr(config, "hard_weight", None) is not None:
+        print(f"[HW] 정답 라벨 CE 가중치 {float(config.hard_weight):g} (옛 (1−α)={1 - float(getattr(config, 'distill_alpha', 0.3)):g})")
+    _or_tau = float(getattr(config, "others_from_reject_tau", 0.0) or 0.0)
+    if _or_tau > 0:
+        print(f"[OR] 전원 거절 → others 가짜 정답: 전문가 8명 최대 확신도 < {_or_tau:g} 이면 others(가중치 1−최대). 합의 라벨에 없던 배경 신호")
+    _neg_tau = float(getattr(config, "neg_pl_tau", 0.0) or 0.0)
+    _neg_beta = float(getattr(config, "neg_pl_beta", 0.0) or 0.0)
+    _use_neg = _neg_tau > 0 and _neg_beta > 0
+    if _use_neg:
+        print(f"[NEG] 부정 가짜 라벨: 미채택 클립에서 전문가 c 확신도 < {_neg_tau:g} 인 클래스에 −{_neg_beta:g}·log(1−p_student(c)) (others 제외)")
+    if pseudo_csv is not None and _clip_mode:
+        print("[INFO] CSV 가짜 정답 경로 + 클립 모드: 라벨이 이미 클립 단위라 조각 합치기(merge_segments_to_clip)를 거치지 않는다. teacher 조각은 읽되 쓰지 않음")
 
     device = config.device
     parser = AudioParser(config, segment_mode=True)
@@ -734,8 +902,9 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     student_branch = DualBranchStudentHead(
         config.embedding_dim,
         distill_final_relu=getattr(config, "distill_branch_final_relu", False),
+        supervised_identity=bool(getattr(config, "head_pretrained_hidden", False)),   # [PH 2026-09-29 밤] 지도 갈래 항등
     ).to(device)
-    student_classifier = ViLDTextHead(config).to(device)
+    student_classifier = build_student_head(config).to(device)   # [H 2026-09-29] config.student_head 로 텍스트 앵커/선형 선택(eval 과 같은 함수)
     student_text_emb = config.get_class_text_embeddings(for_evaluation=True).to(device)
     student_label_map = config.get_target_label_map()
 
@@ -752,7 +921,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     if config.use_background_embedding:
         background_embedding = LearnableBackgroundEmbedding(config.embedding_dim).to(device)
 
-    specialist_config = specialist_config_for(config)   # 모듈 상수(위 참조)를 config 클래스 이름에 맞춘 것. make_consensus_labels.py 와 공유
+    # teacher 8개 목록(specialist_config)은 위에서 이미 만들었다(2026-09-29 밤 분리 — dataset 을 만들기 전에 provenance 를 읽기 위해).
+    # make_consensus_labels.py 도 같은 specialist_config_for(config) 를 쓴다.
     _others_rule = getattr(config, "fusion_others_rule", "min")
     _score_mode = getattr(config, "fusion_score_mode", "margin")
     _use_da = getattr(config, "use_distribution_alignment", False)
@@ -825,7 +995,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         temperature=_temp, alpha=_alpha,
         feature_kd_weight=(config.feature_kd_weight if (config.use_feature_kd and pseudo_csv is None) else 0.0),
         use_dkd=_use_dkd, dkd_alpha=_dkd_a, dkd_beta=_dkd_b,
-        use_pseudo_label_ce=_use_pl)
+        use_pseudo_label_ce=_use_pl,
+        hard_weight=getattr(config, "hard_weight", None))     # [HW 2026-09-29 밤] None 이면 옛 (1−α)
     if _use_pl:
         _mode_name = "pseudo-label CE"
     elif _use_dkd:
@@ -846,9 +1017,10 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     if background_embedding is not None:
         _head_params += list(background_embedding.parameters())
     _enc_trainable = [p for p in student_encoder.parameters() if p.requires_grad]
+    # [2026-09-29 밤 / LP-FT] 백본 = 인코더 파라미터 중 투영층(proj)을 뺀 것. 학습률 분리와 LP 고정이 같은 집합을 쓴다.
+    _proj_ids = {id(p) for p in getattr(student_encoder, "proj", nn.Identity()).parameters()}
+    _backbone_params = [p for p in _enc_trainable if id(p) not in _proj_ids]
     if _enc_lr is not None:
-        _proj_ids = {id(p) for p in getattr(student_encoder, "proj", nn.Identity()).parameters()}
-        _backbone_params = [p for p in _enc_trainable if id(p) not in _proj_ids]
         _new_layer_params = [p for p in _enc_trainable if id(p) in _proj_ids] + _head_params
         optimizer_params = [{"params": _backbone_params, "lr": float(_enc_lr)},
                             {"params": _new_layer_params, "lr": config.learning_rate}]
@@ -856,6 +1028,18 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
               f"새 층(투영·branch·background) {config.learning_rate:g} ({sum(p.numel() for p in _new_layer_params):,}개)")
     else:
         optimizer_params = _enc_trainable + _head_params
+
+    def _set_backbone_frozen(frozen: bool):
+        """[LP-FT] 백본 파라미터의 requires_grad 를 끄고/켠다. Adam 은 grad 가 None 인 파라미터를 건너뛴다(weight decay 도)."""
+        for p in _backbone_params:
+            p.requires_grad_(not frozen)
+    _backbone_module = getattr(student_encoder, "core", None)     # mn10 의 BN 통계를 LP 구간에 고정하기 위해(eval 모드)
+    if _lp_epochs > 0 and _backbone_module is None:
+        print("[WARN] LP-FT 는 mn10 백본(student_encoder.core)에서만 BN 통계를 고정합니다 — 이 인코더에는 core 가 없어 requires_grad 만 끕니다.")
+    if _lp_epochs > 0:
+        _set_backbone_frozen(True)
+        print(f"[LP] 백본 고정 시작 — 학습 파라미터 {sum(p.numel() for p in student_encoder.parameters() if p.requires_grad) + sum(p.numel() for p in _head_params):,}개 "
+              f"(백본 {sum(p.numel() for p in _backbone_params):,}개 제외)")
     # [변경 2026-08-17] weight_decay 와 LR 스케줄러를 mark4.x 와 같게 맞췄다.
     # mark4.x 는 weight_decay 가 전무해 teacher 가 val best 를 epoch 5 에 찍고 곧장 과적합하던 것을
     # 실측하고 1e-4 를 넣었고, ReduceLROnPlateau(factor 0.5, patience 3)도 함께 쓴다.
@@ -911,16 +1095,37 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     no_improve = 0
     stopped_early = False
 
+    # [2026-09-29 밤 / teacher SpecAugment] teacher 입력이 클립(301프레임)이면 시간 마스크 폭을 프레임 수에 비례해 늘린다(16/101 → 48/301).
+    _sa_t_teacher = _sa_t
+    if _use_sa and _teacher_clip:
+        _sa_t_teacher = int(round(_sa_t * float(_teacher_frames) / float(config.segment_length)))
+        print(f"[INFO] teacher SpecAugment 시간 마스크 최대 폭 {_sa_t} → {_sa_t_teacher} (클립 {_teacher_frames}프레임 기준)")
+    _others_idx_student = student_label_map["others"]
+    _spec_names = list(specialist_config.keys())                               # fusion_output.specialist_weights 의 키 순서와 같게 쓴다
+    _spec_cls_idx = torch.tensor([student_label_map[n] for n in _spec_names], dtype=torch.long, device=device)   # 전문가 → 학생 클래스 인덱스
+
     for epoch in range(config.num_epochs):
         student_encoder.train()
         student_branch.train()
+        # [LP-FT] LP 구간: 백본 BN 통계 고정(eval 모드) · FT 진입 에폭: 백본 해제 + best/early stopping 초기화
+        _in_lp = _lp_epochs > 0 and epoch < _lp_epochs
+        if _in_lp and _backbone_module is not None:
+            _backbone_module.eval()
+        if _lp_epochs > 0 and epoch == _lp_epochs:
+            _set_backbone_frozen(False)
+            best_val, best_epoch, no_improve = float("inf"), -1, 0
+            print(f"[FT] 백본 해제 — 에폭 {epoch + 1}부터 전체 파인튜닝. best val·early stopping 을 여기서 다시 잰다")
         total_loss = total_hard_loss = total_soft_loss = total_feat_loss = 0.0
         total_bg_loss = 0.0
         # [추가 2026-08-22] pseudo-label 채택 통계와 epoch 소요시간.
         total_distill_cls_loss = 0.0
+        total_neg_loss = 0.0
         epoch_pseudo_total = 0
         epoch_pseudo_kept = 0
         epoch_pseudo_conf_sum = 0.0
+        epoch_or_kept = 0          # [OR] 전원 거절로 others 가짜 정답이 된 샘플 수
+        epoch_neg_samples = 0      # [NEG] 부정 라벨을 받은 샘플 수
+        epoch_neg_labels = 0       # [NEG] 그 샘플들의 부정 라벨(클래스) 총수
         epoch_started_at = time.time()
         # [추가 2026-08-17] 캐시를 에폭마다 비운다. teacher 는 eval·no_grad·가중치 고정이라
         # 같은 입력에 늘 같은 값을 내므로 에폭마다 쌓아봐야 같은 값이 num_epochs 벌 중복될 뿐이다.
@@ -963,6 +1168,11 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
 
             if unlabeled_indices:
                 unlabeled_mel = mel[unlabeled_indices]
+                # [신설 2026-09-29 / A3] 클립 모드: mel 은 [b, K, C, n_mels, T](클립당 teacher 조각 K개)라 teacher 용으로 [b*K, ...] 로 편다.
+                # student 는 아래에서 클립 파형(wave, [b, 48000])만 쓴다. SpecAugment(teacher view)는 편 조각에 그대로 걸린다.
+                if _clip_mode:
+                    _n_u, _K = int(unlabeled_mel.shape[0]), int(unlabeled_mel.shape[1])
+                    unlabeled_mel = unlabeled_mel.reshape(_n_u * _K, *unlabeled_mel.shape[2:])
                 # [추가 2026-08-23] SpecAugment. teacher view 는 config 로 갈린다.
                 #   augmented: teacher 도 증강 view 를 본다 — 진짜 online. 증강마다
                 #              pseudo-label 이 재계산되고, 가려진 view 에서 앙상블 합의가
@@ -972,7 +1182,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 # [변경 2026-09-17] teacher 는 어느 경우든 mel 을 본다. student 가 파형 경로면 student 의 증강은
                 # 인코더 안에서 독립적으로 걸린다(mel 규격이 64 와 128 로 달라 같은 위치를 맞출 수 없다).
                 if _use_sa:
-                    aug_unlabeled_mel = apply_spec_augment(unlabeled_mel, _sa_nf, _sa_f, _sa_nt, _sa_t)
+                    aug_unlabeled_mel = apply_spec_augment(unlabeled_mel, _sa_nf, _sa_f, _sa_nt, _sa_t_teacher)
                     teacher_input = aug_unlabeled_mel if _sa_teacher_view == "augmented" else unlabeled_mel
                     student_input = aug_unlabeled_mel
                 else:
@@ -991,30 +1201,88 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 else:
                     fusion_output = ensemble_teacher(teacher_input, student_label_map)
 
-                # [신설 2026-08-22] 합의 기반 선별.
-                # specialist_weights[c] 는 전문가 c 가 "이건 내 클래스다"라고 본 확률이다.
-                # 그 최대값이 곧 "여덟 명 중 가장 강한 주장의 세기"이고, 이것이 낮으면
-                # 아무도 이 소리를 자기 것이라고 보지 않았다는 뜻이다. 그런 클립에 argmax 로
-                # 억지 정답을 붙이면 오답이 그대로 student 에게 주입되므로 학습에서 뺀다.
-                # (fusion_output.uncertainty 가 정확히 1 - 이 최대값이다.)
-                pseudo_conf = 1.0 - fusion_output.uncertainty       # [B]
-                if _use_pl and _pl_min_conf > 0:
-                    keep_mask = pseudo_conf >= _pl_min_conf
+                merged = None
+                if _clip_mode and pseudo_lookup is None:
+                    # [신설 2026-09-29 / A3] 조각 K개의 teacher 출력을 클립 하나로 합친다(규칙은 merge_segments_to_clip docstring).
+                    # 이 아래의 keep_mask·pseudo_conf 는 클립 단위이고, 가짜 정답은 다수결 라벨(_t_labels)로 CE 를 건다.
+                    merged = merge_segments_to_clip(
+                        fusion_output, _n_u, _K,
+                        min_conf=(_pl_min_conf if (_use_pl and _pl_min_conf > 0) else 0.0),
+                        min_gap=(_pl_min_gap if (_use_pl and _pl_min_gap > 0) else 0.0),
+                        min_segments=_clip_min_segments)
+                    pseudo_conf = merged["conf"]                          # [b] 채택 조각 확신도 평균
+                    keep_mask = merged["keep"]                            # [b] 채택 조각 >= _clip_min_segments
+                    _t_logits, _t_feats, _t_labels = merged["logits"], merged["features"], merged["label"]
                 else:
-                    keep_mask = torch.ones_like(pseudo_conf, dtype=torch.bool)
-                # [신설 2026-09-21 밤 / B] 1등 전문가와 2등 전문가의 확신도 차이(fusion_output.disagreement = top1 − top2)가
-                # 작으면 "합의" 가 아니라 "둘이 다툼" 이다. 그런 세그먼트의 argmax 는 절반쯤 틀린다(vild_config 주석의 실측).
-                if _use_pl and _pl_min_gap > 0:
-                    keep_mask = keep_mask & (fusion_output.disagreement.to(keep_mask.device) >= _pl_min_gap)
+                    # (조각 모드, 또는 [Mark5_EXP2] CSV 가짜 정답 경로 — CSV 라벨은 이미 클립 단위라 클립 모드여도 합칠 조각이 없다.
+                    #  _CsvFusion 의 uncertainty·disagreement 는 [b] 라 아래 식이 그대로 맞는다.)
+                    # [신설 2026-08-22] 합의 기반 선별.
+                    # specialist_weights[c] 는 전문가 c 가 "이건 내 클래스다"라고 본 확률이다.
+                    # 그 최대값이 곧 "여덟 명 중 가장 강한 주장의 세기"이고, 이것이 낮으면
+                    # 아무도 이 소리를 자기 것이라고 보지 않았다는 뜻이다. 그런 클립에 argmax 로
+                    # 억지 정답을 붙이면 오답이 그대로 student 에게 주입되므로 학습에서 뺀다.
+                    # (fusion_output.uncertainty 가 정확히 1 - 이 최대값이다.)
+                    pseudo_conf = 1.0 - fusion_output.uncertainty       # [B]
+                    if _use_pl and _pl_min_conf > 0:
+                        keep_mask = pseudo_conf >= _pl_min_conf
+                    else:
+                        keep_mask = torch.ones_like(pseudo_conf, dtype=torch.bool)
+                    # [신설 2026-09-21 밤 / B] 1등 전문가와 2등 전문가의 확신도 차이(fusion_output.disagreement = top1 − top2)가
+                    # 작으면 "합의" 가 아니라 "둘이 다툼" 이다. 그런 세그먼트의 argmax 는 절반쯤 틀린다(vild_config 주석의 실측).
+                    if _use_pl and _pl_min_gap > 0:
+                        keep_mask = keep_mask & (fusion_output.disagreement.to(keep_mask.device) >= _pl_min_gap)
+                    _t_logits, _t_feats, _t_labels = fusion_output.logits, fusion_output.features, None   # None → argmax(옛 동작)
+
+                # [2026-09-29 밤 / OR·NEG] 전문가 8명의 확신도 행렬 [n, 8] (클립 모드는 조각 K개 평균, 조각 모드는 그대로).
+                # [Mark5_EXP2] CSV 가짜 정답 경로(_CsvFusion)에는 전문가가 없다 → None. OR·NEG 는 그 경로에서 앞에서 막았다(ValueError).
+                _sw = _spec_max = _reject = None
+                if pseudo_lookup is None:
+                    _sw = torch.stack([fusion_output.specialist_weights[n].to(device).float() for n in _spec_names], dim=1)   # [n*K 또는 n, 8]
+                    if _clip_mode:
+                        _sw = _sw.view(_n_u, _K, -1).mean(dim=1)                                                        # [n, 8]
+                    _spec_max = _sw.max(dim=1).values                                                                    # [n]
+                if _or_tau > 0:
+                    # 전원 거절: 아무 전문가도 최대 확신도 τ_low 를 넘기지 못한 샘플 → others 가짜 정답(가중치 = 1 − 최대 확신도).
+                    _reject = (~keep_mask) & (_spec_max < _or_tau)
+                    if _reject.any():
+                        if _t_labels is None:
+                            _t_labels = _t_logits.argmax(dim=1)
+                        _t_labels = _t_labels.clone(); _t_labels[_reject] = _others_idx_student
+                        pseudo_conf = pseudo_conf.clone(); pseudo_conf[_reject] = (1.0 - _spec_max[_reject]).to(pseudo_conf.dtype)
+                        if _clip_mode:
+                            # 채택 조각이 없어 0 이던 특징·로짓을 조각 단순 평균으로 채운다(feature KD 목표가 0 벡터가 되지 않게).
+                            _t_feats = _t_feats.clone(); _t_feats[_reject] = fusion_output.features.view(_n_u, _K, -1)[_reject].mean(dim=1)
+                            _t_logits = _t_logits.clone(); _t_logits[_reject] = fusion_output.logits.view(_n_u, _K, -1)[_reject].mean(dim=1)
+                        keep_mask = keep_mask | _reject
+                        epoch_or_kept += int(_reject.sum().item())
+
                 epoch_pseudo_total += int(keep_mask.numel())
                 epoch_pseudo_kept += int(keep_mask.sum().item())
                 epoch_pseudo_conf_sum += float(pseudo_conf.sum().item())
 
+                if _use_neg and (~keep_mask).any():
+                    # [NEG] 미채택 샘플: 전문가 c 가 "내 것 아님" 을 확신(확신도 < τ_neg)하는 클래스마다 −β·log(1 − p_student(c)).
+                    _neg_idx = (~keep_mask).nonzero(as_tuple=True)[0]
+                    _neg_cls = (_sw[_neg_idx] < _neg_tau)                                                              # [m, 8]
+                    if _neg_cls.any():
+                        _nm = None if _clip_mode else student_input[_neg_idx]
+                        _nw = unlabeled_wave[_neg_idx] if unlabeled_wave is not None else None
+                        _nf = run_student_encoder(_nm, _nw, augment=_use_sa)
+                        _nsup, _ = student_branch(_nf)
+                        _np = torch.softmax(student_classifier(_nsup, student_text_emb), dim=1)                          # [m, C]
+                        _p_neg = _np[:, _spec_cls_idx]                                                                   # [m, 8] 전문가 클래스만
+                        _neg_loss = (-torch.log((1.0 - _p_neg).clamp_min(1e-6)) * _neg_cls.float()).sum() / _neg_cls.float().sum().clamp_min(1.0)
+                        loss = loss + _neg_beta * _neg_loss
+                        total_neg_loss += _neg_loss.item()
+                        epoch_neg_samples += int(_neg_cls.any(dim=1).sum().item())
+                        epoch_neg_labels += int(_neg_cls.sum().item())
+
                 if keep_mask.any():
-                    kept_mel = student_input[keep_mask]
+                    kept_mel = None if _clip_mode else student_input[keep_mask]     # [A3] 클립 모드의 student 는 파형만 쓴다
                     kept_wave = unlabeled_wave[keep_mask] if unlabeled_wave is not None else None
-                    kept_teacher_logits = fusion_output.logits[keep_mask]
-                    kept_teacher_feats = fusion_output.features[keep_mask] if fusion_output.features is not None else None   # CSV 모드(_CsvFusion)는 features 가 None → feature KD 0 (검수 C2)
+                    kept_teacher_logits = _t_logits[keep_mask]
+                    kept_teacher_feats = _t_feats[keep_mask] if _t_feats is not None else None   # CSV 모드(_CsvFusion)는 features 가 None → feature KD 0 (검수 C2)
+                    kept_targets = _t_labels[keep_mask] if _t_labels is not None else None   # [A3] 클립 다수결 라벨(조각 모드·CSV 모드 None → argmax)
                     kept_weights = pseudo_conf[keep_mask] if (_use_pl and _pl_weighting) else None
 
                     base_features = run_student_encoder(kept_mel, kept_wave, augment=_use_sa)
@@ -1026,6 +1294,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                         student_features=distill_features,
                         teacher_features=kept_teacher_feats,
                         pseudo_weights=kept_weights,
+                        pseudo_targets=kept_targets,
                     )
                     loss = loss + soft_total
                     total_soft_loss += soft_loss.item()
@@ -1041,20 +1310,36 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                             distill_logits,
                             teacher_logits=kept_teacher_logits,
                             pseudo_weights=kept_weights,
+                            pseudo_targets=kept_targets,
                         )
                         loss = loss + db_total
                         total_distill_cls_loss += db_loss.item()
-                if fusion_output.features is not None:
-                    teacher_feature_cache.append(fusion_output.features.detach().cpu())
+                _fc = _t_feats if merged is not None else fusion_output.features
+                if _fc is not None:                                   # CSV 모드(_CsvFusion)는 features 가 None → 캐시 없음
+                    teacher_feature_cache.append(_fc.detach().cpu())
                 for local_pos, batch_idx in enumerate(unlabeled_indices):
                     meta = dict(metadata_batch[batch_idx])
-                    meta["teacher_disagreement"] = float(fusion_output.disagreement[local_pos].item())
-                    meta["teacher_uncertainty"] = float(fusion_output.uncertainty[local_pos].item())
-                    meta["teacher_specialist_weights"] = {
-                        name: float(weight[local_pos].item())
-                        for name, weight in fusion_output.specialist_weights.items()
-                    }
-                    # [추가 2026-08-22] 이 세그먼트가 pseudo-label 로 채택됐는지와 그때의 확신도.
+                    if merged is not None:
+                        # [A3] 클립 단위 기록: 조각 K개의 평균 차이·불확실성, 전문가 가중치의 조각 평균, 채택 조각 수, 다수결 라벨.
+                        meta["teacher_disagreement"] = float(merged["seg_gap"][local_pos].mean().item())
+                        meta["teacher_uncertainty"] = float((1.0 - merged["seg_conf"][local_pos]).mean().item())
+                        meta["teacher_specialist_weights"] = {
+                            name: float(weight.view(_n_u, _K)[local_pos].mean().item())
+                            for name, weight in fusion_output.specialist_weights.items()
+                        }
+                        meta["n_segments_kept"] = int(merged["n_kept"][local_pos].item())
+                        meta["pseudo_label_index"] = int(_t_labels[local_pos].item())          # [OR] 전원 거절 others 까지 반영된 라벨
+                    else:
+                        meta["teacher_disagreement"] = float(fusion_output.disagreement[local_pos].item())
+                        meta["teacher_uncertainty"] = float(fusion_output.uncertainty[local_pos].item())
+                        meta["teacher_specialist_weights"] = {
+                            name: float(weight[local_pos].item())
+                            for name, weight in fusion_output.specialist_weights.items()
+                        }
+                    meta["pseudo_from_reject"] = bool(_reject is not None and _reject[local_pos].item())   # [OR] 이 샘플이 전원 거절로 others 가 됐나
+                    meta["specialist_max_conf"] = (float(_spec_max[local_pos].item())                      # [OR·NEG] 전문가 8명 최대 확신도
+                                                   if _spec_max is not None else float("nan"))              # (CSV 경로는 전문가 없음)
+                    # [추가 2026-08-22] 이 세그먼트(클립 모드면 클립)가 pseudo-label 로 채택됐는지와 그때의 확신도.
                     # 나중에 "어떤 소리가 계속 탈락하는가"를 분석할 재료가 된다.
                     meta["pseudo_confidence"] = float(pseudo_conf[local_pos].item())
                     meta["pseudo_kept"] = bool(keep_mask[local_pos].item())
@@ -1109,6 +1394,14 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
             if _distill_classify:
                 _avg_db = total_distill_cls_loss / max(1, len(train_loader))
                 _extra += f" | DistillCls {_avg_db:.4f}"
+        if _or_tau > 0:
+            _extra += f" | OR→others {epoch_or_kept}"
+        if _use_neg:
+            _extra += f" | NEG {total_neg_loss / max(1, len(train_loader)):.4f}({epoch_neg_samples}샘플·{epoch_neg_labels}라벨)"
+        if _lp_epochs > 0:
+            _extra += " | LP" if _in_lp else " | FT"
+        if getattr(student_classifier, "learnable", False):
+            _extra += f" | T={student_classifier.temperature:.4f}"   # [LT] 학습형 스케일이 움직이는지 본다
         print(f"[Epoch {epoch+1}] Total {avg_loss:.4f} | Hard {avg_hard:.4f} | Soft {avg_soft:.4f} | Feat {avg_feat:.4f} | BG {avg_bg:.4f} | Val(hard*) {avg_val_hard:.4f}"
               + _extra + f" | {_elapsed:.1f}s")
 
@@ -1131,6 +1424,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 # mark5 산출물만 provenance 가 빈 dict 였다(teacher 파일에는 10개가 들어 있다).
                 config=config,
             )
+        elif _in_lp:
+            print(f"[EarlyStopping] LP 구간 — counter 를 세지 않는다 ({epoch + 1}/{_lp_epochs})")
         else:
             no_improve += 1
             print(f"[EarlyStopping] counter: {no_improve}/{_patience}")
@@ -1242,6 +1537,32 @@ if __name__ == "__main__":
                         help="[LR 2026-09-25] 새로 만드는 층(투영·branch·background)의 학습률. 기본값과 다르면 run_tag 에 _lr<값>")
     parser.add_argument("--encoder_lr", type=float, default=None,
                         help="[LR 2026-09-25] 사전학습 백본(mn10)의 학습률. 기본값과 다르면 run_tag 에 _elr<값>. eval 에도 같은 값을 줄 것")
+    # [신설 2026-09-28 / ablation A1·A2·A4] 우리 부품 끄기. 셋 다 eval.py 에도 같은 플래그를 줘야 체크포인트(run_tag)를 찾는다.
+    parser.add_argument("--no_feature_kd", action="store_true",
+                        help="[A1] 특징 증류(feature KD, 가중치 0.3)를 끈다. run_tag 에 _noFKD")
+    parser.add_argument("--pl_min_gap", type=float, default=None,
+                        help="[A2] 가짜 정답 채택의 1등−2등 차이 조건(기본 0.4). 0 이면 조건을 끈다(run_tag 에 _noGAP, _G04 는 안 붙음)")
+    parser.add_argument("--no_distill_branch", action="store_true",
+                        help="[A4] 증류 갈래를 끈다 — 분류 손실을 걸지 않고 eval 에서 w=0 고정(지도 헤드만). run_tag 에 _noDB")
+    # [신설 2026-09-29 / ablation A3] student 가 1초 조각 5개 대신 클립 3초 파형을 통째로 본다. teacher 는 조각 그대로(클립 규칙으로 합침).
+    parser.add_argument("--clip_input", action="store_true",
+                        help="[A3] 세그먼트 분할을 끈다 — student 입력 = 클립 3초 파형 통째, teacher 조각 출력은 다수결로 합침. run_tag 에 _noSEG. eval 에도 같이 줄 것")
+    # [신설 2026-09-29 / 헤드 진단 H] 텍스트 앵커 헤드를 nn.Linear(384→9) 로 바꾼다(비교모델 헤드와 같은 방식). 제로샷이 없어져 진단용.
+    parser.add_argument("--linear_head", action="store_true",
+                        help="[H] 텍스트 앵커 헤드 대신 nn.Linear 분류 헤드(진단용, 제로샷 불가). run_tag 에 _LIN. eval 에도 같이 줄 것")
+    # [신설 2026-09-29 밤 / 격차 분석 대응 묶음] 전부 켜는 것이 실험 기본. 하나씩 끄는 것은 묶음 뒤 ablation 용. eval 에도 같은 플래그를 줄 것.
+    parser.add_argument("--segment_input", action="store_true",
+                        help="mark5.2 기본(클립 입력)을 끄고 조각(1초×5) 입력으로 되돌린다(2026-09-28 이전 본 모델과 같은 이름). 클립 teacher 와는 함께 못 씀")
+    parser.add_argument("--head_pretrained_hidden", action="store_true",
+                        help="[PH] mn10 사전학습 은닉층 유지 → Linear(960→384) 투영 하나 → 앵커, branch LN+ReLU 제거. run_tag _PH")
+    parser.add_argument("--lp_epochs", type=int, default=None,
+                        help="[LP-FT] 처음 N 에폭 백본 고정(투영·branch·헤드·BG 만 학습) 뒤 전체 해제. run_tag _LP<N>")
+    parser.add_argument("--hard_weight", type=float, default=None,
+                        help="[HW] 정답 라벨 CE 가중치(옛 (1−α)=0.7 대신). 1.0 권장. run_tag _HW1")
+    parser.add_argument("--others_from_reject", type=float, default=None,
+                        help="[OR] 전문가 8명 최대 확신도 < 이 값이면 others 가짜 정답(가중 1−최대). 예 0.2 → run_tag _OR02")
+    parser.add_argument("--neg_pl", type=float, nargs=2, default=None, metavar=("TAU", "BETA"),
+                        help="[NEG] 미채택 클립에서 전문가 확신도 < TAU 인 클래스에 부정 라벨 −BETA·log(1−p). 예 0.1 0.3 → run_tag _NEG")
     args = parser.parse_args()
     # [신설 2026-09-26] 화면에 찍히는 것을 logFiles/<run_tag>__train.log 에도 그대로 남긴다.
     # run_tag 를 알아야 파일 이름이 정해지므로 config 를 먼저 한 번 만든다(텍스트 임베딩은 이때 안 만들어진다).
@@ -1255,8 +1576,14 @@ if __name__ == "__main__":
     _c.pseudo_source = args.pseudo_source
     _c.spill_labeled = bool(args.spill_labeled)
     _c.apply_cli_learning_rates(args.lr, args.encoder_lr)
+    _bundle = dict(segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs,
+                   hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl)
+    _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
+                          clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
     with RunLogger(PROJECT_ROOT, _c.run_tag, "train"):
         train_mark5(seed_value=args.seed, mark_version=args.mark_version,
                     unlabeled_n=args.unlabeled_n, ceiling_csv=args.ceiling_csv, labeled_n=args.labeled_n,
                     pseudo_csv=args.pseudo_csv, pseudo_source=args.pseudo_source, spill_labeled=args.spill_labeled,
-                    lr=args.lr, encoder_lr=args.encoder_lr)
+                    lr=args.lr, encoder_lr=args.encoder_lr,
+                    no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
+                    clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)

@@ -170,7 +170,8 @@ def _summary_is_complete(path):
         return False
 
 
-def _run_tag(mark_version, seed, unlabeled_n, ceiling=False, labeled_n=None, spill=False, ps=None, lr=None, encoder_lr=None):
+def _run_tag(mark_version, seed, unlabeled_n, ceiling=False, labeled_n=None, spill=False, ps=None, lr=None, encoder_lr=None,
+             ablation_kw=None):
     """config 의 run_tag 를 그대로 쓴다(파일명 규칙을 두 곳에 적어두면 어긋난다)."""
     from vild_config import AudioViLDConfig
     c = AudioViLDConfig(mark_version=mark_version)
@@ -181,7 +182,24 @@ def _run_tag(mark_version, seed, unlabeled_n, ceiling=False, labeled_n=None, spi
     c.spill_labeled = bool(spill)    # _sp
     c.pseudo_source = ps             # _ps<이름>
     c.apply_cli_learning_rates(lr, encoder_lr)   # [신설 2026-09-25 / LR] 기본값과 다를 때만 _lr/_elr (train·eval 과 같은 규칙)
+    if ablation_kw:
+        # [신설 2026-09-29 밤 / --extra] ablation·격차 대응 묶음 플래그(_PH·_LP<N>·_HW<g>·_OR<τ>·_NEG·_noSEG…)를 자식(train/eval)과 같은
+        # 함수(apply_cli_ablation)로 적용해 태그를 맞춘다 — 그래야 재개 판정([건너뜀]/[실행])이 같은 파일을 본다.
+        c.apply_cli_ablation(**ablation_kw)
     return c.run_tag
+
+
+def _parse_runner_extra(extra_text):
+    """[신설 2026-09-29 밤] --extra "…" 를 (자식에게 그대로 넘길 토큰, run_tag 계산용 apply_cli_ablation kwargs) 로.
+    화이트리스트·값 개수 검사는 select_lr._parse_extra(kind="exp2_runner") 가 한다 — 실험 조건(--seed/--unlabeled_n/--labeled_n …)은
+    이 실행기가 계획표(PAPER_PLAN 등)로 정하므로 --extra 에는 플래그만 허용한다(모르는 인자는 멈춤)."""
+    import shlex
+    from select_lr import _ABLATION_KW, _parse_extra
+    tokens = shlex.split(extra_text or "")
+    if not tokens:
+        return [], {}
+    out, cfg = _parse_extra(tokens, "exp2_runner")
+    return out, {_ABLATION_KW[k]: v for k, v in cfg.items() if k in _ABLATION_KW}
 
 
 # [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py) 산출물. 있으면 본실험 전 회차에 자동으로 --lr/--encoder_lr 을 넘긴다.
@@ -399,10 +417,16 @@ def main():
     ap.add_argument("--lr", type=float, default=None, help="새 층 학습률을 직접 지정(주면 lr_selected.json 을 안 읽는다)")
     ap.add_argument("--encoder_lr", type=float, default=None, help="백본 학습률을 직접 지정(주면 lr_selected.json 을 안 읽는다)")
     ap.add_argument("--ignore_selected_lr", action="store_true", help="lr_selected.json 이 있어도 무시하고 config 기본값으로 돈다")
+    # [신설 2026-09-29 밤 / 격차 분석 대응 묶음] train_mark5.py·eval.py 에 그대로 넘길 플래그(둘 다 같은 플래그를 받는다). run_tag 에 반영되므로
+    # 재개 판정도 같은 파일을 본다. 예: --extra "--head_pretrained_hidden --lp_epochs 3 --hard_weight 1.0 --others_from_reject 0.2 --neg_pl 0.1 0.3"
+    # (preset plsource 의 self/gen 회차는 CSV 가짜 정답이라 --others_from_reject/--neg_pl 을 받지 않는다 — train_mark5.py 가 멈춘다.)
+    ap.add_argument("--extra", type=str, default="",
+                    help='train·eval 에 그대로 넘길 ablation·묶음 플래그(select_lr._WHITELIST["exp2_runner"]). 실험 조건 인자는 못 넣는다')
     args = ap.parse_args()
     sel_lr, sel_elr, lr_src = _resolve_learning_rates(args)
     _lr_args = ((["--lr", repr(float(sel_lr))] if sel_lr is not None else [])
                 + (["--encoder_lr", repr(float(sel_elr))] if sel_elr is not None else []))   # repr: round-trip 보장(:g 는 6자리)
+    _extra_tokens, _ab_kw = _parse_runner_extra(args.extra)
 
     if args.ceiling:
         _cp = args.ceiling_csv if os.path.isabs(args.ceiling_csv) else os.path.join(PROJECT_ROOT, args.ceiling_csv)
@@ -480,6 +504,8 @@ def main():
         print(" 학습률   : " + (f"새 층 {sel_lr:g} · 백본 {sel_elr:g}" if sel_lr is not None and sel_elr is not None
                              else f"새 층 {'기본' if sel_lr is None else f'{sel_lr:g}'} · 백본 {'기본' if sel_elr is None else f'{sel_elr:g}'}")
               + f"  ← {lr_src}")
+        if _extra_tokens:
+            print(f" 추가 인자: {' '.join(_extra_tokens)}  (train·eval 둘 다 · run_tag 에 반영)")
         if timeout_sec:
             print(f" 단계 제한: {args.step_timeout_min}분")
         if master_path:
@@ -493,7 +519,7 @@ def main():
         todo, done = [], []
         for l, n, s, sp, ps in combos:
             tag = _run_tag(args.mark_version, s, None if n == "ceil" else n, ceiling=(n == "ceil"), labeled_n=l, spill=sp, ps=ps,
-                           lr=sel_lr, encoder_lr=sel_elr)
+                           lr=sel_lr, encoder_lr=sel_elr, ablation_kw=_ab_kw)
             need = _needs(args.mark_version, tag, args.force, args.skip_test)
             (todo if any(need) else done).append((l, n, s, sp, ps, tag, need))
 
@@ -540,11 +566,11 @@ def main():
             _ps = ["--pseudo_csv", PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s), "--pseudo_source", ps] if ps else []
             if n == "ceil":
                 # 천장: 학습은 CSV 경로를, 평가는 --ceiling 플래그를 받아 같은 태그(_ceil_s<k>)를 만든다.
-                common = ["--mark_version", args.mark_version, "--seed", str(s)] + _lab + _lr_args   # [LR] train·eval 둘 다
+                common = ["--mark_version", args.mark_version, "--seed", str(s)] + _lab + _lr_args + _extra_tokens   # [LR·extra] train·eval 둘 다
                 train_args = common + ["--ceiling_csv", args.ceiling_csv]
                 eval_args = common + ["--ceiling"]
             else:
-                common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)] + _lab + _lr_args
+                common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)] + _lab + _lr_args + _extra_tokens
                 train_args = common + _sp + _ps
                 eval_args = common + _sp + (["--pseudo_source", ps] if ps else [])
             failed_stage = None

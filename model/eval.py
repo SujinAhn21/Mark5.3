@@ -40,7 +40,7 @@ from postprocess_utils import (
     select_others_threshold,
 )
 from vild_config import AudioViLDConfig
-from vild_model import LearnableBackgroundEmbedding, ViLDTextHead, build_audio_encoder
+from vild_model import LearnableBackgroundEmbedding, build_audio_encoder, build_student_head
 from vild_head import DualBranchStudentHead
 from vild_parser_teacher import AudioParser
 SHARED_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "shared_vild"))
@@ -167,8 +167,13 @@ def _select_class_bias(prob_rows, labels, class_names, config):
 
 
 def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_n=None, ceiling=False,
-             others_threshold=None, labeled_n=None, spill_labeled=False, pseudo_source=None, lr=None, encoder_lr=None):
+             others_threshold=None, labeled_n=None, spill_labeled=False, pseudo_source=None, lr=None, encoder_lr=None,
+             no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
+             segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
+             others_from_reject=None, neg_pl=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
+    [이식 2026-09-29 / Mark5.2] ablation(A1~A4·H)·격차 대응 묶음(PH·LP·HW·OR·NEG) 플래그도 받는다 — 학습 때와 같은 값을 줘야
+    run_tag 가 맞고, PH·H·clip/segment 는 헤드·입력 구조까지 바꾸므로 이름 맞추기 이상의 뜻이 있다.
 
     eval 은 학습을 하지 않지만 **run_tag 로 체크포인트를 찾기 때문에** 학습과 같은 조건을
     넘겨줘야 한다. 예를 들어 --seed 3 --unlabeled_n 500 으로 학습했다면 체크포인트가
@@ -189,8 +194,22 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
     # [신설 2026-09-25 / LR] 학습 때 준 --lr/--encoder_lr 과 같은 값을 줘야 run_tag(_lr/_elr)가 맞아 그 체크포인트를 찾는다.
     # 평가는 학습률을 쓰지 않는다 — 오직 파일 이름 때문이다.
     _lr_txt = config.apply_cli_learning_rates(lr, encoder_lr)
+    # [신설 2026-09-28 / ablation A1·A2·A4] 학습 때 준 것과 같은 플래그를 줘야 run_tag(_noFKD/_noGAP/_noDB)가 맞아 그 체크포인트를 찾는다.
+    # A1·A2 는 평가에서 이름 말고는 쓰이지 않는다. A4 는 증류 갈래 가중치 w 후보를 (0,) 으로 좁혀 지도 헤드만으로 판정한다.
+    # [신설 2026-09-29 / A3] clip_input 은 이름 맞추기(_noSEG)에 더해 평가 입력도 바꾼다 — 클립마다 조각 5개 대신 3초 파형 한 번(아래 루프).
+    # [신설 2026-09-29 / H] linear_head 는 이름 맞추기(_LIN)에 더해 헤드 구조도 바꾼다(build_student_head) — 학습 때와 같아야 classifier_state_dict 가 맞는다.
+    # [2026-09-29 밤 / 묶음] PH 는 헤드 구조(투영·branch)까지 바꾸므로 학습과 같이 줘야 state_dict 가 맞는다. LP·HW·OR·NEG 는 이름 맞추기만.
+    _ab_txt = config.apply_cli_ablation(no_feature_kd=no_feature_kd, pl_min_gap=pl_min_gap, no_distill_branch=no_distill_branch,
+                                        clip_input=clip_input, linear_head=linear_head, segment_input=segment_input,
+                                        head_pretrained_hidden=head_pretrained_hidden, lp_epochs=lp_epochs, hard_weight=hard_weight,
+                                        others_from_reject=others_from_reject, neg_pl=neg_pl)
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} (체크포인트 이름 맞추기용) · run_tag {config.run_tag}")
+    if _ab_txt:
+        print(f"[ABLATION] {_ab_txt} · run_tag {config.run_tag}")
+    _clip_mode = bool(getattr(config, "student_clip_input", False))
+    if _clip_mode:
+        print(f"[A3] 평가 단위 = 클립(파형 {getattr(config, 'student_clip_samples', 48000)}샘플 통째, 조각 1개 취급 → 조각 가중 평균은 가중치 1)")
     device = config.device
     parser = AudioParser(config, segment_mode=True)
 
@@ -222,6 +241,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
     branch_head = DualBranchStudentHead(
         config.embedding_dim,
         distill_final_relu=getattr(config, "distill_branch_final_relu", False),
+        supervised_identity=bool(getattr(config, "head_pretrained_hidden", False)),   # [PH 2026-09-29 밤] 학습과 같은 구조
     ).to(device)
     # [수정 2026-08-17] resolve_state_dict 는 아는 키가 하나도 없으면 KeyError 를 던지므로,
     # 아래 else 의 경고는 도달할 수 없는 코드였다(구버전 .pth 를 넣으면 경고 대신 죽었다).
@@ -235,7 +255,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
         branch_head.load_state_dict(branch_state, strict=False)
     else:
         print("[WARN] branch_state_dict가 없어 기본 branch head로 평가합니다. 새 모델 재학습이 권장됩니다.")
-    text_head = ViLDTextHead(config).to(device)
+    text_head = build_student_head(config).to(device)   # [H 2026-09-29] config.student_head 로 텍스트 앵커/선형 선택(학습과 같은 함수)
     # [이식 2026-09-26 / Mark5.2] classifier_state_dict 를 헤드에 로드한다. 학습형 로짓 스케일(LT)을 켠 뒤로는
     # 이 줄이 없으면 학습된 온도가 평가에서 조용히 무시된다.
     _cls_state = checkpoint.get("classifier_state_dict")
@@ -245,6 +265,14 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                                "2026-09-24 이전 코드로 학습한 모델이거나 run_tag 가 어긋난 것입니다.")
         text_head.load_state_dict(_cls_state)
         print(f"[LT] 학습형 로짓 스케일 로드: T={text_head.temperature:.4f} (초기 {getattr(config, 'logit_temperature', 0.07)})")
+    elif getattr(config, "student_head", "text_anchor") == "linear":
+        # [신설 2026-09-29 / H] 선형 헤드는 가중치가 전부라 strict 로 읽는다 — 아래 strict=False 분기로 흘러가면 키가 어긋나도
+        # 조용히 무작위 초기값으로 평가된다.
+        if not _cls_state or "linear.weight" not in _cls_state:
+            raise RuntimeError("[ERROR] 체크포인트에 선형 헤드(linear.weight)가 없습니다 — --linear_head 없이 학습한 모델이거나 "
+                               "run_tag(_LIN)가 어긋난 것입니다.")
+        text_head.load_state_dict(_cls_state)
+        print(f"[H] 선형 헤드 로드: linear.weight {tuple(_cls_state['linear.weight'].shape)} — 텍스트 앵커·AC/LT 미사용(진단용)")
     elif _cls_state:
         text_head.load_state_dict(_cls_state, strict=False)
     text_emb = config.get_class_text_embeddings(for_evaluation=True).to(device)
@@ -305,7 +333,12 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             # [추가] 9-class 밖 라벨은 조용히 넘기지 않고 집계
             skipped_label_counter[label] = skipped_label_counter.get(label, 0) + 1
             continue
-        segment_records = parser.load_and_segment_with_metadata(path)
+        if _clip_mode:
+            # [A3] 클립 전체를 조각 1개짜리 기록으로 다룬다: wave = 첫 48,000샘플(학습과 같은 자르기), tensor = 클립 mel 뷰(그림용).
+            _out = parser.load_clip_with_segments(path)
+            segment_records = [_out["clip_record"]] if _out is not None else []
+        else:
+            segment_records = parser.load_and_segment_with_metadata(path)
         if not segment_records:
             continue
 
@@ -707,6 +740,22 @@ if __name__ == "__main__":
     # 이 값을 주면 그 값으로 고정해 평가한다(옛 결과 재현·수동 점검용). json 은 건드리지 않는다.
     parser.add_argument("--others_threshold", type=str, default=None,
                         help="others 규칙을 고정: 실수(direct 임계값) 또는 'argmax'. 주지 않으면 val 에서 고른 값 사용")
+    # [신설 2026-09-28 / ablation A1·A2·A4] 학습(train_mark5.py) 때 준 것과 같은 플래그를 준다(run_tag 맞추기 + A4 는 w=0 고정).
+    parser.add_argument("--no_feature_kd", action="store_true", help="[A1] 학습 때 --no_feature_kd 를 줬으면 같이(run_tag _noFKD)")
+    parser.add_argument("--pl_min_gap", type=float, default=None, help="[A2] 학습 때 준 --pl_min_gap 과 같은 값(0 이면 run_tag _noGAP)")
+    parser.add_argument("--no_distill_branch", action="store_true",
+                        help="[A4] 학습 때 --no_distill_branch 를 줬으면 같이(run_tag _noDB · 증류 갈래 가중치 w=0 고정)")
+    parser.add_argument("--clip_input", action="store_true",
+                        help="[A3 2026-09-29] 학습 때 --clip_input 을 줬으면 같이(run_tag _noSEG · 평가 입력도 클립 3초 파형 통째)")
+    parser.add_argument("--linear_head", action="store_true",
+                        help="[H 2026-09-29] 학습 때 --linear_head 를 줬으면 같이(run_tag _LIN · 헤드도 nn.Linear 로 만들어 체크포인트를 읽는다)")
+    # [2026-09-29 밤 / 묶음] 학습 때 준 것과 같은 플래그(run_tag 맞추기. PH 는 헤드 구조도 같이 바꿈).
+    parser.add_argument("--segment_input", action="store_true", help="학습 때 --segment_input 을 줬으면 같이(조각 입력·이름 표식 없음)")
+    parser.add_argument("--head_pretrained_hidden", action="store_true", help="[PH] 학습 때 줬으면 같이(run_tag _PH · 투영/branch 구조)")
+    parser.add_argument("--lp_epochs", type=int, default=None, help="[LP-FT] 학습 때 준 값(run_tag _LP<N>)")
+    parser.add_argument("--hard_weight", type=float, default=None, help="[HW] 학습 때 준 값(run_tag _HW<g>)")
+    parser.add_argument("--others_from_reject", type=float, default=None, help="[OR] 학습 때 준 값(run_tag _OR<τ>)")
+    parser.add_argument("--neg_pl", type=float, nargs=2, default=None, metavar=("TAU", "BETA"), help="[NEG] 학습 때 준 값(run_tag _NEG)")
     args = parser.parse_args()
     # [신설 2026-09-26] logFiles/<run_tag>__eval_<split>.log 에도 남긴다.
     from run_logger import RunLogger
@@ -718,9 +767,15 @@ if __name__ == "__main__":
     _c.spill_labeled = bool(args.spill_labeled)
     _c.pseudo_source = args.pseudo_source
     _c.apply_cli_learning_rates(args.lr, args.encoder_lr)
+    _bundle = dict(segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs,
+                   hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl)
+    _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
+                          clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
     with RunLogger(PROJECT_ROOT, _c.run_tag, f"eval_{args.split}"):
         evaluate(mark_version=args.mark_version, split=args.split,
                  seed_value=args.seed, unlabeled_n=args.unlabeled_n, ceiling=args.ceiling,
                  others_threshold=args.others_threshold, labeled_n=args.labeled_n,
                  spill_labeled=args.spill_labeled, pseudo_source=args.pseudo_source,
-                 lr=args.lr, encoder_lr=args.encoder_lr)
+                 lr=args.lr, encoder_lr=args.encoder_lr,
+                 no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
+                 clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)

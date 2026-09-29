@@ -39,13 +39,19 @@ class DualBranchStudentHead(nn.Module):
     두 갈래를 한꺼번에 바꾸면 1차 결과와 비교할 수 있는 축이 하나도 안 남는다.
     """
 
-    def __init__(self, embedding_dim, distill_final_relu=False):
+    def __init__(self, embedding_dim, distill_final_relu=False, supervised_identity=False):
         super().__init__()
-        self.supervised_branch = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.LayerNorm(embedding_dim),
-            nn.ReLU(inplace=True),
-        )
+        # [신설 2026-09-29 밤 / PH] supervised_identity=True 면 지도 갈래를 항등으로 둔다 — 인코더 투영(Linear 960→384) 출력이 바로
+        # 텍스트 앵커와 만난다. 위 docstring 의 코사인 상한(비음수 벡터 0.69~0.72) 문제와 "무작위 층 둘 + 병목" 을 함께 없앤다.
+        # 증류 갈래는 그대로(feature KD 가 teacher 384 차원을 맞춰야 하므로 Linear+LN 이 필요).
+        if supervised_identity:
+            self.supervised_branch = nn.Identity()
+        else:
+            self.supervised_branch = nn.Sequential(
+                nn.Linear(embedding_dim, embedding_dim),
+                nn.LayerNorm(embedding_dim),
+                nn.ReLU(inplace=True),
+            )
         distill_layers = [
             nn.Linear(embedding_dim, embedding_dim),
             nn.LayerNorm(embedding_dim),

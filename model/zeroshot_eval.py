@@ -53,7 +53,7 @@ if SHARED_DIR not in sys.path:
     sys.path.insert(0, SHARED_DIR)
 
 from vild_config import AudioViLDConfig                                                          # noqa: E402
-from vild_model import LearnableBackgroundEmbedding, ViLDTextHead, build_audio_encoder          # noqa: E402
+from vild_model import LearnableBackgroundEmbedding, build_audio_encoder, build_student_head    # noqa: E402
 from vild_head import DualBranchStudentHead                                                     # noqa: E402
 from vild_parser_teacher import AudioParser                                                     # noqa: E402
 from postprocess_utils import (aggregate_segment_probs, apply_abstention, apply_class_pair_calibration,  # noqa: E402
@@ -80,7 +80,18 @@ def _sha256(path):
     return h.hexdigest()
 
 
+def _student_records(parser, path, clip_mode):
+    """[이식 2026-09-29 / A3] student 입력 기록. 클립 모드면 클립 전체(첫 48,000샘플 파형 + 클립 mel 뷰)를 조각 1개짜리 기록으로 —
+    eval.py 의 클립 모드와 같은 계산(조각 가중 평균은 가중치 1). 조각 모드면 옛 대로 1초 조각 K개."""
+    if clip_mode:
+        out = parser.load_clip_with_segments(path)
+        return [out["clip_record"]] if out is not None else []
+    return parser.load_and_segment_with_metadata(path)
+
+
 def load_student(config, device):
+    if getattr(config, "student_head", "text_anchor") == "linear":
+        raise SystemExit("[ERROR] --linear_head(선형 분류 헤드) 모델에는 텍스트 앵커가 없어 제로샷이 정의되지 않습니다(진단용 H 회차).")
     model_path = os.path.join(BASE_DIR, f"student_model_{config.run_tag}.pth")
     if not os.path.isfile(model_path):
         raise SystemExit(f"[ERROR] 체크포인트가 없습니다: {model_path}")
@@ -90,11 +101,13 @@ def load_student(config, device):
         raise SystemExit(f"[ERROR] 체크포인트 encoder_type={_enc!r} 과 config {config.encoder_type!r} 이 다릅니다.")
     encoder = build_audio_encoder(config).to(device)
     encoder.load_state_dict(resolve_state_dict(ckpt, "model_state_dict", "encoder_state_dict", "model"))
-    branch = DualBranchStudentHead(config.embedding_dim, distill_final_relu=getattr(config, "distill_branch_final_relu", False)).to(device)
+    # [이식 2026-09-29 / PH] 학습과 같은 구조여야 branch state_dict 가 맞는다(head_pretrained_hidden 이면 supervised branch = Identity).
+    branch = DualBranchStudentHead(config.embedding_dim, distill_final_relu=getattr(config, "distill_branch_final_relu", False),
+                                   supervised_identity=bool(getattr(config, "head_pretrained_hidden", False))).to(device)
     bs = ckpt.get("branch_state_dict") or ckpt.get("head_state_dict") or ckpt.get("head")
     if bs is not None:
         branch.load_state_dict(bs, strict=False)
-    text_head = ViLDTextHead(config).to(device)
+    text_head = build_student_head(config).to(device)   # text_anchor 만 여기 온다(선형은 위에서 막음) — eval.py 와 같은 함수
     # [이식 2026-09-26 / Mark5.2] classifier_state_dict 를 헤드에 로드한다. 학습형 로짓 스케일(LT)을 켠 뒤로는
     # 이 줄이 없으면 학습된 온도가 평가에서 조용히 무시된다.
     _cls_state = ckpt.get("classifier_state_dict")
@@ -168,6 +181,7 @@ def predict_set(rows, config, parser, encoder, branch, text_head, bg, text_emb, 
     반환 [(row, pred_idx|None, probs15|None, prob_others9|None)]."""
     use_bg_override = getattr(config, "use_background_override_at_eval", False)
     student_input = getattr(config, "student_input", "mel")
+    clip_mode = bool(getattr(config, "student_clip_input", False))   # [A3] mark5.2 기본 = 클립 입력(--segment_input 이면 조각)
     w = getattr(config, "distill_branch_eval_weight", 0.5)
     oi = class_names.index("others")
     n_base = n_base or len(class_names)
@@ -190,7 +204,7 @@ def predict_set(rows, config, parser, encoder, branch, text_head, bg, text_emb, 
 
     with torch.no_grad():
         for i, r in enumerate(rows, 1):
-            recs = parser.load_and_segment_with_metadata(r["path"])
+            recs = _student_records(parser, r["path"], clip_mode)
             if not recs:
                 out.append((r, None, None, None)); continue
             p9, p15, sal = [], [], [x["saliency"] for x in recs]
@@ -345,6 +359,19 @@ def main():
     ap.add_argument("--zeroshot_bank", type=str, default=os.path.join(SHARED_DIR, "resources", "zeroshot_prompt_bank.json"))
     ap.add_argument("--limit", type=int, default=None, help="동작 확인용: 세트마다 라벨별 앞 N 클립만(산출물 이름에 _limitN)")
     ap.add_argument("--allow_config_rule", action="store_true", help="동작 확인용: val 선택 json 이 없어도 config 기본 others 규칙으로 진행")
+    # [이식 2026-09-29 / Mark5.2] 학습(train_mark5.py) 때 준 것과 같은 ablation·묶음 플래그. run_tag 맞추기에 더해 PH 는 인코더·branch 구조,
+    # clip/segment 는 student 입력 단위를 바꾼다. --linear_head 모델은 앵커가 없어 제로샷 불가(load_student 가 멈춤).
+    ap.add_argument("--no_feature_kd", action="store_true", help="[A1] 학습 때 줬으면 같이(run_tag _noFKD)")
+    ap.add_argument("--pl_min_gap", type=float, default=None, help="[A2] 학습 때 준 값(0 이면 run_tag _noGAP)")
+    ap.add_argument("--no_distill_branch", action="store_true", help="[A4] 학습 때 줬으면 같이(run_tag _noDB)")
+    ap.add_argument("--clip_input", action="store_true", help="[A3] 학습 때 줬으면 같이(run_tag _noSEG · mark5.2 는 기본이 클립 입력)")
+    ap.add_argument("--linear_head", action="store_true", help="[H] 진단용 선형 헤드 — 제로샷 불가(멈춤)")
+    ap.add_argument("--segment_input", action="store_true", help="학습 때 줬으면 같이(조각 1초×5 입력·이름 표식 없음)")
+    ap.add_argument("--head_pretrained_hidden", action="store_true", help="[PH] 학습 때 줬으면 같이(run_tag _PH · 투영/branch 구조)")
+    ap.add_argument("--lp_epochs", type=int, default=None, help="[LP-FT] 학습 때 준 값(run_tag _LP<N>)")
+    ap.add_argument("--hard_weight", type=float, default=None, help="[HW] 학습 때 준 값(run_tag _HW<g>)")
+    ap.add_argument("--others_from_reject", type=float, default=None, help="[OR] 학습 때 준 값(run_tag _OR<τ>)")
+    ap.add_argument("--neg_pl", type=float, nargs=2, default=None, metavar=("TAU", "BETA"), help="[NEG] 학습 때 준 값(run_tag _NEG)")
     args = ap.parse_args()
 
     config = AudioViLDConfig(mark_version=args.mark_version)
@@ -354,6 +381,14 @@ def main():
     _lr_txt = config.apply_cli_learning_rates(args.lr, args.encoder_lr)   # [LR 2026-09-25] run_tag 를 학습 때와 맞춘다
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} (체크포인트 이름 맞추기용)")
+    _ab_txt = config.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
+                                        clip_input=args.clip_input, linear_head=args.linear_head, segment_input=args.segment_input,
+                                        head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs, hard_weight=args.hard_weight,
+                                        others_from_reject=args.others_from_reject, neg_pl=args.neg_pl)
+    if _ab_txt:
+        print(f"[ABLATION] {_ab_txt} (체크포인트 이름·구조 맞추기용)")
+    if getattr(config, "student_clip_input", False):
+        print(f"[A3] 평가 단위 = 클립(파형 {getattr(config, 'student_clip_samples', 48000)}샘플 통째, 조각 1개 취급) — eval.py 와 같은 계산")
     device = config.device
     tag = config.run_tag
     suffix = f"_limit{args.limit}" if args.limit else ""

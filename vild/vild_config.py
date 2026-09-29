@@ -84,6 +84,24 @@ class AudioViLDConfig:
         self.segment_length = 101   # Mel spectrogram time frame 수
         self.segment_hop = 50       # Segment 간 stride
         self.max_segments = 5       # Teacher가 사용할 최대 segment 수
+        # [신설 2026-09-29 / ablation A3] student 가 조각 5개 대신 클립 3초를 통째로 본다(--clip_input, run_tag _noSEG).
+        #   teacher 8개는 그대로 조각(101프레임)을 본다 — Mark4.x 가 그 길이로 학습됐다. 조각별 teacher 출력은
+        #   train_mark5.merge_segments_to_clip 이 비교모델 합의 라벨(Mark5_EXP2/model/make_consensus_labels.py)과 같은 규칙으로
+        #   클립 하나로 합친다(조각 채택 = 확신도·1등−2등 차이 조건, 클립 채택 = 채택 조각 clip_min_segments 개 이상,
+        #   라벨 = 채택 조각 argmax 다수결, 확신도 = 채택 조각 평균, 특징 = 채택 조각 확신도 가중 평균).
+        #   student 클립 파형 = 파일 첫 student_clip_samples 샘플(모자라면 0) — 비교모델 common/data.py 의 자르기와 같다.
+        #   False(기본)면 지금까지의 조각 단위 학습·평가 그대로. mn10(파형 입력) 에서만 뜻이 있다.
+        # [변경 2026-09-29 밤 / 격차 분석] mark5.2 는 클립 입력이 기본이다. 성긴 클립(소리가 3초 중 일부) 59개에서 조각 방식의 오답률이
+        #   11.5%(EfficientAT 2.4%)였고 그 29/34 가 →others 였다(조각에 클립 라벨을 붙이는 라벨 잡음 + 배경 조각의 확신도² 가중).
+        #   run_tag 표식은 옛 산출물(조각 방식 = 표식 없음)과 겹치지 않게 클립 모드에 _noSEG 를 그대로 붙인다. --segment_input 으로 되돌림.
+        self.student_clip_input = (self.mark_version == "mark5.2")
+        self.student_clip_seconds = 3.0
+        self.student_clip_samples = int(self.sample_rate * self.student_clip_seconds)
+        self.clip_min_segments = 3      # 클립 채택에 필요한 채택 조각 수(5개 중 과반). 합의 라벨 스크립트 --min_segments 기본값과 같다
+        # [신설 2026-09-29 밤] teacher(Mark4.x)가 클립 단위(64×301)로 학습됐는지 — None 이면 EnsembleTeacher 가 .pth 8개의 provenance
+        #   (clip_input) 를 읽어 정한다(8개가 섞이면 오류). True 면 teacher 입력이 클립 mel 이고 조각 수 K=1, 클립 채택 조각 수 1.
+        self.teacher_clip_input = None
+        self.teacher_clip_frames = 301
 
         # === 모델 파라미터 ===
         self.embedding_dim = 384
@@ -418,6 +436,34 @@ class AudioViLDConfig:
         #  learnable_logit_scale: ViLDTextHead 의 temperature 를 CLIP 처럼 학습 파라미터로(vild_model.py 주석 참조).
         self.anchor_centering = True
         self.learnable_logit_scale = True
+        # [이식 2026-09-29 / Mark5.2 → Mark5_EXP2] 헤드 진단 H · 격차 분석 대응 묶음(PH·LP-FT·HW·OR·NEG). 본체와 같은 필드·같은 기본값.
+        # [신설 2026-09-29 / 헤드 진단 H] student 분류 헤드. "text_anchor"(기본) = ViLDTextHead(텍스트 앵커 코사인 + 위 AC/LT).
+        #   "linear" = vild_model.LinearClassHead(nn.Linear(embedding_dim, 9)) — 비교모델 EfficientAT 의 mlp 헤드 마지막 층과 같은 방식.
+        #   --linear_head 로만 켠다(run_tag _LIN). 제로샷이 없어지므로 채택용이 아니라 "2%p 차이가 헤드에서 나는가" 를 보는 진단용이다.
+        #   이때 anchor_centering·learnable_logit_scale 은 헤드가 안 쓰므로 뜻이 없다(run_tag 의 _AC_LT 는 이름 규칙상 그대로 붙는다).
+        self.student_head = "text_anchor"
+        # === [신설 2026-09-29 밤 / 격차 분석 대응 묶음] 아래 다섯 가지는 --플래그로 켠다(기본 = 옛 동작). 근거는 Downloads
+        #     Mark5.2_격차분석_2.4%p_원인과대응_20260929.txt. run_tag 표식은 ablation_tag 에 _PH·_LP<N>·_HW1·_OR<τ>·_NEG 순서.
+        #   head_pretrained_hidden : mn10 의 사전학습 은닉층(classifier: Linear 960→1280 + Hardswish + Dropout, MobileNetV3 last_channel)을
+        #                            버리지 않고 살려 그 위에 Linear(1280→384) 투영 하나만 둔다. supervised branch 의 LayerNorm+ReLU 는 뺀다(Identity).
+        #                            EfficientAT 는 이 은닉층 위에 새 Linear 하나뿐인데 우리는 은닉층을 버리고 무작위 층 둘(proj·branch)+
+        #                            ReLU 병목을 끼웠었다(Kumar et al. ICLR 2022: 무작위 헤드가 사전학습 특징을 왜곡).
+        #   lp_epochs             : LP-FT. 처음 N 에폭 백본(mn10 core)을 고정(requires_grad·BN 통계)하고 투영·branch·헤드·BG 만 학습한 뒤
+        #                            전부 푼다. LP 구간은 early stopping 에 세지 않고 FT 첫 에폭에서 best 를 다시 잰다.
+        #   hard_weight           : 정답 라벨 CE 의 가중치. None 이면 옛 (1−α)=0.7(Hinton KD 관례 — 같은 샘플에 두 손실을 걸 때의 것이라
+        #                            labeled/unlabeled 가 갈린 우리 구조에서는 지도 신호 기울기를 0.7배로 줄이는 효과뿐). 1.0 권장.
+        #   others_from_reject_tau: 전문가 8명의 최대 확신도가 이 값 미만이면(전원 거절) others 가짜 정답으로 채택(가중 1−최대). 0 이면 끔.
+        #                            합의 라벨은 구조상 others 가 0 개라(진짜 others 222클립 전부 미채택) 배경의 반지도 신호가 없었다.
+        #                            OpenMatch(NeurIPS 2021)의 one-vs-all 전원 거절 = outlier 와 같은 발상.
+        #   neg_pl_tau / neg_pl_beta: 미채택 클립에서 전문가 c 의 확신도 < tau 인 클래스에 "c 아님" 부정 라벨 −beta·log(1−p_student(c))
+        #                            (UPS, ICLR 2021 의 negative pseudo-label). others 는 전문가가 없어 제외. tau 0 이면 끔.
+        self.head_pretrained_hidden = False
+        self.lp_epochs = 0
+        self.hard_weight = None
+        self.others_from_reject_tau = 0.0
+        self.neg_pl_tau = 0.0
+        self.neg_pl_beta = 0.0
+        # (Mark5.2 본체의 run_tag_suffix 는 여기 없다 — Mark5_EXP2 는 실험 조건 태그 _l/_u/_ceil/_sp/_ps/_s 로 회차를 가른다.)
 
         # === 내부 캐시 ===
         self._text_emb = None
@@ -487,6 +533,14 @@ class AudioViLDConfig:
             _SA    : use_spec_augment=True     (학습 시 SpecAugment 온라인 증강)
             _DA<t> : use_distribution_alignment=True (t = tau 를 소수점 없이, 예: tau 0.5 -> _DA05)
             _DKD   : use_dkd=True
+            _G<g>  : pseudo_label_min_gap=g>0 이고 _PL 일 때 (예: 0.4 -> _G04)
+            _AC_LT : 언제나 (2026-09-26 확정)
+            _noFKD / _noGAP / _noDB : ablation A1(특징 증류 끔) / A2(gap 조건 끔, 이때 _G 없음) / A4(증류 갈래 끔) — ablation_tag
+            _noSEG : ablation A3(student 가 조각 5개 대신 클립 3초 통째, 2026-09-29) — ablation_tag
+            _LIN   : 헤드 진단 H(텍스트 앵커 헤드 대신 nn.Linear, 2026-09-29) — ablation_tag 의 맨 뒤
+            _PH / _LP<N> / _HW<g> / _OR<τ> / _NEG : 격차 분석 대응 묶음(2026-09-29 밤: 헤드 단순화 / LP-FT N에폭 / 정답 CE 가중 / 전원 거절→others / 부정 라벨) — ablation_tag
+            _lr<g>_elr<g> : 학습률이 기본값과 다를 때 (lr_tag)
+            그 뒤에 실험 조건 태그 _l<n> / _u<n>|_ceil / _sp / _ps<이름> / _s<k> (Mark5_EXP2 전용, 아래 코드 순서)
 
         태그가 갈리는 산출물: student 체크포인트 · 손실곡선 PNG · loss_history CSV ·
         혼동행렬 · ROC · performance_summary · calibration_details ·
@@ -515,12 +569,18 @@ class AudioViLDConfig:
         _gap = float(getattr(self, "pseudo_label_min_gap", 0.0) or 0.0)
         if _gap > 0 and getattr(self, "use_pseudo_label_ce", False):
             tag += "_G" + f"{_gap:g}".replace(".", "")
+        # [이식 2026-09-26 / Mark5.2] 앵커 중심화·학습형 로짓 스케일은 본 모델의 구성 요소라 언제나 붙는다.
+        # AC/LT 없이 돌린 2026-09-24 이전 산출물(mark5.2_PL_SA_G04 …)과 이름이 겹치지 않게 하는 구실도 겸한다.
+        tag += "_AC_LT"
+        # [이식 2026-09-29 / ablation·묶음] 우리 부품을 끈 회차(_noFKD·_noGAP·_noDB·_noSEG·_LIN)와 격차 대응 묶음(_PH·_LP<N>·_HW<g>·
+        # _OR<τ>·_NEG) 표식(아래 ablation_tag). 자리는 _AC_LT 뒤·학습률 표식 앞·실험 조건 태그 앞 — aggregate_results._TAG_RE 는
+        # 이 앞부분을 통째로 '설정(base)' 으로 읽으므로 묶음 회차는 본 모델 산출물과 다른 base 로 따로 집계된다(이름이 겹치지 않는다).
+        # 표식은 전부 대문자·숫자라 _TAG_RE 의 _l<n>(소문자 l+숫자)·_u<n>·_s<k> 와 헷갈리지 않는다(2026-09-29 확인).
+        tag += self.ablation_tag
         # [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py). 명령줄로 기본값과 **다른** 학습률을 줬을 때만
         # _lr<새 층>·_elr<백본> 이 붙는다(기본값이면 옛 태그 그대로 — 지금까지의 산출물과 재개 판정이 안 깨진다).
         # 표기는 비교모델 common/naming.py 와 같은 f"{lr:g}"(예: 5e-05 · 0.0002). 자리는 설정 태그의 맨 끝, 실험 조건 태그
         # (_l/_u/_ceil/_sp/_ps/_s) 앞 — aggregate_results._TAG_RE 는 이 앞부분을 통째로 '설정(base)' 으로 읽는다.
-        # [이식 2026-09-26 / Mark5.2] 앵커 중심화·학습형 로짓 스케일은 본 모델의 구성 요소라 언제나 붙는다.
-        tag += "_AC_LT"
         tag += self.lr_tag
         # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그. None 이면 안 붙는다(0 도 유효 조건이라 "is not None").
         # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil. [추가 2026-09-17] labeled_n 은 _l<n> 으로 그 앞에.
@@ -579,6 +639,121 @@ class AudioViLDConfig:
         enc = getattr(self, "encoder_learning_rate", None)
         if d_elr is not None and enc is not None and float(enc) != d_elr:
             out += f"_elr{float(enc):g}"
+        return out
+
+    def apply_cli_ablation(self, no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False,
+                           linear_head=False, segment_input=False, head_pretrained_hidden=False, lp_epochs=None,
+                           hard_weight=None, others_from_reject=None, neg_pl=None) -> str:
+        """[신설 2026-09-28 / ablation A1·A2·A4] 명령줄 --no_feature_kd / --pl_min_gap / --no_distill_branch 를 config 에 넣는다.
+        EfficientAT-pl(같은 백본·같은 라벨)과의 2%p 차이가 우리가 얹은 부품 중 어디서 나는지 하나씩 빼 보는 실험용.
+          A1 no_feature_kd     : use_feature_kd=False — teacher 특징을 따라가는 손실(feature_kd_weight 0.3)을 뺀다.
+          A2 pl_min_gap=0      : pseudo_label_min_gap=0 — 가짜 정답 채택의 "1등−2등 차이 ≥0.4" 조건을 뺀다(확신도 ≥0.5 만 남음).
+                                 0 이 아닌 값을 주면 그 값으로 바꾼다(태그 _G<값>).
+          A4 no_distill_branch : distill_branch_classify=False — 증류 갈래에 분류 손실을 걸지 않고, eval 의 w 후보를 (0,) 으로
+                                 좁혀 최종 확률에서 증류 갈래를 뺀다(지도 헤드만 쓴다). 갈래 자체는 남아 feature KD 만 받는다(A1 과 독립).
+          A3 clip_input        : [2026-09-29] student_clip_input=True — student 가 1초 조각 5개 대신 클립 3초 파형을 통째로 본다
+                                 (teacher 는 조각 그대로, 조각별 출력을 클립 규칙으로 합침. __init__ 의 student_clip_input 주석 참조).
+                                 A1·A2·A4 결과(2026-09-28, seed 1)가 셋 다 본 모델과 1클립 차이라 남은 후보가 이것이었다.
+          H  linear_head         : [2026-09-29] student_head="linear" — 텍스트 앵커 헤드 대신 nn.Linear(embedding_dim, 9)(vild_model.LinearClassHead).
+                                 A3 도 1클립 차이(seed 1)라 남은 후보가 헤드였다. 제로샷이 없어져 채택용이 아니라 진단용이다(run_tag _LIN).
+        run_tag 가 만들어지기 전(학습·평가 모두 config 생성 직후)에 불러야 산출물 이름(ablation_tag)이 맞는다. eval.py 는 학습 때와
+        같은 플래그를 받아야 같은 체크포인트를 찾는다. 돌려주는 값: 바뀐 것이 있으면 로그용 한 줄, 없으면 ''."""
+        changed = []
+        if clip_input and segment_input:
+            raise ValueError("[ERROR] --clip_input 과 --segment_input 을 함께 줄 수 없습니다.")
+        if segment_input:
+            # [2026-09-29 밤] mark5.2 는 클립 입력이 기본이라 조각 방식(2026-09-28 이전 본 모델)으로 되돌리는 플래그가 이것이다.
+            self.student_clip_input = False
+            changed.append(f"조각 입력(1초×{self.max_segments}, 2026-09-28 이전 방식)으로 되돌림")
+        if clip_input and not getattr(self, "student_clip_input", False):
+            if getattr(self, "encoder_type", "cnn") != "mn10":
+                raise ValueError("[ERROR] --clip_input 은 파형 입력 백본(encoder_type=mn10, mark5.2)에서만 뜻이 있습니다. "
+                                 f"지금 encoder_type={getattr(self, 'encoder_type', 'cnn')!r} (mel 조각 입력) 입니다.")
+            self.student_clip_input = True
+            changed.append(f"A3 세그먼트 분할 끔(student 클립 {self.student_clip_seconds:g}초 통째 · teacher 조각 {self.max_segments}개 그대로 "
+                           f"→ 채택 조각 ≥{self.clip_min_segments} 다수결로 합침)")
+        if head_pretrained_hidden:
+            if getattr(self, "encoder_type", "cnn") != "mn10":
+                raise ValueError("[ERROR] --head_pretrained_hidden 은 mn10 백본에서만 뜻이 있습니다(사전학습 은닉층이 mn10 의 것).")
+            self.head_pretrained_hidden = True
+            changed.append("PH 헤드 단순화(mn10 사전학습 은닉층 유지 → Linear(960→384) 하나 · branch LN+ReLU 제거)")
+        if lp_epochs is not None:
+            if int(lp_epochs) < 0:
+                raise ValueError(f"[ERROR] --lp_epochs 는 0 이상이어야 합니다: {lp_epochs}")
+            self.lp_epochs = int(lp_epochs)
+            if self.lp_epochs > 0:
+                changed.append(f"LP-FT(처음 {self.lp_epochs}에폭 백본 고정 뒤 전체 해제)")
+        if hard_weight is not None:
+            if float(hard_weight) <= 0:
+                raise ValueError(f"[ERROR] --hard_weight 는 양수여야 합니다: {hard_weight}")
+            self.hard_weight = float(hard_weight)
+            changed.append(f"정답 라벨 CE 가중치 {self.hard_weight:g}(옛 (1−α)={1 - float(getattr(self, 'distill_alpha', 0.3)):g} 대신)")
+        if others_from_reject is not None:
+            if not (0.0 <= float(others_from_reject) < 1.0):
+                raise ValueError(f"[ERROR] --others_from_reject 는 0 이상 1 미만이어야 합니다: {others_from_reject}")
+            self.others_from_reject_tau = float(others_from_reject)
+            if self.others_from_reject_tau > 0:
+                changed.append(f"전원 거절 → others 가짜 정답(최대 확신도 < {self.others_from_reject_tau:g})")
+        if neg_pl is not None:
+            _tau, _beta = float(neg_pl[0]), float(neg_pl[1])
+            if not (0.0 <= _tau < 1.0) or _beta < 0:
+                raise ValueError(f"[ERROR] --neg_pl 은 (tau in [0,1), beta >= 0) 이어야 합니다: {neg_pl}")
+            self.neg_pl_tau, self.neg_pl_beta = _tau, _beta
+            if _tau > 0 and _beta > 0:
+                changed.append(f"부정 가짜 라벨(전문가 확신도 < {_tau:g} 인 클래스, 가중치 {_beta:g})")
+        if no_feature_kd:
+            self.use_feature_kd = False
+            changed.append("A1 특징 증류 끔(use_feature_kd=False)")
+        if pl_min_gap is not None:
+            _g = float(pl_min_gap)
+            if _g < 0:
+                raise ValueError(f"[ERROR] --pl_min_gap 은 0 이상이어야 합니다: {pl_min_gap}")
+            self.pseudo_label_min_gap = _g
+            changed.append("A2 1등−2등 차이 조건 끔(pseudo_label_min_gap=0)" if _g == 0 else f"1등−2등 차이 조건 {_g:g}")
+        if no_distill_branch:
+            self.distill_branch_classify = False
+            self.distill_branch_eval_weight = 0.0
+            self.distill_eval_weight_candidates = (0.0,)
+            changed.append("A4 증류 갈래 끔(distill_branch_classify=False · eval w=0 고정)")
+        if linear_head:
+            self.student_head = "linear"
+            changed.append(f"H 텍스트 앵커 헤드 → 선형 헤드(nn.Linear {self.embedding_dim}→{len(self.get_classes_for_evaluation())}, "
+                           "제로샷 없음·진단용)")
+        return " / ".join(changed)
+
+    @property
+    def ablation_tag(self) -> str:
+        """[신설 2026-09-28 / ablation] run_tag 에 붙는 표식. 전부 켠 본 모델(기본값)은 ''.
+          _noFKD : use_feature_kd=False            _noGAP : 가짜 정답 CE 를 쓰면서 pseudo_label_min_gap=0 (이때 _G<값> 은 안 붙는다)
+          _noDB  : distill_branch_classify=False
+          _noSEG : student_clip_input=True (A3, 2026-09-29). 기존 세 표식의 이름·순서는 그대로다.
+          _LIN   : student_head="linear" (헤드 진단 H, 2026-09-29) — 맨 뒤.
+        옛 config 객체(속성 없음)에서는 켠 것으로 보고 '' (옛 동작)."""
+        out = ""
+        if not getattr(self, "use_feature_kd", True):
+            out += "_noFKD"
+        if getattr(self, "use_pseudo_label_ce", False) and float(getattr(self, "pseudo_label_min_gap", 0.0) or 0.0) <= 0:
+            out += "_noGAP"
+        if not getattr(self, "distill_branch_classify", True):
+            out += "_noDB"
+        if getattr(self, "student_clip_input", False):
+            out += "_noSEG"
+        if getattr(self, "student_head", "text_anchor") == "linear":
+            out += "_LIN"
+        # [2026-09-29 밤 / 격차 분석 대응 묶음] 표식 순서 고정: _PH → _LP<N> → _HW<g> → _OR<τ 소수점 없이> → _NEG
+        if getattr(self, "head_pretrained_hidden", False):
+            out += "_PH"
+        _lp = int(getattr(self, "lp_epochs", 0) or 0)
+        if _lp > 0:
+            out += f"_LP{_lp}"
+        _hw = getattr(self, "hard_weight", None)
+        if _hw is not None:
+            out += "_HW" + f"{float(_hw):g}".replace(".", "")
+        _or = float(getattr(self, "others_from_reject_tau", 0.0) or 0.0)
+        if _or > 0:
+            out += "_OR" + f"{_or:g}".replace(".", "")          # 0.2 → _OR02, 0.15 → _OR015 (_G04 와 같은 표기)
+        if float(getattr(self, "neg_pl_tau", 0.0) or 0.0) > 0 and float(getattr(self, "neg_pl_beta", 0.0) or 0.0) > 0:
+            out += "_NEG"
         return out
 
     @property

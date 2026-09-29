@@ -31,14 +31,33 @@ _CONFIG_KEYS = [
     "sample_rate",
     "fft_size",
     "hop_length",
+    "anchor_centering",        # [F 2026-09-24] provenance 용. teacher ckpt 에는 없어 apply_config_metadata 가 건너뛴다.
+    "learnable_logit_scale",
     "learning_rate",           # [LR 2026-09-25] provenance 용 — 학습률 선정 뒤 "이 파일은 어느 학습률로 만들었나" 를 파일 안에 남긴다.
     "encoder_learning_rate",   #   apply_config_metadata 는 이 둘을 건너뛴다(아래 _PROVENANCE_ONLY_KEYS).
+    "use_feature_kd",          # [ablation 2026-09-28] provenance 용 — 이 student 파일이 어느 부품을 끄고 만들어졌나(A1·A2·A4).
+    "pseudo_label_min_gap",    #   run_tag(_noFKD/_noGAP/_noDB)와 같은 정보를 파일 안에도 남긴다. 되돌려 적용하지는 않는다.
+    "distill_branch_classify",
+    "student_clip_input",      # [ablation A3 2026-09-29] provenance 용 — student 가 클립 3초 통째(True)로 학습됐나. run_tag _noSEG 와 같은 정보.
+    "student_head",            # [헤드 진단 H 2026-09-29] provenance 용 — "text_anchor"(본 모델) / "linear"(nn.Linear 진단). run_tag _LIN 과 같은 정보.
+    # [2026-09-29 밤 / 격차 분석 대응 묶음] provenance 용 6키 — 어느 묶음으로 만든 student 파일인지. run_tag 표식(_PH·_LP·_HW·_OR·_NEG)과 같은 정보.
+    "head_pretrained_hidden",
+    "lp_epochs",
+    "hard_weight",
+    "others_from_reject_tau",
+    "neg_pl_tau",
+    "neg_pl_beta",
+    "teacher_clip_input",      #   student 가 클립 단위 teacher(Mark4.x clip_input) 로 학습됐나(EnsembleTeacher 가 .pth 8개에서 판정한 값).
 ]
 
 # [LR 2026-09-25] 기록만 하고 되돌려 적용하지 않는 키. 학습률은 "이 파일을 만들 때 쓴 값"이지 "이 파일을 읽는 쪽이 써야 할 값"이
 # 아니다. train_mark5.py 의 EnsembleTeacher 가 teacher ckpt 8개를 apply_config_metadata 로 읽는데, 앞으로 teacher 가 이 키를 갖고
 # 저장되면 student 의 학습률(과 run_tag)이 teacher 값으로 조용히 바뀐다. 2026-09-25 실측: 지금 teacher ckpt 에는 이 키가 없다.
-_PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate"}
+# [ablation 2026-09-28] 절제 플래그 세 개도 같은 이유로 기록만 한다 — teacher(Mark4.x) 파일이 이 키를 가져도 student 설정을 바꾸지 않는다.
+# [2026-09-29 밤] Mark4.x teacher 가 새로 기록하는 clip_input·clip_frames 도 여기 — student config 에 그대로 흘러들면 안 된다(EnsembleTeacher 가 따로 읽는다).
+_PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate", "use_feature_kd", "pseudo_label_min_gap", "distill_branch_classify",
+                         "student_clip_input", "student_head", "head_pretrained_hidden", "lp_epochs", "hard_weight",
+                         "others_from_reject_tau", "neg_pl_tau", "neg_pl_beta", "teacher_clip_input", "clip_input", "clip_frames"}
 
 
 def extract_config_metadata(config) -> dict:

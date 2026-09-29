@@ -86,7 +86,7 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
     import torch.nn.functional as F
     from postprocess_utils import (aggregate_segment_probs, apply_abstention, apply_class_pair_calibration,
                                    apply_others_calibration, apply_temporal_smoothing)
-    from vild_model import LearnableBackgroundEmbedding, ViLDTextHead, build_audio_encoder
+    from vild_model import LearnableBackgroundEmbedding, build_audio_encoder, build_student_head
     from vild_head import DualBranchStudentHead
     from vild_parser_teacher import AudioParser
     from checkpoint_utils import load_checkpoint, resolve_state_dict
@@ -98,12 +98,15 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
         raise SystemExit(f"[ERROR] 체크포인트 encoder_type={_ckpt_enc!r} 과 config {config.encoder_type!r} 이 다릅니다.")
     encoder = build_audio_encoder(config).to(device)
     encoder.load_state_dict(resolve_state_dict(ckpt, "model_state_dict", "encoder_state_dict", "model"))
+    # [이식 2026-09-29 / PH·H] 학습과 같은 구조여야 state_dict 가 맞는다(head_pretrained_hidden → supervised branch Identity, 헤드는 build_student_head).
     branch = DualBranchStudentHead(config.embedding_dim,
-                                   distill_final_relu=getattr(config, "distill_branch_final_relu", False)).to(device)
+                                   distill_final_relu=getattr(config, "distill_branch_final_relu", False),
+                                   supervised_identity=bool(getattr(config, "head_pretrained_hidden", False))).to(device)
     bs = ckpt.get("branch_state_dict") or ckpt.get("head_state_dict") or ckpt.get("head")
     if bs is not None:
         branch.load_state_dict(bs, strict=False)
-    text_head = ViLDTextHead(config).to(device)
+    text_head = build_student_head(config).to(device)
+    clip_mode = bool(getattr(config, "student_clip_input", False))   # [A3] mark5.2 기본 = 클립 입력(--segment_input 이면 조각)
     # [이식 2026-09-26 / Mark5.2] classifier_state_dict 를 헤드에 로드한다. 학습형 로짓 스케일(LT)을 켠 뒤로는
     # 이 줄이 없으면 학습된 온도가 평가에서 조용히 무시된다.
     _cls_state = ckpt.get("classifier_state_dict")
@@ -113,6 +116,12 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
                                "2026-09-24 이전 코드로 학습한 모델이거나 run_tag 가 어긋난 것입니다.")
         text_head.load_state_dict(_cls_state)
         print(f"[LT] 학습형 로짓 스케일 로드: T={text_head.temperature:.4f} (초기 {getattr(config, 'logit_temperature', 0.07)})")
+    elif getattr(config, "student_head", "text_anchor") == "linear":
+        # [H] 선형 헤드는 가중치가 전부라 strict 로 읽는다(eval.py 와 같은 규칙).
+        if not _cls_state or "linear.weight" not in _cls_state:
+            raise RuntimeError("[ERROR] 체크포인트에 선형 헤드(linear.weight)가 없습니다 — --linear_head 없이 학습한 모델이거나 run_tag(_LIN)가 어긋난 것입니다.")
+        text_head.load_state_dict(_cls_state)
+        print(f"[H] 선형 헤드 로드: linear.weight {tuple(_cls_state['linear.weight'].shape)} — 텍스트 앵커·AC/LT 미사용(진단용)")
     elif _cls_state:
         text_head.load_state_dict(_cls_state, strict=False)
     text_emb = config.get_class_text_embeddings(for_evaluation=True).to(device)
@@ -165,7 +174,12 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
     out = []
     with torch.no_grad():
         for i, item in enumerate(pool, 1):
-            recs = parser.load_and_segment_with_metadata(item["path"])
+            if clip_mode:
+                # [이식 2026-09-29 / A3] 클립 전체를 조각 1개짜리 기록으로(eval.py 클립 모드와 같은 계산 — 첫 48,000샘플 파형).
+                _o = parser.load_clip_with_segments(item["path"])
+                recs = [_o["clip_record"]] if _o is not None else []
+            else:
+                recs = parser.load_and_segment_with_metadata(item["path"])
             if not recs:
                 out.append((item["path"], None, 0.0)); continue
             seg_probs, sal = [], [r["saliency"] for r in recs]
@@ -263,7 +277,22 @@ def main():
     # [신설 2026-09-25 / LR] self 의 학습 run_tag 를 맞추는 용도(gen 은 비교모델 체크포인트라 영향 없음).
     ap.add_argument("--lr", type=float, default=None, help="[LR] self student 학습 때 준 --lr 과 같은 값(run_tag _lr<값>)")
     ap.add_argument("--encoder_lr", type=float, default=None, help="[LR] self student 학습 때 준 --encoder_lr 과 같은 값(run_tag _elr<값>)")
+    # [이식 2026-09-29 / Mark5.2] self student 학습(train_mark5.py) 때 준 것과 같은 ablation·묶음 플래그(run_tag + PH·H·clip/segment 는 구조·입력도 같이).
+    ap.add_argument("--no_feature_kd", action="store_true", help="[A1] self 학습 때 줬으면 같이(run_tag _noFKD)")
+    ap.add_argument("--pl_min_gap", type=float, default=None, help="[A2] self 학습 때 준 값(0 이면 run_tag _noGAP)")
+    ap.add_argument("--no_distill_branch", action="store_true", help="[A4] self 학습 때 줬으면 같이(run_tag _noDB)")
+    ap.add_argument("--clip_input", action="store_true", help="[A3] self 학습 때 줬으면 같이(run_tag _noSEG · mark5.2 는 기본이 클립 입력)")
+    ap.add_argument("--linear_head", action="store_true", help="[H] self 학습 때 줬으면 같이(run_tag _LIN · 선형 헤드로 읽음)")
+    ap.add_argument("--segment_input", action="store_true", help="self 학습 때 줬으면 같이(조각 1초×5 입력·이름 표식 없음)")
+    ap.add_argument("--head_pretrained_hidden", action="store_true", help="[PH] self 학습 때 줬으면 같이(run_tag _PH · 투영/branch 구조)")
+    ap.add_argument("--lp_epochs", type=int, default=None, help="[LP-FT] self 학습 때 준 값(run_tag _LP<N>)")
+    ap.add_argument("--hard_weight", type=float, default=None, help="[HW] self 학습 때 준 값(run_tag _HW<g>)")
+    ap.add_argument("--others_from_reject", type=float, default=None, help="[OR] self 학습 때 준 값(run_tag _OR<τ>)")
+    ap.add_argument("--neg_pl", type=float, nargs=2, default=None, metavar=("TAU", "BETA"), help="[NEG] self 학습 때 준 값(run_tag _NEG)")
     args = ap.parse_args()
+    _ab_given = any([args.no_feature_kd, args.pl_min_gap is not None, args.no_distill_branch, args.clip_input, args.linear_head,
+                     args.segment_input, args.head_pretrained_hidden, args.lp_epochs is not None, args.hard_weight is not None,
+                     args.others_from_reject is not None, args.neg_pl is not None])
 
     config = AudioViLDConfig(mark_version=args.mark_version)
     device = config.device
@@ -275,8 +304,14 @@ def main():
         _lr_txt = config.apply_cli_learning_rates(args.lr, args.encoder_lr)   # [LR 2026-09-25] run_tag 를 그 회차와 맞춘다
         if _lr_txt:
             print(f"[LR] 명령줄 학습률: {_lr_txt} (self 회차 run_tag 맞추기용) · run_tag {config.run_tag}")
-    elif args.lr is not None or args.encoder_lr is not None:
-        raise SystemExit("[ERROR] --lr/--encoder_lr 은 --source self 에서만 뜻이 있습니다(gen 은 비교모델 체크포인트라 run_tag 를 쓰지 않습니다).")
+        _ab_txt = config.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
+                                            clip_input=args.clip_input, linear_head=args.linear_head, segment_input=args.segment_input,
+                                            head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs, hard_weight=args.hard_weight,
+                                            others_from_reject=args.others_from_reject, neg_pl=args.neg_pl)
+        if _ab_txt:
+            print(f"[ABLATION] {_ab_txt} (self 회차 run_tag·구조 맞추기용) · run_tag {config.run_tag}")
+    elif args.lr is not None or args.encoder_lr is not None or _ab_given:
+        raise SystemExit("[ERROR] --lr/--encoder_lr 과 ablation·묶음 플래그는 --source self 에서만 뜻이 있습니다(gen 은 비교모델 체크포인트라 run_tag 를 쓰지 않습니다).")
     pool = _pool(config, args.labeled_n, args.seed, args.spill_labeled, args.limit)
     ckpt = args.ckpt if os.path.isabs(args.ckpt) else os.path.join(PROJECT_ROOT, args.ckpt)
     if not os.path.isfile(ckpt):

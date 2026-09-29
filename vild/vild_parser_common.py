@@ -98,9 +98,49 @@ class BaseAudioParser:
         if waveform is None or waveform.numel() == 0:
             print(f"[Parser] Skipped unreadable file: {file_path}")
             return []
+        return self._segments_from_waveform(waveform, file_path)
 
+    def load_clip_with_segments(self, file_path):
+        """[신설 2026-09-29 / ablation A3] 파일을 한 번 읽어 클립 단위 student 입력과 teacher 조각을 함께 돌려준다.
+            clip_wave   : [student_clip_samples] float32 16 kHz — 파일 첫 48,000 샘플(3.0초), 모자라면 0 으로 채움.
+                          비교모델 Baseline_*/common/data.py 의 자르기(wav[:CLIP_SAMPLES] + 0 채움)와 같다.
+            clip_record : 클립 전체 mel 의 시각화 뷰 하나 — eval.py 가 조각 1개짜리 기록으로 다룬다(tensor [C, n_mels, T(=301)],
+                          segment_index 0, start_frame 0, end_frame T, saliency, wave=clip_wave).
+            segments    : load_and_segment_with_metadata 와 완전히 같은 조각 기록(teacher 8개용, 101프레임 × 최대 max_segments 개).
+        못 읽거나 조각이 없으면 None. mel 은 한 번만 계산해 조각과 클립 뷰가 같은 값을 쓴다."""
+        waveform = load_audio_file(file_path, self.config.sample_rate, self.resampler_cache)
+        if waveform is None or waveform.numel() == 0:
+            print(f"[Parser] Skipped unreadable file: {file_path}")
+            return None
+        mel_db = self._to_visual_mel(waveform)
+        if mel_db is None:
+            print(f"[Parser] Unexpected mel shape from {file_path}")
+            return None
+        segments = self._segments_from_waveform(waveform, file_path, mel_db=mel_db)
+        if not segments:
+            return None
+        n = int(getattr(self.config, "student_clip_samples", int(self.config.sample_rate * 3.0)))
+        wave_1d = waveform.reshape(-1)[:n]
+        if wave_1d.numel() < n:
+            wave_1d = torch.nn.functional.pad(wave_1d, (0, n - wave_1d.numel()))
+        clip_wave = wave_1d.clone().to(torch.float32)
+        views = self._build_visual_views(mel_db)            # [C, n_mels, T] — 조각과 같은 view 종류(mel_delta 면 3채널)
+        clip_record = {
+            "segment_index": 0,
+            "start_frame": 0,
+            "end_frame": int(views.shape[-1]),
+            "saliency": self.compute_saliency_score(views),
+            "tensor": views,
+            "wave": clip_wave,
+        }
+        return {"clip_wave": clip_wave, "clip_record": clip_record, "segments": segments}
+
+    def _segments_from_waveform(self, waveform, file_path, mel_db=None):
+        """[분리 2026-09-29] 파형 하나에서 teacher 조각 기록 목록을 만든다 — 옛 load_and_segment_with_metadata 본문 그대로.
+        mel_db 를 주면 다시 계산하지 않는다(load_clip_with_segments 가 클립 뷰와 공유)."""
         try:
-            mel_db = self._to_visual_mel(waveform)
+            if mel_db is None:
+                mel_db = self._to_visual_mel(waveform)
             if mel_db is None:
                 print(f"[Parser] Unexpected mel shape from {file_path}")
                 return []

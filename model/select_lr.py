@@ -92,8 +92,21 @@ def _repo_kind(mark_version):
     return "exp2" if hasattr(_config(mark_version), "experiment_seed") else "mark52"
 
 
-_WHITELIST = {"mark52": {},
-              "exp2": {"--unlabeled_n": 1, "--labeled_n": 1}}
+# [2026-09-29 밤 / 묶음] 격차 분석 대응 묶음·ablation 플래그를 --extra 로 받는다(값 개수 = 뒤에 오는 값의 수). 태그는 _tag 가
+# vild_config.apply_cli_ablation 에 그대로 넣어 계산하므로 자식(train/eval)의 run_tag 와 반드시 같다.
+# [이식 2026-09-29 / Mark5_EXP2] 두 저장소가 같은 플래그를 받는다(EXP2 는 실험 조건 --unlabeled_n/--labeled_n 이 더 있다).
+#   "exp2_runner" 는 Mark5_EXP2/model/run_experiments.py 가 쓰는 화이트리스트 — 실험 조건은 실행기가 계획표로 정하므로 플래그만 허용.
+_ABLATION_FLAGS = {"--head_pretrained_hidden": 0, "--segment_input": 0, "--clip_input": 0, "--no_feature_kd": 0,
+                   "--no_distill_branch": 0, "--linear_head": 0,
+                   "--lp_epochs": 1, "--hard_weight": 1, "--others_from_reject": 1, "--pl_min_gap": 1, "--neg_pl": 2}
+_WHITELIST = {"mark52": dict(_ABLATION_FLAGS),
+              "exp2": {**_ABLATION_FLAGS, "--unlabeled_n": 1, "--labeled_n": 1},
+              "exp2_runner": dict(_ABLATION_FLAGS)}
+_INT_KEYS = {"--unlabeled_n", "--labeled_n", "--lp_epochs"}
+_ABLATION_KW = {"--head_pretrained_hidden": "head_pretrained_hidden", "--segment_input": "segment_input", "--clip_input": "clip_input",
+                "--no_feature_kd": "no_feature_kd", "--no_distill_branch": "no_distill_branch", "--linear_head": "linear_head",
+                "--lp_epochs": "lp_epochs", "--hard_weight": "hard_weight", "--others_from_reject": "others_from_reject",
+                "--pl_min_gap": "pl_min_gap", "--neg_pl": "neg_pl"}
 
 
 def _parse_extra(extra, kind):
@@ -110,10 +123,14 @@ def _parse_extra(extra, kind):
             cfg[a] = True
             i += 1
         else:
-            if i + 1 >= len(out):
-                raise SystemExit(f"[ERROR] --extra 의 {a} 뒤에 값이 없습니다.")
-            cfg[a] = int(out[i + 1])
-            i += 2
+            if i + n >= len(out):
+                raise SystemExit(f"[ERROR] --extra 의 {a} 뒤에 값이 {n}개 있어야 합니다.")
+            vals = out[i + 1:i + 1 + n]
+            if n == 1:
+                cfg[a] = int(vals[0]) if a in _INT_KEYS else float(vals[0])
+            else:
+                cfg[a] = tuple(float(v) for v in vals)
+            i += 1 + n
     if kind == "exp2" and "--unlabeled_n" not in cfg:
         # 본실험 표 1(제안 조건)과 같은 조건에서 고른다. 안 주면 넣어 준다(태그 _u2000).
         cfg["--unlabeled_n"] = 2000
@@ -131,6 +148,10 @@ def _tag(mark_version, kind, cfg, lr, encoder_lr, seed):
         c.unlabeled_n = cfg.get("--unlabeled_n")
         c.labeled_n = cfg.get("--labeled_n")
     c.apply_cli_learning_rates(lr, encoder_lr)
+    # [2026-09-29 밤] 묶음·ablation 플래그를 자식과 같은 함수로 적용해 태그(_PH·_LP…·_noSEG…)를 맞춘다.
+    _kw = {_ABLATION_KW[k]: v for k, v in cfg.items() if k in _ABLATION_KW}
+    if _kw:
+        c.apply_cli_ablation(**_kw)
     return c.run_tag
 
 
