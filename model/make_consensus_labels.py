@@ -41,6 +41,14 @@ Mark5 와 다른 것 (논문에 그대로 밝힌다)
   - 클립 라벨 = 그 출력의 argmax(타겟 8종), 확신도 = 그 출력의 확신도, vote_agreement = 1.0
   Mark5.2 학습(train_mark5.py, 클립 teacher)의 채택 규칙과 같다. consensus_segments.csv 는 클립당 1행(segment_index 0)으로 같은 형식.
   stats.rule.teacher_input 에 "clip"/"segment" 가 적힌다.
+[2026-09-30 밤 / 가짜 정답 재료] --clip_rule mean — 조각 teacher 의 출력을 전문가별로 평균한 뒤 클립 단위로 채택한다(기본 vote 는 위 다수결 그대로).
+  - 전문가 평균 p̄[e] = 그 클립 조각 K개에서 전문가 e 의 양성 확률 평균
+  - 클립 채택 = max p̄ >= min_conf 그리고 (1등 − 2등 p̄) >= min_gap  (조각 단위 채택·--min_segments 는 쓰지 않는다)
+  - 클립 라벨 = p̄ 가 가장 큰 전문가의 클래스, 확신도 = max p̄ (others 는 구조상 나오지 않는다)
+  - vote_agreement = 조각별 1등 전문가가 클립 라벨의 전문가와 같은 조각의 비율(참고값), n_segments_kept = 조각 단위 채택 수(참고값)
+  Mark5.2 학습의 --teacher_seg_mean(train_mark5.merge_segments_to_clip rule="mean")과 같은 규칙이다. 조각 teacher 에서만 쓴다(클립 teacher 면 멈춤).
+  실측(2026-09-30, 3차 조각 teacher·증강 없는 원본·unlabeled 2,000클립을 정답 라벨과 대조): vote 채택 1,288·오답 50 → mean 채택 1,339·오답 36.
+  이 규칙에서는 consensus_segments.csv 에 전문가별 확률 열 p_<전문가> 가, consensus_labels_all.csv 에 clip_conf·clip_gap 열이 더 붙는다.
 
 결정성: fusion 에 학습 파라미터가 없고(optimizer 에는 student 만 들어감, train_mark5.py:633) 파서·teacher
 에 난수가 없으며 증강도 없으므로 결과는 seed 와 무관하다. cudnn deterministic 을 켜 GPU 끝자리도 고정한다.
@@ -127,6 +135,10 @@ def main():
     ap.add_argument("--min_gap", type=float, default=None,
                     help="[2026-09-22 / B] 세그먼트 채택 추가 조건: 1등−2등 전문가 확신도 차이 >= 이 값(기본: config.pseudo_label_min_gap=0.4, 0 이면 옛 동작)")
     ap.add_argument("--min_segments", type=int, default=3, help="클립 채택에 필요한 채택 세그먼트 수(5개 중, 기본 3=과반). 전문가가 클립 단위(K=1)면 1 로 강제")
+    ap.add_argument("--clip_rule", type=str, default="vote", choices=["vote", "mean"],
+                    help="[2026-09-30 밤 / 가짜 정답 재료] 조각 → 클립 합치기 규칙. vote(기본·옛 동작) = 조각 채택 → --min_segments 개 이상 → 다수결. "
+                         "mean = 전문가별로 조각 확신도를 평균한 뒤 클립 단위로 채택(최대 >= min_conf & 1등−2등 >= min_gap, 라벨 = 평균 1등 전문가). "
+                         "Mark5.2 학습의 --teacher_seg_mean 과 같은 규칙. 조각 teacher 에서만")
     ap.add_argument("--clips_per_batch", type=int, default=8, help="teacher 한 번 호출에 묶는 클립 수(세그먼트 5개씩)")
     ap.add_argument("--limit", type=int, default=0, help="동작 확인용: 앞에서 N 개만. 산출물 이름에 _limitN 이 붙는다")
     ap.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "consensus_labels.csv"))
@@ -159,9 +171,17 @@ def main():
               f"채택 = 확신도 ≥ {min_conf} & 1등−2등 차이 ≥ {min_gap:g} — Mark5.2 학습(train_mark5.py)의 클립 teacher 규칙과 같다")
     else:
         print(f"[TEACHER] 전문가 8개 = 조각 단위(mel {config.n_mels}×{config.segment_length} × 최대 {getattr(config, 'max_segments', 5)})")
+    # [2026-09-30 밤 / 가짜 정답 재료] 조각 평균 규칙은 조각 teacher 에서만 뜻이 있다(K=1 이면 vote 와 같다). 클립 teacher 에 주면 재료가 뒤바뀐 것이라 멈춘다.
+    if args.clip_rule == "mean" and teacher_clip:
+        raise SystemExit("[ERROR] --clip_rule mean(조각 평균 합의)은 조각 단위 teacher 에서만 씁니다. resources/ 의 teacher 8개가 클립 단위(Mark4.x clip_input)입니다 — "
+                         "Mark5.2 의 preprocessing/import_teachers.py --run_subdir <조각 판 보관 폴더> --also ../Mark5_EXP2 로 조각 teacher 를 넣은 뒤 다시 돌리십시오.")
     _k_txt = "1/1" if teacher_clip else f"{args.min_segments}/5"
-    print(f"[INFO] 합의 라벨 생성: mark_version={args.mark_version}, device={device}, 세그먼트 채택 임계값={min_conf}, 1등−2등 차이>={min_gap:g}, "
-          f"클립 채택 = 채택 세그먼트 >= {_k_txt}, 라벨 = 채택 세그먼트 다수결, 분포 정렬=off, 증강=없음")
+    if args.clip_rule == "mean":
+        print(f"[INFO] 합의 라벨 생성: mark_version={args.mark_version}, device={device}, [clip_rule mean] 전문가별 조각 확신도 평균 → "
+              f"클립 채택 = 평균 확신도 최대 >= {min_conf} & 1등−2등 차이 >= {min_gap:g}, 라벨 = 평균 확신도 1등 전문가, 분포 정렬=off, 증강=없음")
+    else:
+        print(f"[INFO] 합의 라벨 생성: mark_version={args.mark_version}, device={device}, 세그먼트 채택 임계값={min_conf}, 1등−2등 차이>={min_gap:g}, "
+              f"클립 채택 = 채택 세그먼트 >= {_k_txt}, 라벨 = 채택 세그먼트 다수결, 분포 정렬=off, 증강=없음")
     if score_mode == "margin":
         print("[INFO] teacher fusion: 담당 칸 = margin(target-others), others 칸 = -max(margin)  (others_rule 은 이 모드에서 미사용)")
     else:
@@ -185,6 +205,7 @@ def main():
     parser = AudioParser(config, segment_mode=True)
     teacher = EnsembleTeacher(specialist_config, device, others_rule=others_rule, score_mode=score_mode,
                               use_distribution_alignment=False)
+    spec_names = list(specialist_config.keys())          # [2026-09-30 밤 / 가짜 정답 재료] 전문가 순서(fusion 의 specialist_weights 키 순서와 같다)
 
     csv_path = _resolve_csv_path("dataset_unlabeled.csv")
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
@@ -211,10 +232,13 @@ def main():
         probs_all = torch.softmax(out.logits, dim=1).cpu().numpy()                  # [sumK, 9]
         conf_all = (1.0 - out.uncertainty).detach().cpu().numpy().astype(np.float64)
         gap_all = out.disagreement.detach().cpu().numpy().astype(np.float64)       # [2026-09-22 / B] 1등−2등 전문가 확신도 차이
+        # [2026-09-30 밤 / 가짜 정답 재료] 전문가별 양성 확률 [sumK, 8] (전문가 순서 = specialist_config 순서). --clip_rule mean 이 이 값의 조각 평균을 쓴다.
+        sw_all = np.stack([out.specialist_weights[n_].squeeze(1).numpy().astype(np.float64) for n_ in spec_names], axis=1)
         pos = 0
         for row, recs in pending:
             K = len(recs)
             probs, conf, gap = probs_all[pos:pos + K], conf_all[pos:pos + K], gap_all[pos:pos + K]
+            sw = sw_all[pos:pos + K]                                                # [K, 8]
             pos += K
             path = row["path"]
             seg_argmax = probs.argmax(axis=1)
@@ -227,14 +251,30 @@ def main():
                                  "saliency": round(float(r["saliency"]), 6), "confidence": round(float(conf[i]), 6),
                                  "disagreement": round(float(gap[i]), 6),          # [2026-09-22 / B]
                                  "kept": int(kept[i]), "argmax": class_names[int(seg_argmax[i])],
-                                 **{f"prob_{c}": round(float(probs[i, j]), 6) for j, c in enumerate(class_names)}})
+                                 **{f"prob_{c}": round(float(probs[i, j]), 6) for j, c in enumerate(class_names)},
+                                 **({f"p_{n_}": round(float(sw[i, j]), 7) for j, n_ in enumerate(spec_names)} if args.clip_rule == "mean" else {})})
             mean_prob = probs.mean(axis=0)                     # 참고용(라벨 결정에는 쓰지 않음)
             rec = {"path": path, "keep": 0, "label": "", "confidence": float("nan"), "n_segments": K,
                    "n_segments_kept": n_kept, "vote_agreement": float("nan"),
                    "seg_conf_mean": round(float(conf.mean()), 6), "seg_conf_max": round(float(conf.max()), 6),
                    "note": "few_segments"}
             rec.update({f"meanprob_{c}": round(float(mean_prob[j]), 6) for j, c in enumerate(class_names)})
-            if n_kept >= args.min_segments:
+            if args.clip_rule == "mean":
+                # [2026-09-30 밤 / 가짜 정답 재료] 전문가별 조각 평균 → 클립 단위 채택(train_mark5.merge_segments_to_clip rule="mean" 과 같은 규칙).
+                pbar = sw.mean(axis=0)                                              # [8] 전문가별 조각 평균
+                order = np.argsort(-pbar, kind="stable")                            # 동률이면 전문가 순서가 앞선 쪽
+                c_conf = float(pbar[order[0]])
+                c_gap = float(pbar[order[0]] - pbar[order[1]]) if len(order) > 1 else 0.0
+                rec.update({"clip_conf": round(c_conf, 6), "clip_gap": round(c_gap, 6), "note": "below_threshold"})
+                if c_conf >= min_conf and c_gap >= min_gap:
+                    label_idx = label_map[spec_names[int(order[0])]]
+                    agree = float(np.mean(sw.argmax(axis=1) == int(order[0])))      # 참고값: 조각별 1등 전문가가 클립 라벨의 전문가와 같은 조각 비율
+                    rec.update({"keep": 1, "label": class_names[label_idx], "confidence": round(c_conf, 6),
+                                "vote_agreement": round(agree, 4), "note": "kept"})
+                    kept_rows.append({"path": path, "label": rec["label"], "confidence": rec["confidence"],
+                                      "n_segments": K, "n_segments_kept": n_kept,
+                                      "vote_agreement": rec["vote_agreement"], "generated_at": generated_at})
+            elif n_kept >= args.min_segments:
                 votes = collections.Counter(int(a) for a in seg_argmax[kept])
                 conf_sum = collections.defaultdict(float)
                 for a, c in zip(seg_argmax[kept], conf[kept]):
@@ -287,9 +327,9 @@ def main():
 
     # ---- 통계 ----
     kept_dist = collections.Counter(r["label"] for r in kept_rows)
-    few = [r for r in all_rows if r.get("note") == "few_segments"]
+    few = [r for r in all_rows if r.get("note") in ("few_segments", "below_threshold")]      # 미채택(vote: 채택 조각 부족 / mean: 임계값 미달)
     few_dist = collections.Counter(int(np.argmax([r[f"meanprob_{c}"] for c in class_names])) for r in few)
-    confs = np.array([r["confidence"] for r in all_rows if r.get("note") in ("kept", "few_segments") and not np.isnan(r["confidence"])])
+    confs = np.array([r["confidence"] for r in all_rows if r.get("note") in ("kept", "few_segments", "below_threshold") and not np.isnan(r["confidence"])])
     seg_conf = np.array([r["confidence"] for r in seg_rows], dtype=float)
     edges = np.linspace(0.0, 1.0, 11)
     seg_hist, _ = np.histogram(seg_conf, bins=edges) if len(seg_conf) else (np.zeros(10, dtype=int), None)
@@ -298,9 +338,12 @@ def main():
         "generated_at": generated_at, "mark_version": args.mark_version,
         "rule": {"teacher_input": ("clip" if teacher_clip else "segment"),          # [2026-09-29 밤] 전문가 입력 단위(.pth provenance 로 판정)
                  "teacher_clip_frames": (teacher_frames if teacher_clip else None),
-                 "segment_min_conf": min_conf, "segment_min_gap": min_gap, "clip_min_segments": args.min_segments,
-                 "clip_label": "majority vote of argmax over kept segments (tie -> larger confidence sum)",
-                 "clip_confidence": "mean confidence of kept segments",
+                 "clip_rule": args.clip_rule,                                                # [2026-09-30 밤 / 가짜 정답 재료] "vote"(조각 다수결) / "mean"(전문가별 조각 평균)
+                 "segment_min_conf": min_conf, "segment_min_gap": min_gap,
+                 "clip_min_segments": (args.min_segments if args.clip_rule == "vote" else None),
+                 "clip_label": ("majority vote of argmax over kept segments (tie -> larger confidence sum)" if args.clip_rule == "vote"
+                                else "specialist with the largest segment-mean confidence (clip kept if max >= min_conf and top1-top2 >= min_gap)"),
+                 "clip_confidence": ("mean confidence of kept segments" if args.clip_rule == "vote" else "largest segment-mean specialist confidence"),
                  "score_mode": score_mode, "others_rule": others_rule if score_mode != "margin" else "n/a (margin mode)",
                  "distribution_alignment": False, "augmentation": None,
                  "segment_selection_mode": config.segment_selection_mode, "max_segments": getattr(config, "max_segments", 5)},
@@ -354,6 +397,8 @@ def main():
         w.writerows(kept_rows)
     all_fields = ["path", "keep", "note", "label", "confidence", "n_segments", "n_segments_kept", "vote_agreement",
                   "seg_conf_mean", "seg_conf_max"] + [f"meanprob_{c}" for c in class_names]
+    if args.clip_rule == "mean":
+        all_fields += ["clip_conf", "clip_gap"]                                   # [2026-09-30 밤 / 가짜 정답 재료] 클립 단위 채택에 쓴 두 값
     with open(all_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=all_fields, extrasaction="ignore")
         w.writeheader()
@@ -367,7 +412,7 @@ def main():
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
     print("\n" + "=" * 70)
-    print(f" 합의 라벨: {len(kept_rows)}/{n_read} 클립 채택 (클립 채택률 {stats['keep_ratio_clip']}, 세그먼트 채택률 {stats['keep_ratio_segment']}), "
+    print(f" 합의 라벨[{args.clip_rule}]: {len(kept_rows)}/{n_read} 클립 채택 (클립 채택률 {stats['keep_ratio_clip']}, 세그먼트 채택률 {stats['keep_ratio_segment']}), "
           f"파일 없음 {n_missing}, 파싱 실패 {n_parse_fail}")
     print(f" 채택 클래스 분포: {stats['kept_class_distribution']}")
     print(f" 채택 세그먼트 수 분포(클립당): {stats['n_segments_kept_histogram']}   다수결 일치율 평균 {stats['vote_agreement_mean_kept']}")

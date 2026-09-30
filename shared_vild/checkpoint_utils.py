@@ -48,6 +48,8 @@ _CONFIG_KEYS = [
     "neg_pl_tau",
     "neg_pl_beta",
     "teacher_clip_input",      #   student 가 클립 단위 teacher(Mark4.x clip_input) 로 학습됐나(EnsembleTeacher 가 .pth 8개에서 판정한 값).
+    "clip_merge_rule",         # [2026-09-30 밤 / 가짜 정답 재료] provenance 용 — 조각 teacher 출력을 클립으로 합친 규칙("vote"/"mean"). run_tag _SM 과 같은 정보.
+    "spec_augment_teacher_view",   #   teacher 가 본 입력("augmented"/"clean"). run_tag _CT 와 같은 정보.
 ]
 
 # [LR 2026-09-25] 기록만 하고 되돌려 적용하지 않는 키. 학습률은 "이 파일을 만들 때 쓴 값"이지 "이 파일을 읽는 쪽이 써야 할 값"이
@@ -57,7 +59,8 @@ _CONFIG_KEYS = [
 # [2026-09-29 밤] Mark4.x teacher 가 새로 기록하는 clip_input·clip_frames 도 여기 — student config 에 그대로 흘러들면 안 된다(EnsembleTeacher 가 따로 읽는다).
 _PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate", "use_feature_kd", "pseudo_label_min_gap", "distill_branch_classify",
                          "student_clip_input", "student_head", "head_pretrained_hidden", "lp_epochs", "hard_weight",
-                         "others_from_reject_tau", "neg_pl_tau", "neg_pl_beta", "teacher_clip_input", "clip_input", "clip_frames"}
+                         "others_from_reject_tau", "neg_pl_tau", "neg_pl_beta", "teacher_clip_input", "clip_input", "clip_frames",
+                         "clip_merge_rule", "spec_augment_teacher_view"}   # [2026-09-30 밤 / 가짜 정답 재료] 기록만(teacher 파일에 있어도 student 설정을 안 바꾼다)
 
 
 def extract_config_metadata(config) -> dict:

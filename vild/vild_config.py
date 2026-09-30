@@ -98,6 +98,14 @@ class AudioViLDConfig:
         self.student_clip_seconds = 3.0
         self.student_clip_samples = int(self.sample_rate * self.student_clip_seconds)
         self.clip_min_segments = 3      # 클립 채택에 필요한 채택 조각 수(5개 중 과반). 합의 라벨 스크립트 --min_segments 기본값과 같다
+        # [신설 2026-09-30 밤 / 가짜 정답 재료] 조각 teacher 의 출력 K개를 클립 하나로 합치는 규칙(train_mark5.merge_segments_to_clip 의 rule).
+        #   "vote"(기본·옛 동작): 조각마다 채택(확신도·1등−2등 차이) → 채택 조각 ≥ clip_min_segments 면 클립 채택 → 라벨 = 채택 조각 다수결.
+        #   "mean"              : 전문가별로 조각 K개의 확신도를 평균 → 그 평균 8개로 클립을 한 번에 채택(최대 ≥ 0.5 & 1등−2등 ≥ gap),
+        #                         라벨 = 평균 확신도 1등 전문가의 클래스, 확신도 = 그 평균. --teacher_seg_mean 으로 켠다(run_tag _SM).
+        #   근거(2026-09-30 실측 — 3차 조각 teacher, 증강 없는 원본, unlabeled 2,000클립을 정답 라벨과 대조): vote 채택 1,288·오답 50
+        #   (정밀도 0.9612·회수율 0.6963) → mean 채택 1,339·오답 36(0.9731·0.7328). 4차 클립 teacher 는 1,281·오답 50. unlabeled 부트스트랩
+        #   F1 차이 mean − vote +2.86%p [+2.00, +3.73]. 조각 teacher 에서만 뜻이 있다 — 클립 teacher(K=1)는 두 규칙이 같아 train_mark5 가 멈춘다.
+        self.clip_merge_rule = "vote"
         # [신설 2026-09-29 밤] teacher(Mark4.x)가 클립 단위(64×301)로 학습됐는지 — None 이면 EnsembleTeacher 가 .pth 8개의 provenance
         #   (clip_input) 를 읽어 정한다(8개가 섞이면 오류). True 면 teacher 입력이 클립 mel 이고 조각 수 K=1, 클립 채택 조각 수 1.
         self.teacher_clip_input = None
@@ -388,6 +396,10 @@ class AudioViLDConfig:
         #                 마스크는 독립이다 — 논문에는 "teacher·student 각각 독립 SpecAugment" 로 쓴다. (09-17 검수 P4)
         #   "clean"     : teacher 는 원본, student 만 증강 view (FixMatch 식 일관성 정규화) —
         #                 pseudo-label 품질(0.894)이 보존되는 안전한 대안.
+        #                 [2026-09-30 밤 / 가짜 정답 재료] --teacher_clean_view 로 켠다(run_tag _CT). 실측(4차 클립 teacher, unlabeled 2,000클립):
+        #                 원본 입력이면 타겟 가짜 정답 1,281개 중 오답 50(정밀도 0.961), 증강 입력(학습 마지막 에폭 캐시)이면 1,289개 중
+        #                 오답 86(0.933) · 전원 거절→others 는 111개 중 진짜 others 107 → 133개 중 106. 비교모델이 받는 합의 라벨 CSV 는
+        #                 원본 입력으로 만든 것이라, 원본으로 두면 Mark5.2 와 비교모델이 같은 재료를 받는다. 대신 가짜 정답이 에폭마다 같아진다.
         self.spec_augment_teacher_view = "augmented"
 
         # ==============================================================================
@@ -538,6 +550,7 @@ class AudioViLDConfig:
             _noFKD / _noGAP / _noDB : ablation A1(특징 증류 끔) / A2(gap 조건 끔, 이때 _G 없음) / A4(증류 갈래 끔) — ablation_tag
             _noSEG : ablation A3(student 가 조각 5개 대신 클립 3초 통째, 2026-09-29) — ablation_tag
             _LIN   : 헤드 진단 H(텍스트 앵커 헤드 대신 nn.Linear, 2026-09-29) — ablation_tag 의 맨 뒤
+            _SM / _CT : [2026-09-30 밤 / 가짜 정답 재료] 조각 평균 합의(clip_merge_rule="mean") / teacher 원본 입력(spec_augment_teacher_view="clean") — ablation_tag 의 _NEG 뒤
             _PH / _LP<N> / _HW<g> / _OR<τ> / _NEG : 격차 분석 대응 묶음(2026-09-29 밤: 헤드 단순화 / LP-FT N에폭 / 정답 CE 가중 / 전원 거절→others / 부정 라벨) — ablation_tag
             _lr<g>_elr<g> : 학습률이 기본값과 다를 때 (lr_tag)
             그 뒤에 실험 조건 태그 _l<n> / _u<n>|_ceil / _sp / _ps<이름> / _s<k> (Mark5_EXP2 전용, 아래 코드 순서)
@@ -643,7 +656,8 @@ class AudioViLDConfig:
 
     def apply_cli_ablation(self, no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False,
                            linear_head=False, segment_input=False, head_pretrained_hidden=False, lp_epochs=None,
-                           hard_weight=None, others_from_reject=None, neg_pl=None) -> str:
+                           hard_weight=None, others_from_reject=None, neg_pl=None,
+                           teacher_seg_mean=False, teacher_clean_view=False) -> str:
         """[신설 2026-09-28 / ablation A1·A2·A4] 명령줄 --no_feature_kd / --pl_min_gap / --no_distill_branch 를 config 에 넣는다.
         EfficientAT-pl(같은 백본·같은 라벨)과의 2%p 차이가 우리가 얹은 부품 중 어디서 나는지 하나씩 빼 보는 실험용.
           A1 no_feature_kd     : use_feature_kd=False — teacher 특징을 따라가는 손실(feature_kd_weight 0.3)을 뺀다.
@@ -656,6 +670,9 @@ class AudioViLDConfig:
                                  A1·A2·A4 결과(2026-09-28, seed 1)가 셋 다 본 모델과 1클립 차이라 남은 후보가 이것이었다.
           H  linear_head         : [2026-09-29] student_head="linear" — 텍스트 앵커 헤드 대신 nn.Linear(embedding_dim, 9)(vild_model.LinearClassHead).
                                  A3 도 1클립 차이(seed 1)라 남은 후보가 헤드였다. 제로샷이 없어져 채택용이 아니라 진단용이다(run_tag _LIN).
+          SM teacher_seg_mean  : [2026-09-30 밤 / 가짜 정답 재료] clip_merge_rule="mean" — 조각 teacher 출력을 전문가별로 평균한 뒤 클립 단위로 채택한다
+                                 (run_tag _SM). 클립 입력 student 에서만(조각 입력에는 합치는 단계가 없다), 조각 teacher 에서만(train_mark5 가 검사).
+          CT teacher_clean_view: [2026-09-30 밤 / 가짜 정답 재료] spec_augment_teacher_view="clean" — teacher 는 증강 없는 원본을 본다(run_tag _CT).
         run_tag 가 만들어지기 전(학습·평가 모두 config 생성 직후)에 불러야 산출물 이름(ablation_tag)이 맞는다. eval.py 는 학습 때와
         같은 플래그를 받아야 같은 체크포인트를 찾는다. 돌려주는 값: 바뀐 것이 있으면 로그용 한 줄, 없으면 ''."""
         changed = []
@@ -719,6 +736,16 @@ class AudioViLDConfig:
             self.student_head = "linear"
             changed.append(f"H 텍스트 앵커 헤드 → 선형 헤드(nn.Linear {self.embedding_dim}→{len(self.get_classes_for_evaluation())}, "
                            "제로샷 없음·진단용)")
+        # [신설 2026-09-30 밤 / 가짜 정답 재료] 가짜 정답 재료: 조각 평균 합의(_SM) · teacher 원본 입력(_CT). 둘 다 teacher 쪽 설정이라 student 구조는 그대로다.
+        if teacher_seg_mean:
+            self.clip_merge_rule = "mean"
+            changed.append("조각 평균 합의(전문가별 조각 확신도 평균 → 클립 단위 채택, clip_merge_rule=mean)")
+        if teacher_clean_view:
+            self.spec_augment_teacher_view = "clean"
+            changed.append("teacher 입력 = 원본(SpecAugment 는 student 에만)")
+        if getattr(self, "clip_merge_rule", "vote") == "mean" and not getattr(self, "student_clip_input", False):
+            raise ValueError("[ERROR] --teacher_seg_mean(조각 평균 합의)은 클립 입력 student(mark5.2 기본)에서만 뜻이 있습니다 — "
+                             "조각 입력(--segment_input)에는 조각을 클립으로 합치는 단계가 없습니다.")
         return " / ".join(changed)
 
     @property
@@ -754,6 +781,11 @@ class AudioViLDConfig:
             out += "_OR" + f"{_or:g}".replace(".", "")          # 0.2 → _OR02, 0.15 → _OR015 (_G04 와 같은 표기)
         if float(getattr(self, "neg_pl_tau", 0.0) or 0.0) > 0 and float(getattr(self, "neg_pl_beta", 0.0) or 0.0) > 0:
             out += "_NEG"
+        # [2026-09-30 밤 / 가짜 정답 재료] 가짜 정답 재료 표식: _SM(조각 평균 합의) → _CT(teacher 원본 입력). 기존 표식의 이름·순서는 그대로다.
+        if getattr(self, "clip_merge_rule", "vote") == "mean":
+            out += "_SM"
+        if getattr(self, "use_spec_augment", False) and getattr(self, "spec_augment_teacher_view", "augmented") == "clean":
+            out += "_CT"
         return out
 
     @property

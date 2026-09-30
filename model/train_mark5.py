@@ -507,12 +507,12 @@ class DistillationLoss(nn.Module):
         return total, hard_loss, soft_loss, feat_loss
 
 
-def merge_segments_to_clip(fusion_output, n_clips, n_seg, min_conf, min_gap, min_segments):
+def merge_segments_to_clip(fusion_output, n_clips, n_seg, min_conf, min_gap, min_segments, rule="vote",
+                           spec_probs=None, spec_cls_idx=None):
     """[신설 2026-09-29 / ablation A3] teacher 융합 출력(조각 n_clips×n_seg 개, 클립별로 조각이 이어져 나열된 순서)을 클립 단위로 합친다.
 
-    규칙은 비교모델 합의 라벨 스크립트(Mark5_EXP2/model/make_consensus_labels.py, 2026-09-05·09-22)와 같다 — 비교모델(pl)이 그 CSV 로
-    학습하므로 Mark5.2 도 같은 규칙으로 합쳐야 "같은 재료를 같은 규칙으로" 비교가 된다. 2026-09-28 드라이브 consensus_segments.csv
-    (unlabeled 2,000클립×5조각) 실측: 확률 평균·확신도 가중 평균 등 다른 후보와 라벨 차이가 1,286클립 중 0~2개라 결과는 사실상 같다.
+    rule="vote"(기본·옛 동작) — 비교모델 합의 라벨 스크립트(Mark5_EXP2/model/make_consensus_labels.py, 2026-09-05·09-22)의 기본 규칙과 같다.
+    2026-09-28 드라이브 consensus_segments.csv(unlabeled 2,000클립×5조각) 실측으로 그 스크립트와 채택·라벨이 같음을 확인했다.
       조각 채택  : 확신도(1 − uncertainty) >= min_conf  그리고  1등−2등 전문가 확신도 차이(disagreement) >= min_gap  (0 이면 그 조건 없음)
       클립 채택  : 채택 조각 수 >= min_segments (5개 중 3 = 과반)
       클립 라벨  : 채택 조각 argmax 의 다수결, 동점이면 그 라벨 조각들의 확신도 합이 큰 쪽 (score = 표 수 + 확신도 합/(K+1) 의 argmax —
@@ -520,8 +520,22 @@ def merge_segments_to_clip(fusion_output, n_clips, n_seg, min_conf, min_gap, min
       클립 확신도: 채택 조각 확신도의 평균 (pseudo_label_confidence_weighting 의 가중치)
       클립 특징  : 채택 조각 융합 특징의 확신도 가중 평균 (feature KD 목표. 융합 특징 자체가 전문가 확신도 가중 평균이라 같은 방식)
       클립 로짓  : 채택 조각 융합 로짓의 확신도 가중 평균 — 참고용. 가짜 정답 CE 는 위 다수결 라벨(pseudo_targets)을 쓴다.
+
+    [신설 2026-09-30 밤 / 가짜 정답 재료] rule="mean" — 전문가별 조각 평균(합의 라벨 스크립트의 --clip_rule mean 과 같은 규칙, config.clip_merge_rule).
+      spec_probs [n_clips×n_seg, E] 는 전문가 E명의 조각별 확신도(fusion_output.specialist_weights 를 전문가 순서대로 이은 것),
+      spec_cls_idx [E] 는 그 전문가들의 학생 클래스 인덱스다.
+      전문가 평균: p̄[e] = 조각 n_seg 개의 확신도 평균
+      클립 채택  : max p̄ >= min_conf  그리고  (1등 − 2등 p̄) >= min_gap   (조각 단위 채택과 min_segments 는 쓰지 않는다)
+      클립 라벨  : p̄ 가 가장 큰 전문가의 클래스 (동률이면 전문가 순서가 앞선 쪽)
+      클립 확신도: max p̄
+      클립 특징  : 조각 융합 특징을 "그 조각의 전문가 확신도 합" 으로 가중 평균 — 융합 특징이 전문가 확신도 가중 평균이므로
+                   조각·전문가 전체를 확신도로 가중 평균한 것과 같다(K=1 이면 융합 특징 그대로).
+      클립 로짓  : 담당 칸 = logit(p̄), others 칸 = −max(담당 칸) — 조각 융합의 margin 과 같은 눈금. 참고용(가짜 정답 CE 는 라벨을 쓴다).
+      실측(2026-09-30, 3차 조각 teacher·증강 없는 원본·unlabeled 2,000클립을 정답 라벨과 대조): vote 채택 1,288·오답 50 → mean 채택 1,339·오답 36.
+
     돌려주는 dict: keep [n] bool · label [n] long · conf [n] · features [n, D] · logits [n, C] · n_kept [n] · seg_keep [n, K] · seg_conf [n, K] · seg_gap [n, K]
-    채택 조각이 하나도 없는 클립은 conf 0 · features/logits 0 이고 keep 이 False 라 학습에서 빠진다."""
+    (rule="mean" 이면 clip_gap [n] · spec_mean [n, E] 도. n_kept·seg_keep 은 두 규칙 모두 조각 단위 채택 결과 — mean 에서는 기록용이다.)
+    vote 에서 채택 조각이 하나도 없는 클립은 conf 0 · features/logits 0 이고 keep 이 False 라 학습에서 빠진다."""
     logits = fusion_output.logits.view(n_clips, n_seg, -1)
     feats = fusion_output.features.view(n_clips, n_seg, -1)
     conf = (1.0 - fusion_output.uncertainty).view(n_clips, n_seg).to(logits.device)
@@ -532,8 +546,37 @@ def merge_segments_to_clip(fusion_output, n_clips, n_seg, min_conf, min_gap, min
     if min_gap > 0:
         seg_keep = seg_keep & (gap >= min_gap)
     n_kept = seg_keep.sum(dim=1)
-    keep = n_kept >= int(min_segments)
     num_classes = logits.shape[-1]
+    if rule == "mean":
+        if spec_probs is None or spec_cls_idx is None:
+            raise ValueError("[ERROR] merge_segments_to_clip(rule='mean') 에는 spec_probs·spec_cls_idx 가 필요합니다.")
+        p = spec_probs.to(logits.device).to(logits.dtype).view(n_clips, n_seg, -1)          # [n, K, E] 전문가별 조각 확신도
+        pbar = p.mean(dim=1)                                                               # [n, E] 전문가별 조각 평균
+        top2 = torch.topk(pbar, k=min(2, pbar.shape[1]), dim=1).values
+        clip_conf = top2[:, 0]
+        clip_gap = (top2[:, 0] - top2[:, 1]) if top2.shape[1] > 1 else torch.zeros_like(clip_conf)
+        keep = torch.ones_like(clip_conf, dtype=torch.bool)
+        if min_conf > 0:
+            keep = keep & (clip_conf >= min_conf)
+        if min_gap > 0:
+            keep = keep & (clip_gap >= min_gap)
+        cls_idx = spec_cls_idx.to(logits.device)
+        label = cls_idx[pbar.argmax(dim=1)]
+        w = p.sum(dim=2)                                                                   # [n, K] 조각별 전문가 확신도 합(융합 특징의 분모와 같은 양)
+        clip_feat = (feats * w.unsqueeze(-1)).sum(dim=1) / w.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        pc = pbar.clamp(1e-6, 1.0 - 1e-6)
+        margin = torch.log(pc) - torch.log1p(-pc)                                          # logit(p̄)
+        others = [i for i in range(num_classes) if i not in set(cls_idx.tolist())]
+        if len(others) != 1:
+            raise ValueError(f"[ERROR] 전문가가 맡지 않은 클래스(others)가 정확히 1개여야 합니다: {others}")
+        clip_logits = torch.zeros(n_clips, num_classes, dtype=logits.dtype, device=logits.device)
+        clip_logits[:, cls_idx] = margin
+        clip_logits[:, others[0]] = -margin.max(dim=1).values
+        return {"keep": keep, "label": label, "conf": clip_conf, "features": clip_feat, "logits": clip_logits,
+                "n_kept": n_kept, "seg_keep": seg_keep, "seg_conf": conf, "seg_gap": gap, "clip_gap": clip_gap, "spec_mean": pbar}
+    if rule != "vote":
+        raise ValueError(f"[ERROR] merge_segments_to_clip 의 rule 은 'vote' 또는 'mean' 입니다: {rule!r}")
+    keep = n_kept >= int(min_segments)
     seg_argmax = logits.argmax(dim=2)                                                  # [n, K]
     onehot = F.one_hot(seg_argmax, num_classes=num_classes).to(logits.dtype) * seg_keep.unsqueeze(-1).to(logits.dtype)
     votes = onehot.sum(dim=1)                                                          # [n, C] 채택 조각의 표 수
@@ -604,7 +647,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 pseudo_csv=None, pseudo_source=None, spill_labeled=False, lr=None, encoder_lr=None,
                 no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
                 segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
-                others_from_reject=None, neg_pl=None):
+                others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 실험 조건으로 받는다.
     [이식 2026-09-29 / Mark5.2] ablation A1~A4·H 와 격차 분석 대응 묶음(PH·LP-FT·HW·OR·NEG) 플래그를 받는다(vild_config.apply_cli_ablation).
     아무 플래그도 안 주면 mark5.2 기본(클립 입력·조각 teacher 또는 클립 teacher 자동 판정) 그대로다.
@@ -645,7 +688,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     _ab_txt = config.apply_cli_ablation(no_feature_kd=no_feature_kd, pl_min_gap=pl_min_gap, no_distill_branch=no_distill_branch,
                                         clip_input=clip_input, linear_head=linear_head, segment_input=segment_input,
                                         head_pretrained_hidden=head_pretrained_hidden, lp_epochs=lp_epochs, hard_weight=hard_weight,
-                                        others_from_reject=others_from_reject, neg_pl=neg_pl)
+                                        others_from_reject=others_from_reject, neg_pl=neg_pl,
+                                        teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view)
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} · run_tag {config.run_tag}")
     if _ab_txt:
@@ -687,7 +731,21 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
               f"채택 = 확신도 ≥ {getattr(config, 'pseudo_label_min_confidence', 0.5)} & 1등−2등 차이 ≥ {getattr(config, 'pseudo_label_min_gap', 0.0):g}")
     else:
         print(f"[TEACHER] 전문가 8개 = 조각 단위(mel {config.n_mels}×{config.segment_length} × {config.max_segments})")
-    if _clip_mode:
+    # [신설 2026-09-30 밤 / 가짜 정답 재료] 조각 → 클립 합치기 규칙. "mean"(--teacher_seg_mean)은 조각 teacher 에서만 뜻이 있다(K=1 이면 vote 와 같다).
+    # 클립 teacher(4차)가 resources/ 에 들어 있는데 이 플래그를 주면 이름(_SM)만 붙고 재료는 클립 teacher 가 되므로 멈춘다.
+    _merge_rule = str(getattr(config, "clip_merge_rule", "vote"))
+    if _merge_rule not in ("vote", "mean"):
+        raise ValueError(f"[ERROR] clip_merge_rule 은 'vote' 또는 'mean' 이어야 합니다: {_merge_rule!r}")
+    if _merge_rule == "mean" and _teacher_clip:
+        raise ValueError("[ERROR] --teacher_seg_mean(조각 평균 합의)은 조각 단위 teacher 에서만 씁니다. 지금 resources/ 의 teacher 8개는 "
+                         "클립 단위(Mark4.x clip_input)입니다 — Mark5.2 의 preprocessing/import_teachers.py --run_subdir <조각 판 보관 폴더> 로 "
+                         "조각 teacher 16개를 넣은 뒤 다시 돌리십시오.")
+    if _clip_mode and _merge_rule == "mean":
+        print(f"[A3] 학습 단위 = 클립(파형 {getattr(config, 'student_clip_samples', 48000)}샘플 통째). teacher 조각 {config.max_segments}개 → "
+              f"[SM] 조각 평균 합의: 전문가별로 조각 확신도를 평균 → 클립 채택 = 평균 확신도 최대 ≥ {getattr(config, 'pseudo_label_min_confidence', 0.5)} & "
+              f"1등−2등 차이 ≥ {float(getattr(config, 'pseudo_label_min_gap', 0.0) or 0.0):g}, 라벨 = 평균 확신도 1등 전문가, 확신도 = 그 평균, "
+              f"특징 = 조각 융합 특징의 전문가 확신도 합 가중 평균 (merge_segments_to_clip rule='mean')")
+    elif _clip_mode:
         print(f"[A3] 학습 단위 = 클립(파형 {getattr(config, 'student_clip_samples', 48000)}샘플 통째). teacher 조각 {1 if _teacher_clip else config.max_segments}개 → "
               f"클립 합치기: 조각 채택(확신도·1등−2등 차이) ≥{_clip_min_segments}개면 채택, 라벨 = 채택 조각 다수결, "
               f"확신도 = 채택 조각 평균, 특징 = 채택 조각 확신도 가중 평균 (merge_segments_to_clip)")
@@ -710,6 +768,9 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         print(f"[NEG] 부정 가짜 라벨: 미채택 클립에서 전문가 c 확신도 < {_neg_tau:g} 인 클래스에 −{_neg_beta:g}·log(1−p_student(c)) (others 제외)")
     if pseudo_csv is not None and _clip_mode:
         print("[INFO] CSV 가짜 정답 경로 + 클립 모드: 라벨이 이미 클립 단위라 조각 합치기(merge_segments_to_clip)를 거치지 않는다. teacher 조각은 읽되 쓰지 않음")
+    if pseudo_csv is not None and (_merge_rule == "mean" or getattr(config, "spec_augment_teacher_view", "augmented") == "clean"):
+        print("[INFO] CSV 가짜 정답 경로: --teacher_seg_mean / --teacher_clean_view 는 이 회차에서 쓰이지 않는다(전문가 출력을 쓰지 않음). "
+              "run_tag 의 _SM·_CT 는 같은 묶음의 합의 회차와 이름을 맞추려고 그대로 붙는다(_G04 와 같은 규칙).")
 
     device = config.device
     parser = AudioParser(config, segment_mode=True)
@@ -1205,13 +1266,16 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 if _clip_mode and pseudo_lookup is None:
                     # [신설 2026-09-29 / A3] 조각 K개의 teacher 출력을 클립 하나로 합친다(규칙은 merge_segments_to_clip docstring).
                     # 이 아래의 keep_mask·pseudo_conf 는 클립 단위이고, 가짜 정답은 다수결 라벨(_t_labels)로 CE 를 건다.
+                    # [2026-09-30 밤 / 가짜 정답 재료] rule="mean" 이면 전문가별 조각 확신도 [n*K, 8] 로 전문가별 평균을 내 클립을 채택한다(vote 는 이 값을 안 쓴다).
+                    _sw_seg = torch.cat([fusion_output.specialist_weights[n].to(device).float() for n in _spec_names], dim=1)   # [n*K, 8]
                     merged = merge_segments_to_clip(
                         fusion_output, _n_u, _K,
                         min_conf=(_pl_min_conf if (_use_pl and _pl_min_conf > 0) else 0.0),
                         min_gap=(_pl_min_gap if (_use_pl and _pl_min_gap > 0) else 0.0),
-                        min_segments=_clip_min_segments)
-                    pseudo_conf = merged["conf"]                          # [b] 채택 조각 확신도 평균
-                    keep_mask = merged["keep"]                            # [b] 채택 조각 >= _clip_min_segments
+                        min_segments=_clip_min_segments,
+                        rule=_merge_rule, spec_probs=_sw_seg, spec_cls_idx=_spec_cls_idx)
+                    pseudo_conf = merged["conf"]                          # [b] vote: 채택 조각 확신도 평균 / mean: 전문가별 조각 평균의 최댓값
+                    keep_mask = merged["keep"]                            # [b] vote: 채택 조각 >= _clip_min_segments / mean: 평균 확신도·1등−2등 차이 조건
                     _t_logits, _t_feats, _t_labels = merged["logits"], merged["features"], merged["label"]
                 else:
                     # (조각 모드, 또는 [Mark5_EXP2] CSV 가짜 정답 경로 — CSV 라벨은 이미 클립 단위라 클립 모드여도 합칠 조각이 없다.
@@ -1563,6 +1627,11 @@ if __name__ == "__main__":
                         help="[OR] 전문가 8명 최대 확신도 < 이 값이면 others 가짜 정답(가중 1−최대). 예 0.2 → run_tag _OR02")
     parser.add_argument("--neg_pl", type=float, nargs=2, default=None, metavar=("TAU", "BETA"),
                         help="[NEG] 미채택 클립에서 전문가 확신도 < TAU 인 클래스에 부정 라벨 −BETA·log(1−p). 예 0.1 0.3 → run_tag _NEG")
+    # [신설 2026-09-30 밤 / 가짜 정답 재료] 가짜 정답 재료. eval 에도 같은 플래그를 줄 것(run_tag).
+    parser.add_argument("--teacher_seg_mean", action="store_true",
+                        help="[SM] 조각 teacher 출력을 전문가별로 평균한 뒤 클립 단위로 채택(옛 방식 = 조각 다수결). 조각 teacher 에서만. run_tag _SM")
+    parser.add_argument("--teacher_clean_view", action="store_true",
+                        help="[CT] teacher 는 증강 없는 원본을 본다(SpecAugment 는 student 에만). run_tag _CT")
     args = parser.parse_args()
     # [신설 2026-09-26] 화면에 찍히는 것을 logFiles/<run_tag>__train.log 에도 그대로 남긴다.
     # run_tag 를 알아야 파일 이름이 정해지므로 config 를 먼저 한 번 만든다(텍스트 임베딩은 이때 안 만들어진다).
@@ -1577,7 +1646,8 @@ if __name__ == "__main__":
     _c.spill_labeled = bool(args.spill_labeled)
     _c.apply_cli_learning_rates(args.lr, args.encoder_lr)
     _bundle = dict(segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs,
-                   hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl)
+                   hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
+                   teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view)
     _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
                           clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
     with RunLogger(PROJECT_ROOT, _c.run_tag, "train"):
