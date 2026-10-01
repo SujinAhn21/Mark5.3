@@ -322,10 +322,12 @@ def openset_rows(os_tab):
     return rows
 
 
-def load_zeroshot(mark_version, baseline_plot_dirs=()):
+def load_zeroshot(mark_version, baseline_plot_dirs=(), baseline_cond="pl"):
     """plots/zeroshot_<run_tag>.json 들을 (모델, 묶음) 로 모은다. 동작 확인용(_limit)은 뺀다. 반환: [(이름, [json...])]
     [2026-09-17] 비교모델 plots(--baseline_raw 의 폴더)에 있는 zeroshot_<tag>.json(파인튜닝한 CLAP, Baseline_CLAP/zeroshot_eval.py)도
-    seed 묶음으로 모은다 — 표 8 에 '학습 전 CLAP(참조선)' 과 '학습 뒤 CLAP' 이 나란히 놓인다."""
+    seed 묶음으로 모은다 — 표 8 에 '학습 전 CLAP(참조선)' 과 '학습 뒤 CLAP' 이 나란히 놓인다.
+    [2026-10-02] 비교모델 묶음은 baseline_cond 조건(기본 pl — 성능은 pl 로만 보고, 우리 모델 u2000 과 같은 조건)만 넣는다.
+    전에는 폴더에 있는 묶음을 전부 넣어, sup 과 pl 결과가 함께 있으면 '학습 뒤 CLAP' 행이 두 줄 생겼다. "all" 이면 전부."""
     import glob, json, re
     ours, clap, fine = {}, {}, {}
     for p in sorted(glob.glob(os.path.join(PLOT_DIR, "zeroshot_*.json"))):
@@ -347,7 +349,10 @@ def load_zeroshot(mark_version, baseline_plot_dirs=()):
             with open(p, encoding="utf-8") as f:
                 d = json.load(f)
             m = re.match(r"^(?P<g>.+)_s\d+$", name)
-            fine.setdefault(m.group("g") if m else name, []).append(d)
+            g = m.group("g") if m else name
+            if baseline_cond != "all" and f"_{baseline_cond}_lr" not in g:
+                continue
+            fine.setdefault(g, []).append(d)
     return ([(f"Proposed (Mark5.2) {g}", v) for g, v in ours.items()]
             + [(f"LAION-CLAP {g[len('clap_'):]} (zero-shot, no training)", v) for g, v in clap.items()]
             + [(f"{_disp(g.split('_sup_')[0].split('_pl_')[0].split('_ceil_')[0])} fine-tuned {g}", v) for g, v in fine.items()])
@@ -483,7 +488,7 @@ def _tests_rows(tests, short_map):
     return out
 
 
-def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=()):
+def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=(), baseline_cond="pl"):
     """[2026-09-17 / 11절] 표 4~8 + 추가 검정을 마크다운·LaTeX 두 벌로. 자료가 없는 표는 그 사실을 적고 건너뛴다."""
     md, tex = [], []
     full_labeled = int(raw_all["labeled"].max()) if "labeled" in raw_all.columns and raw_all["labeled"].notna().any() else 0
@@ -568,7 +573,7 @@ def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=()):
         md += ["(자료 없음 — model/openset_report.py 의 plots/openset_table.csv 가 없다)", ""]
 
     # 표 8 제로샷
-    rows8 = zeroshot_rows(load_zeroshot(mark_version, baseline_plot_dirs), lat)
+    rows8 = zeroshot_rows(load_zeroshot(mark_version, baseline_plot_dirs, baseline_cond), lat)
     md += ["## 표 8. 제로샷 — 학습에 없던 6종(door·treadmill·golf_putting·violin·piano·cat)을 문장 앵커만 추가해 판정", ""]
     if rows8:
         zs_hdr = [lbl for _, _, lbl in ZS_COLS]
@@ -901,6 +906,8 @@ def main():
                     help="비교모델 결과 CSV(열: model + 지표 5종). 표 1 에 행으로 붙는다.")
     ap.add_argument("--baseline_raw", type=str, nargs="*", default=[],
                     help="[2026-09-17 / 11절] 비교모델 원자료 aggregate_raw_<model>_<split>.csv 들 — 표 4·5 에 비교모델 행이 붙는다")
+    ap.add_argument("--baseline_cond", type=str, default="pl", choices=["pl", "sup", "ceil", "all"],
+                    help="[2026-10-02] 표 8 의 '학습 뒤(파인튜닝한) 비교모델' 제로샷 행에 넣을 조건. 기본 pl(우리 모델 u2000 과 같은 조건)")
     args = ap.parse_args()
 
     raw_all = load_raw(args.mark_version, args.split)
@@ -919,7 +926,7 @@ def main():
     tex = build_latex(raw, lat, tests, rows, top, args.split, n_seeds, raw_ceil=raw_ceil, gap=gap)
     base = load_baseline_raw(args.baseline_raw) if args.baseline_raw else None
     bdirs = sorted({os.path.dirname(os.path.abspath(p)) for p in args.baseline_raw if os.path.isfile(p)} - {os.path.abspath(PLOT_DIR)})   # 이 저장소 plots 는 제외
-    md_x, tex_x = build_extra(args.mark_version, args.split, raw_all, base, lat, bdirs)   # [2026-09-17 / 11절] 표 4~8 + 추가 검정
+    md_x, tex_x = build_extra(args.mark_version, args.split, raw_all, base, lat, bdirs, args.baseline_cond)   # [2026-09-17 / 11절] 표 4~8 + 추가 검정
     md += "\n" + md_x
     tex += "\n" + tex_x
 
