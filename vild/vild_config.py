@@ -116,6 +116,17 @@ class AudioViLDConfig:
         self.use_background_embedding = True
         # [추가] background embedding 보조 loss 가중치 (use_background_embedding=True일 때만 의미 있음)
         self.background_embedding_weight = 0.1
+        # [신설 2026-10-01 / 지도만 격차 진단] 기본값 스냅샷 — --bg_weight 로 바꿨을 때만 run_tag 에 _BG<값> 이 붙게 한다(ablation_tag).
+        self._default_bg_weight = float(self.background_embedding_weight)
+        # [신설 2026-10-01 / 지도만 격차 진단] student 에게 주는 클립 파형을 최대 진폭 1 로 정규화할지.
+        #   True(기본·옛 동작) : utils/parser_utils.load_audio_file 이 파일마다 |x| 최댓값으로 나눈 파형을 teacher mel 과 student 가 같이 쓴다.
+        #   False(--student_raw_wave, run_tag _RW) : student 클립 파형만 원본 진폭으로 되돌린다(정규화 파형 × 그 파일의 최댓값).
+        #        teacher 8개는 정규화 파형의 mel 로 학습됐으므로 그대로 둔다. 비교모델(Baseline_*/common/data.py load_clip)은 정규화하지 않는다.
+        #   2026-10-01 실측: teacher 를 한 번도 부르지 않는 지도만(u0) 조건에서 같은 mn10 백본인데 test Accuracy 가 EfficientAT 0.9633 대
+        #        우리 0.9349(5회 평균). 두 학습 경로를 대조해 남은 차이가 헤드·새 층 학습률·LP-FT·BG 보조 손실·이 정규화였다(전처리·SpecAugment·
+        #        배치·옵티마이저·스케줄·체크포인트 기준은 같음). 정규화는 소리 크기 정보를 지운다 — others 를 '먼 소리'로 다시 정한 뒤로는
+        #        크기가 단서일 수 있다. 원인인지는 진단 회차(_RW)로 확인한다. 클립 입력 mn10 student 에서만 쓴다.
+        self.student_wave_normalize = True
         # [신설 2026-08-22] 평가에서 others 로짓에 background embedding 을 max 로 덮어쓸지 여부.
         # False 가 기본이다(=덮어쓰지 않는다).
         #
@@ -552,6 +563,7 @@ class AudioViLDConfig:
             _LIN   : 헤드 진단 H(텍스트 앵커 헤드 대신 nn.Linear, 2026-09-29) — ablation_tag 의 맨 뒤
             _SM / _CT : [2026-09-30 밤 / 가짜 정답 재료] 조각 평균 합의(clip_merge_rule="mean") / teacher 원본 입력(spec_augment_teacher_view="clean") — ablation_tag 의 _NEG 뒤
             _PH / _LP<N> / _HW<g> / _OR<τ> / _NEG : 격차 분석 대응 묶음(2026-09-29 밤: 헤드 단순화 / LP-FT N에폭 / 정답 CE 가중 / 전원 거절→others / 부정 라벨) — ablation_tag
+            _BG<g> / _RW : [2026-10-01 / 지도만 격차 진단] BG 보조 손실 가중치가 기본값(0.1)과 다를 때 / student 원본 진폭 파형 — ablation_tag 의 _CT 뒤
             _lr<g>_elr<g> : 학습률이 기본값과 다를 때 (lr_tag)
             그 뒤에 실험 조건 태그 _l<n> / _u<n>|_ceil / _sp / _ps<이름> / _s<k> (Mark5_EXP2 전용, 아래 코드 순서)
 
@@ -657,7 +669,8 @@ class AudioViLDConfig:
     def apply_cli_ablation(self, no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False,
                            linear_head=False, segment_input=False, head_pretrained_hidden=False, lp_epochs=None,
                            hard_weight=None, others_from_reject=None, neg_pl=None,
-                           teacher_seg_mean=False, teacher_clean_view=False) -> str:
+                           teacher_seg_mean=False, teacher_clean_view=False,
+                           bg_weight=None, student_raw_wave=False) -> str:
         """[신설 2026-09-28 / ablation A1·A2·A4] 명령줄 --no_feature_kd / --pl_min_gap / --no_distill_branch 를 config 에 넣는다.
         EfficientAT-pl(같은 백본·같은 라벨)과의 2%p 차이가 우리가 얹은 부품 중 어디서 나는지 하나씩 빼 보는 실험용.
           A1 no_feature_kd     : use_feature_kd=False — teacher 특징을 따라가는 손실(feature_kd_weight 0.3)을 뺀다.
@@ -673,6 +686,10 @@ class AudioViLDConfig:
           SM teacher_seg_mean  : [2026-09-30 밤 / 가짜 정답 재료] clip_merge_rule="mean" — 조각 teacher 출력을 전문가별로 평균한 뒤 클립 단위로 채택한다
                                  (run_tag _SM). 클립 입력 student 에서만(조각 입력에는 합치는 단계가 없다), 조각 teacher 에서만(train_mark5 가 검사).
           CT teacher_clean_view: [2026-09-30 밤 / 가짜 정답 재료] spec_augment_teacher_view="clean" — teacher 는 증강 없는 원본을 본다(run_tag _CT).
+          BG bg_weight         : [2026-10-01 / 지도만 격차 진단] background_embedding_weight — others 특징을 배경 임베딩 쪽으로 당기는 보조 손실의
+                                 가중치(기본 0.1). 0 이면 그 손실을 걸지 않는다. 기본값과 다르면 run_tag _BG<값>(0 → _BG0).
+          RW student_raw_wave  : [2026-10-01 / 지도만 격차 진단] student_wave_normalize=False — student 클립 파형을 정규화하지 않은 원본 진폭으로
+                                 (teacher mel 은 그대로). 비교모델과 같은 입력. 클립 입력 mn10 student 에서만(run_tag _RW).
         run_tag 가 만들어지기 전(학습·평가 모두 config 생성 직후)에 불러야 산출물 이름(ablation_tag)이 맞는다. eval.py 는 학습 때와
         같은 플래그를 받아야 같은 체크포인트를 찾는다. 돌려주는 값: 바뀐 것이 있으면 로그용 한 줄, 없으면 ''."""
         changed = []
@@ -743,6 +760,19 @@ class AudioViLDConfig:
         if teacher_clean_view:
             self.spec_augment_teacher_view = "clean"
             changed.append("teacher 입력 = 원본(SpecAugment 는 student 에만)")
+        # [신설 2026-10-01 / 지도만 격차 진단] teacher 없이 도는 지도만(u0) 조건에서 EfficientAT 파인튜닝과의 차이를 하나씩 맞춰 보는 스위치 둘(둘 다 student 쪽 설정).
+        if bg_weight is not None:
+            if float(bg_weight) < 0:
+                raise ValueError(f"[ERROR] --bg_weight 는 0 이상이어야 합니다: {bg_weight}")
+            self.background_embedding_weight = float(bg_weight)
+            changed.append("BG 보조 손실 끔(background_embedding_weight=0)" if self.background_embedding_weight == 0
+                           else f"BG 보조 손실 가중치 {self.background_embedding_weight:g}")
+        if student_raw_wave:
+            if getattr(self, "encoder_type", "cnn") != "mn10" or not getattr(self, "student_clip_input", False):
+                raise ValueError("[ERROR] --student_raw_wave 는 클립 입력 mn10 student(mark5.2 기본)에서만 씁니다 — "
+                                 "조각 입력(--segment_input)·mel 입력 인코더에는 이 경로가 없습니다.")
+            self.student_wave_normalize = False
+            changed.append("student 파형 정규화 끔(원본 진폭 — 비교모델과 같은 입력 · teacher mel 은 정규화 파형 그대로)")
         if getattr(self, "clip_merge_rule", "vote") == "mean" and not getattr(self, "student_clip_input", False):
             raise ValueError("[ERROR] --teacher_seg_mean(조각 평균 합의)은 클립 입력 student(mark5.2 기본)에서만 뜻이 있습니다 — "
                              "조각 입력(--segment_input)에는 조각을 클립으로 합치는 단계가 없습니다.")
@@ -786,6 +816,12 @@ class AudioViLDConfig:
             out += "_SM"
         if getattr(self, "use_spec_augment", False) and getattr(self, "spec_augment_teacher_view", "augmented") == "clean":
             out += "_CT"
+        # [2026-10-01 / 지도만 격차 진단] _BG<g>(BG 보조 손실 가중치가 기본값과 다를 때, 0 → _BG0) → _RW(student 원본 진폭 파형). 기존 표식의 이름·순서는 그대로다.
+        _dbg, _bg = getattr(self, "_default_bg_weight", None), getattr(self, "background_embedding_weight", None)
+        if _dbg is not None and _bg is not None and float(_bg) != float(_dbg):
+            out += "_BG" + f"{float(_bg):g}".replace(".", "")
+        if not getattr(self, "student_wave_normalize", True):
+            out += "_RW"
         return out
 
     @property

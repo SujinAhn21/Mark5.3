@@ -197,14 +197,18 @@ def _full_labeled_count():
     return _FULL_LABELED
 
 
-def collect(mark_version, split, allow_mixed=False):
-    """조건별로 결과를 모은다. split='test' 면 태그 없는 파일, 'val' 이면 _val 파일."""
+def collect(mark_version, split, allow_mixed=False, bases=None):
+    """조건별로 결과를 모은다. split='test' 면 태그 없는 파일, 'val' 이면 _val 파일.
+    [신설 2026-10-01] bases 를 주면 설정(base = 조건 꼬리표 앞부분)이 그 목록에 든 회차만 모은다. 같은 plots/ 에 진단 회차
+    (지도만 격차 진단의 _LIN·_BG0·_RW·학습률·LP 변형)가 함께 있어도 본 표(본 조건 묶음 + 출처 비교 묶음)만 집계하려는 것이다.
+    목록에 있는데 회차가 하나도 없는 설정이 있으면 이름이 틀린 것이라 멈춘다."""
     suffix = "" if split == "test" else f"_{split}"
     patterns = [os.path.join(PLOT_DIR, f"performance_summary_{mark_version}*_u*_s*{suffix}.csv"),
                 os.path.join(PLOT_DIR, f"performance_summary_{mark_version}*_ceil*_s*{suffix}.csv")]  # [2026-09-06] 천장 [2026-09-17] _l 앞 허용
 
     rows, broken = [], []
     seen = set()
+    skipped_bases = {}
     for path in sorted(p for pat in patterns for p in glob.glob(pat)):
         if path in seen:
             continue
@@ -217,6 +221,9 @@ def collect(mark_version, split, allow_mixed=False):
             continue                              # test 를 모을 때 _val 파일은 제외
         base, n, s, cond, lab, sp, ps = _parse_tag_full(tag)
         if cond is None:
+            continue
+        if bases and base not in bases:          # [2026-10-01] --bases 밖의 설정(진단 회차 등)은 이 집계에 넣지 않는다
+            skipped_bases[base] = skipped_bases.get(base, 0) + 1
             continue
         # [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py)은 seed 0 으로 9회를 돌려 plots/ 에 _s0 요약(val)을 남긴다.
         # 본실험은 seed 1~5 이므로 seed 0 은 집계에서 뺀다. 안 빼면 --split val 집계가 설정 9종 혼합으로 멈추거나,
@@ -236,6 +243,14 @@ def collect(mark_version, split, allow_mixed=False):
         rec.update(_read_summary(path))
         rows.append(rec)
 
+    if bases:
+        if skipped_bases:
+            print(f"\n[INFO] --bases 밖이라 뺀 설정 {len(skipped_bases)}종: " + ", ".join(f"{b}({k}건)" for b, k in sorted(skipped_bases.items())))
+        _found = {r["config"] for r in rows}
+        _absent = [b for b in bases if b not in _found]
+        if _absent:
+            print(f"[ERROR] --bases 에 적은 설정 중 회차가 하나도 없는 것: {_absent} — 이름(학습률 표식 포함)을 확인하십시오.")
+            sys.exit(1)
     if broken:
         print("\n[WARN] 요약 CSV 가 온전하지 않아 제외한 파일:")
         for name, missing in broken:
@@ -972,13 +987,16 @@ def main():
     ap.add_argument("--no_tests", action="store_true", help="유의성 검정을 건너뛴다")
     ap.add_argument("--allow_mixed_config", action="store_true",
                     help="설정이 다른 실험 결과가 섞여 있어도 진행한다(기본은 중단)")
+    ap.add_argument("--bases", type=str, nargs="*", default=None,
+                    help="[2026-10-01] 이 설정(run_tag 의 조건 꼬리표 앞부분, 학습률 표식 포함)의 회차만 집계한다. 예: 본 조건 묶음과 출처 비교 묶음 두 개. "
+                         "같은 plots/ 에 있는 진단 회차를 빼는 용도")
     # [신설 2026-09-17 / 8절] 비교모델 원자료(aggregate_baseline.py 산출)로 seed 짝지은 검정.
     ap.add_argument("--baseline_raw", type=str, nargs="*", default=[],
                     help="비교모델 plots/aggregate_raw_<model>_<split>.csv 경로들. 주면 Mark5.2 대 비교모델 짝지은 검정을 낸다.")
     args = ap.parse_args()
 
     if not args.latency_only:
-        df_all = collect(args.mark_version, args.split, allow_mixed=args.allow_mixed_config)
+        df_all = collect(args.mark_version, args.split, allow_mixed=args.allow_mixed_config, bases=args.bases)
         if df_all.empty:
             print(f"[ERROR] {args.split} 결과를 찾지 못했습니다.")
             print(f"        찾은 경로: {PLOT_DIR}/performance_summary_{args.mark_version}*_u*_s*.csv")

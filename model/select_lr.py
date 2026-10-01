@@ -99,6 +99,7 @@ def _repo_kind(mark_version):
 _ABLATION_FLAGS = {"--head_pretrained_hidden": 0, "--segment_input": 0, "--clip_input": 0, "--no_feature_kd": 0,
                    "--no_distill_branch": 0, "--linear_head": 0,
                    "--teacher_seg_mean": 0, "--teacher_clean_view": 0,   # [2026-09-30 밤 / 가짜 정답 재료] 조각 평균 합의(_SM) · teacher 원본 입력(_CT)
+                   "--student_raw_wave": 0, "--bg_weight": 1,           # [2026-10-01 / 지도만 격차 진단] student 원본 진폭 파형(_RW) · BG 보조 손실 가중치(_BG<값>)
                    "--lp_epochs": 1, "--hard_weight": 1, "--others_from_reject": 1, "--pl_min_gap": 1, "--neg_pl": 2}
 _WHITELIST = {"mark52": dict(_ABLATION_FLAGS),
               "exp2": {**_ABLATION_FLAGS, "--unlabeled_n": 1, "--labeled_n": 1},
@@ -107,6 +108,7 @@ _INT_KEYS = {"--unlabeled_n", "--labeled_n", "--lp_epochs"}
 _ABLATION_KW = {"--head_pretrained_hidden": "head_pretrained_hidden", "--segment_input": "segment_input", "--clip_input": "clip_input",
                 "--no_feature_kd": "no_feature_kd", "--no_distill_branch": "no_distill_branch", "--linear_head": "linear_head",
                 "--teacher_seg_mean": "teacher_seg_mean", "--teacher_clean_view": "teacher_clean_view",
+                "--student_raw_wave": "student_raw_wave", "--bg_weight": "bg_weight",
                 "--lp_epochs": "lp_epochs", "--hard_weight": "hard_weight", "--others_from_reject": "others_from_reject",
                 "--pl_min_gap": "pl_min_gap", "--neg_pl": "neg_pl"}
 

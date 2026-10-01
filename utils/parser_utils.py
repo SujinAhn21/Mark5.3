@@ -8,7 +8,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-def load_audio_file(file_path, target_sample_rate, resampler_cache=None):
+def load_audio_file(file_path, target_sample_rate, resampler_cache=None, return_peak=False):
     """
     오디오 파일을 로드하고 모노화, 정규화, 리샘플링하여 [1, T] 텐서로 반환합니다.
 
@@ -16,6 +16,9 @@ def load_audio_file(file_path, target_sample_rate, resampler_cache=None):
         file_path (str): 오디오 파일 경로
         target_sample_rate (int): 타겟 샘플레이트
         resampler_cache (dict, optional): Resample 객체 캐시 (성능 향상용)
+
+        return_peak (bool): [신설 2026-10-01] True 면 (waveform, peak) 를 돌려준다 — peak 는 정규화에 쓴 |x| 최댓값(무음이면 1.0).
+                            정규화 파형에 peak 를 곱하면 원본 진폭이 된다(리샘플은 선형이라 순서와 무관). 실패 시에는 그대로 None.
 
     Returns:
         torch.Tensor or None: [1, T] 형태 waveform 또는 실패 시 None
@@ -62,6 +65,7 @@ def load_audio_file(file_path, target_sample_rate, resampler_cache=None):
 
     # 볼륨 정규화
     max_amp = waveform.abs().max()
+    peak = float(max_amp) if max_amp > 0 else 1.0   # [2026-10-01] return_peak 용 — 정규화에 쓴 값
     if max_amp > 0:
         waveform = waveform / max_amp
 
@@ -82,5 +86,7 @@ def load_audio_file(file_path, target_sample_rate, resampler_cache=None):
             logging.error(f"[Resample Fail] {file_path_norm} (sr: {sr} -> {target_sample_rate}, shape: {waveform.shape}) -> {e}")
             return None
 
+    if return_peak:
+        return waveform, peak
     return waveform
   

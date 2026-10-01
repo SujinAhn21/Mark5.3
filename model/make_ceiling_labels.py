@@ -185,7 +185,9 @@ def main():
     cpath = args.consensus_csv
     if cpath and os.path.isfile(cpath):
         with open(cpath, newline="", encoding="utf-8-sig") as f:
-            cons = {os.path.basename(r["path"]): r["label"] for r in csv.DictReader(f)}
+            # [2026-10-01] make_consensus_labels --others_from_reject 판은 origin=reject_others 행(라벨 others)이 섞여 있다. 이 대조는 "합의로 채택된
+            # 라벨" 의 품질을 재는 것이라 합의 행만 본다(안 거르면 진짜 others 에 others 를 붙인 행이 '타겟 라벨을 받은 오염' 으로 세어진다). origin 열이 없는 옛 판은 전부 합의 행.
+            cons = {os.path.basename(r["path"]): r["label"] for r in csv.DictReader(f) if (r.get("origin") or "consensus") == "consensus"}
         truth = {os.path.basename(r["path"]): r["label"] for r in out_rows}
         tgt = [k for k in truth if truth[k] != "others"]
         oth = [k for k in truth if truth[k] == "others"]

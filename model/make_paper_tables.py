@@ -285,7 +285,8 @@ def curve_rows(le, base, lab=200):
                 rows.append((_disp(model), str(int(u)), {c: g[c].values for c, _, _ in METRICS}, len(g)))
             gf = pl[pl["unlabeled"].isna()]
             if len(gf):
-                rows.append((_disp(model), "all consensus", {c: gf[c].values for c, _, _ in METRICS}, len(gf)))
+                # [2026-10-01] 비교모델의 _u<n> 이 "라벨 없는 클립 n 개" 로 바뀌어(Mark5.2 와 같은 클립), 전량 행은 라벨 없는 클립 2,000개 전부 = Mark5.2 의 u2000.
+                rows.append((_disp(model), "2000 (all)", {c: gf[c].values for c, _, _ in METRICS}, len(gf)))
     return rows
 
 
@@ -528,7 +529,9 @@ def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=()):
     if rows5:
         md += _md_table(["Model", "Unlabeled"] + metric_hdr + ["n"],
                         [(mdl, u, *[cell(vals[c]) for c, _, _ in METRICS], n) for mdl, u, vals, n in rows5])
-        md += ["", "캡션: mean ± SD over seeds. 비교모델의 unlabeled 는 합의 라벨(consensus_labels.csv) 서브샘플 개수, 'all consensus' 는 전부.", ""]
+        md += ["", "캡션: mean ± SD over seeds. unlabeled 는 라벨 없는 클립 개수 — Mark5.2 와 비교모델이 같은 seed 면 같은 클립을 쓰고, 그 안에서 "
+               "전문가 합의(+ 전원 거절 → others)로 채택된 것만 가짜 정답으로 쓴다(2026-10-01 저녁부터. 그 전 비교모델은 채택된 합의 라벨 n 개였다). "
+               "'2000 (all)' 은 라벨 없는 클립 전부.", ""]
         tex += _tex_table("Data efficiency with 200 labeled clips (mean $\\pm$ SD over seeds).", "tab:curve_l200",
                           ["Model", "Unlabeled"] + metric_hdr,
                           [(mdl, u, *[cell(vals[c], tex=True) for c, _, _ in METRICS]) for mdl, u, vals, n in rows5], "lr" + "c" * len(METRICS))

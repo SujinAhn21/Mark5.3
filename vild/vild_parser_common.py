@@ -103,12 +103,21 @@ class BaseAudioParser:
     def load_clip_with_segments(self, file_path):
         """[신설 2026-09-29 / ablation A3] 파일을 한 번 읽어 클립 단위 student 입력과 teacher 조각을 함께 돌려준다.
             clip_wave   : [student_clip_samples] float32 16 kHz — 파일 첫 48,000 샘플(3.0초), 모자라면 0 으로 채움.
+                          [2026-10-01] config.student_wave_normalize=False 면 원본 진폭(정규화 안 함), 기본은 최대 진폭 1 로 정규화된 파형.
                           비교모델 Baseline_*/common/data.py 의 자르기(wav[:CLIP_SAMPLES] + 0 채움)와 같다.
             clip_record : 클립 전체 mel 의 시각화 뷰 하나 — eval.py 가 조각 1개짜리 기록으로 다룬다(tensor [C, n_mels, T(=301)],
                           segment_index 0, start_frame 0, end_frame T, saliency, wave=clip_wave).
             segments    : load_and_segment_with_metadata 와 완전히 같은 조각 기록(teacher 8개용, 101프레임 × 최대 max_segments 개).
         못 읽거나 조각이 없으면 None. mel 은 한 번만 계산해 조각과 클립 뷰가 같은 값을 쓴다."""
-        waveform = load_audio_file(file_path, self.config.sample_rate, self.resampler_cache)
+        # [2026-10-01 / 지도만 격차 진단] config.student_wave_normalize=False(--student_raw_wave)면 student 클립 파형만 원본 진폭으로 되돌린다.
+        # teacher 조각·클립 mel 은 아래에서 정규화 파형으로 그대로 만든다(전문가 8개가 그렇게 학습됐다).
+        _raw = not getattr(self.config, "student_wave_normalize", True)
+        _peak = 1.0
+        if _raw:
+            _loaded = load_audio_file(file_path, self.config.sample_rate, self.resampler_cache, return_peak=True)
+            waveform, _peak = (None, 1.0) if _loaded is None else _loaded
+        else:
+            waveform = load_audio_file(file_path, self.config.sample_rate, self.resampler_cache)
         if waveform is None or waveform.numel() == 0:
             print(f"[Parser] Skipped unreadable file: {file_path}")
             return None
@@ -124,6 +133,8 @@ class BaseAudioParser:
         if wave_1d.numel() < n:
             wave_1d = torch.nn.functional.pad(wave_1d, (0, n - wave_1d.numel()))
         clip_wave = wave_1d.clone().to(torch.float32)
+        if _raw:
+            clip_wave = clip_wave * float(_peak)        # 정규화 전 진폭(비교모델 common/data.py load_clip 과 같은 값, float32 반올림 차이뿐)
         views = self._build_visual_views(mel_db)            # [C, n_mels, T] — 조각과 같은 view 종류(mel_delta 면 3채널)
         clip_record = {
             "segment_index": 0,

@@ -49,6 +49,14 @@ Mark5 와 다른 것 (논문에 그대로 밝힌다)
   Mark5.2 학습의 --teacher_seg_mean(train_mark5.merge_segments_to_clip rule="mean")과 같은 규칙이다. 조각 teacher 에서만 쓴다(클립 teacher 면 멈춤).
   실측(2026-09-30, 3차 조각 teacher·증강 없는 원본·unlabeled 2,000클립을 정답 라벨과 대조): vote 채택 1,288·오답 50 → mean 채택 1,339·오답 36.
   이 규칙에서는 consensus_segments.csv 에 전문가별 확률 열 p_<전문가> 가, consensus_labels_all.csv 에 clip_conf·clip_gap 열이 더 붙는다.
+[2026-10-01 / 전원 거절(OR)] --others_from_reject τ — Mark5.2 학습의 --others_from_reject(run_tag _OR<τ>, train_mark5.py [OR])와 같은 규칙으로
+  others 가짜 정답을 CSV 에 더한다. 위 채택 규칙에서 탈락한 클립 가운데 전문가 8명의 확신도(전문가별 조각 평균)의 최댓값이 τ 미만이면
+  — 여덟 명 모두 "내 소리가 아니다" 라고 본 클립 — 라벨 others 로 채택한다.
+  - confidence 칸 = 1 − 그 최댓값(학습 쪽이 주는 가중치와 같은 값, τ=0.2 면 0.8 이상). 비교모델은 가중치를 쓰지 않으므로(위 "hard label") 기록용이다.
+  - origin 칸 = "reject_others"(합의로 채택된 행은 "consensus"). n_segments_kept·vote_agreement 는 합의 통계라 이 행에서는 뜻이 없다(빈칸).
+  - 왜: Mark5.2 는 가짜 정답 1,442개(합의 1,338 + 전원 거절 104)로 배우는데 비교모델은 합의 1,338개만 받아 others 가짜 정답이 0개였다.
+    같은 재료로 비교하려고 맞춘다(2026-10-01 결정). 실측(같은 날 코랩 산출물 consensus_labels_all.csv): τ=0.2 에서 104행, 진짜 라벨은 전부 others.
+  - 기본 0 = 끔(옛 동작, CSV 에 others 가 구조상 없다). stats 에 n_kept_consensus·n_kept_reject_others 와 reject_others 의 오염이 따로 적힌다.
 
 결정성: fusion 에 학습 파라미터가 없고(optimizer 에는 student 만 들어감, train_mark5.py:633) 파서·teacher
 에 난수가 없으며 증강도 없으므로 결과는 seed 와 무관하다. cudnn deterministic 을 켜 GPU 끝자리도 고정한다.
@@ -56,8 +64,8 @@ CSV 하나를 비교모델 15회(3모델 × 5 seed)가 공유한다.
 
 산출물 (--out 기본 = 프로젝트 루트/consensus_labels.csv, 보조 파일은 plots/. --limit 을 주면 이름에 _limitN 이 붙어
 기본 산출물을 덮어쓰지 않는다)
-    consensus_labels.csv               채택 클립: path, label, confidence, n_segments, n_segments_kept, vote_agreement, generated_at
-    plots/consensus_labels_all.csv     2,000개 전부: keep · note(kept/few_segments/file_missing/parse_fail) · 클립 통계 · 클래스별 평균 확률
+    consensus_labels.csv               채택 클립: path, label, confidence, n_segments, n_segments_kept, vote_agreement, generated_at, origin
+    plots/consensus_labels_all.csv     2,000개 전부: keep · note(kept/reject_others/few_segments/below_threshold/file_missing/parse_fail) · 클립 통계 · 클래스별 평균 확률
     plots/consensus_segments.csv       세그먼트 10,000행 원자료(확신도·argmax·확률 9개) — 다른 규칙·임계값을 CSV 계산만으로 비교하기 위함
     plots/consensus_labels_stats.json  채택 수·클래스 분포·확신도 분포·teacher 체크포인트 신원·집계 규칙
 
@@ -139,6 +147,9 @@ def main():
                     help="[2026-09-30 밤 / 가짜 정답 재료] 조각 → 클립 합치기 규칙. vote(기본·옛 동작) = 조각 채택 → --min_segments 개 이상 → 다수결. "
                          "mean = 전문가별로 조각 확신도를 평균한 뒤 클립 단위로 채택(최대 >= min_conf & 1등−2등 >= min_gap, 라벨 = 평균 1등 전문가). "
                          "Mark5.2 학습의 --teacher_seg_mean 과 같은 규칙. 조각 teacher 에서만")
+    ap.add_argument("--others_from_reject", type=float, default=0.0,
+                    help="[2026-10-01 / 전원 거절(OR)] 위 규칙에서 탈락한 클립 중 전문가 8명의 확신도(조각 평균) 최댓값이 이 값 미만이면 others 로 채택 "
+                         "(confidence = 1 − 최댓값, origin = reject_others). Mark5.2 학습의 --others_from_reject 와 같은 규칙. 0 = 끔(옛 동작). 예 0.2")
     ap.add_argument("--clips_per_batch", type=int, default=8, help="teacher 한 번 호출에 묶는 클립 수(세그먼트 5개씩)")
     ap.add_argument("--limit", type=int, default=0, help="동작 확인용: 앞에서 N 개만. 산출물 이름에 _limitN 이 붙는다")
     ap.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "consensus_labels.csv"))
@@ -152,6 +163,11 @@ def main():
     device = config.device
     min_conf = args.min_conf if args.min_conf is not None else float(getattr(config, "pseudo_label_min_confidence", 0.5))
     min_gap = args.min_gap if args.min_gap is not None else float(getattr(config, "pseudo_label_min_gap", 0.0) or 0.0)
+    or_tau = float(args.others_from_reject or 0.0)
+    if not (0.0 <= or_tau < 1.0):
+        raise SystemExit(f"[ERROR] --others_from_reject 는 0 이상 1 미만이어야 합니다: {args.others_from_reject}")
+    if or_tau > min_conf:
+        raise SystemExit(f"[ERROR] --others_from_reject({or_tau:g}) 가 채택 임계값({min_conf:g})보다 큽니다 — 전원 거절 기준은 채택 기준보다 낮아야 합니다.")
     others_rule = getattr(config, "fusion_others_rule", "min")
     score_mode = getattr(config, "fusion_score_mode", "margin")
     if getattr(config, "use_distribution_alignment", False):
@@ -182,6 +198,9 @@ def main():
     else:
         print(f"[INFO] 합의 라벨 생성: mark_version={args.mark_version}, device={device}, 세그먼트 채택 임계값={min_conf}, 1등−2등 차이>={min_gap:g}, "
               f"클립 채택 = 채택 세그먼트 >= {_k_txt}, 라벨 = 채택 세그먼트 다수결, 분포 정렬=off, 증강=없음")
+    if or_tau > 0:
+        print(f"[OR] 전원 거절 → others: 위 규칙에서 탈락한 클립 중 전문가 8명 확신도(조각 평균)의 최댓값 < {or_tau:g} 이면 others 로 채택 "
+              f"(confidence = 1 − 최댓값). Mark5.2 학습의 --others_from_reject {or_tau:g} 와 같은 규칙")
     if score_mode == "margin":
         print("[INFO] teacher fusion: 담당 칸 = margin(target-others), others 칸 = -max(margin)  (others_rule 은 이 모드에서 미사용)")
     else:
@@ -273,7 +292,7 @@ def main():
                                 "vote_agreement": round(agree, 4), "note": "kept"})
                     kept_rows.append({"path": path, "label": rec["label"], "confidence": rec["confidence"],
                                       "n_segments": K, "n_segments_kept": n_kept,
-                                      "vote_agreement": rec["vote_agreement"], "generated_at": generated_at})
+                                      "vote_agreement": rec["vote_agreement"], "generated_at": generated_at, "origin": "consensus"})
             elif n_kept >= args.min_segments:
                 votes = collections.Counter(int(a) for a in seg_argmax[kept])
                 conf_sum = collections.defaultdict(float)
@@ -287,7 +306,17 @@ def main():
                             "vote_agreement": round(votes[label_idx] / n_kept, 4), "note": "kept"})
                 kept_rows.append({"path": path, "label": rec["label"], "confidence": rec["confidence"],
                                   "n_segments": K, "n_segments_kept": n_kept,
-                                  "vote_agreement": rec["vote_agreement"], "generated_at": generated_at})
+                                  "vote_agreement": rec["vote_agreement"], "generated_at": generated_at, "origin": "consensus"})
+            if or_tau > 0 and rec["keep"] == 0:
+                # [2026-10-01 / 전원 거절(OR)] train_mark5.py 의 `_reject = (~keep_mask) & (_spec_max < τ)` 와 같은 조건.
+                # _spec_max = 전문가별 조각 평균 확신도의 최댓값(클립 teacher 면 조각이 1개라 그 값 그대로).
+                spec_max = float(sw.mean(axis=0).max())
+                rec["spec_max"] = round(spec_max, 6)
+                if spec_max < or_tau:
+                    rec.update({"keep": 1, "label": "others", "confidence": round(1.0 - spec_max, 6), "note": "reject_others"})
+                    kept_rows.append({"path": path, "label": "others", "confidence": rec["confidence"],
+                                      "n_segments": K, "n_segments_kept": "", "vote_agreement": "",
+                                      "generated_at": generated_at, "origin": "reject_others"})
             all_rows.append(rec)
 
     for i, row in enumerate(rows):
@@ -322,11 +351,13 @@ def main():
     if n_bad and n_bad * 2 >= len(rows):      # 절반 이상(정수 나눗셈 함정 피함)
         raise SystemExit(f"[ERROR] {len(rows)}개 중 {n_bad}개를 못 읽었습니다(파일 없음 {n_missing}, 파싱 실패 {n_parse_fail}). "
                          "드라이브 마운트·데이터 폴더를 확인하십시오. 산출물을 쓰지 않습니다.")
-    if not kept_rows:
-        raise SystemExit("[ERROR] 채택된 클립이 0개입니다. 임계값·teacher 를 확인하십시오. 산출물을 쓰지 않습니다.")
+    if not any(r["origin"] == "consensus" for r in kept_rows):
+        raise SystemExit("[ERROR] 합의로 채택된 클립이 0개입니다. 임계값·teacher 를 확인하십시오. 산출물을 쓰지 않습니다.")
 
     # ---- 통계 ----
     kept_dist = collections.Counter(r["label"] for r in kept_rows)
+    cons_rows = [r for r in kept_rows if r["origin"] == "consensus"]            # [2026-10-01] 합의로 채택된 행(옛 CSV 의 전부)
+    rej_rows = [r for r in kept_rows if r["origin"] == "reject_others"]         # 전원 거절 → others 로 더해진 행(--others_from_reject 0 이면 0개)
     few = [r for r in all_rows if r.get("note") in ("few_segments", "below_threshold")]      # 미채택(vote: 채택 조각 부족 / mean: 임계값 미달)
     few_dist = collections.Counter(int(np.argmax([r[f"meanprob_{c}"] for c in class_names])) for r in few)
     confs = np.array([r["confidence"] for r in all_rows if r.get("note") in ("kept", "few_segments", "below_threshold") and not np.isnan(r["confidence"])])
@@ -345,17 +376,20 @@ def main():
                                 else "specialist with the largest segment-mean confidence (clip kept if max >= min_conf and top1-top2 >= min_gap)"),
                  "clip_confidence": ("mean confidence of kept segments" if args.clip_rule == "vote" else "largest segment-mean specialist confidence"),
                  "score_mode": score_mode, "others_rule": others_rule if score_mode != "margin" else "n/a (margin mode)",
+                 "others_from_reject_tau": (or_tau if or_tau > 0 else None),                # [2026-10-01 / 전원 거절(OR)] None = 끔(옛 동작)
                  "distribution_alignment": False, "augmentation": None,
                  "segment_selection_mode": config.segment_selection_mode, "max_segments": getattr(config, "max_segments", 5)},
         "n_unlabeled": len(rows), "n_file_missing": n_missing, "n_parse_fail": n_parse_fail, "n_read": n_read,
         "n_kept": len(kept_rows), "keep_ratio_clip": round(len(kept_rows) / max(1, n_read), 4),
+        "n_kept_consensus": len(cons_rows), "n_kept_reject_others": len(rej_rows),   # [2026-10-01] n_kept = 둘의 합
         "keep_ratio_segment": round(seg_kept_total / max(1, seg_total), 4),
         "keep_ratio_note": "Mark5 학습 로그의 채택률(증강 view, 세그먼트 단위, 약 0.92)과 직접 비교 불가 — 여기는 원본·클립 단위",
         "kept_class_distribution": {c: int(kept_dist.get(c, 0)) for c in class_names},
         "few_segments_meanprob_argmax_distribution": {c: int(few_dist.get(i, 0)) for i, c in enumerate(class_names)},
         "n_segments_kept_histogram": {str(k): int(v) for k, v in sorted(collections.Counter(r["n_segments_kept"] for r in all_rows if "n_segments_kept" in r).items())},
-        "vote_agreement_mean_kept": round(float(np.mean([r["vote_agreement"] for r in kept_rows])), 4),
-        "confidence_mean_kept": round(float(np.mean([r["confidence"] for r in kept_rows])), 4),
+        "vote_agreement_mean_kept": round(float(np.mean([r["vote_agreement"] for r in cons_rows])), 4) if cons_rows else None,   # 합의 행만
+        "confidence_mean_kept": round(float(np.mean([r["confidence"] for r in cons_rows])), 4) if cons_rows else None,           # 합의 행만
+        "confidence_mean_reject_others": round(float(np.mean([r["confidence"] for r in rej_rows])), 4) if rej_rows else None,
         "segment_confidence_histogram_0.1bins": {f"{edges[k]:.1f}-{edges[k + 1]:.1f}": int(seg_hist[k]) for k in range(10)},
         "teacher_checkpoints": teacher_files,
         "limit": args.limit, "clips_per_batch": args.clips_per_batch,
@@ -370,7 +404,8 @@ def main():
         with open(args.truth_csv, newline="", encoding="utf-8-sig") as f:
             for r in csv.DictReader(f):
                 truth[os.path.basename(r["path"])] = r["label"]
-        matched = [(truth[os.path.basename(r["path"])], r["label"]) for r in kept_rows if os.path.basename(r["path"]) in truth]
+        # [2026-10-01] 오염률은 전처럼 합의로 채택된 행만으로 낸다(전원 거절 행을 섞으면 옛 숫자와 정의가 달라진다). 전원 거절 행은 아래에 따로.
+        matched = [(truth[os.path.basename(r["path"])], r["label"]) for r in cons_rows if os.path.basename(r["path"]) in truth]
         if matched:
             wrong = sum(1 for t, l in matched if t != l)
             conf_tl = collections.Counter(matched)
@@ -383,6 +418,13 @@ def main():
                 "confusion_true_x_consensus": {t: {l: int(v) for (tt, l), v in conf_tl.items() if tt == t} for t in class_names},
             }
             print(f"[INFO] 오염률(합의 ≠ 진짜): {wrong}/{len(matched)} = {wrong / len(matched):.4f}  (진짜 others 인데 채택된 클립 {stats['contamination']['true_others_kept']})")
+            if rej_rows:
+                _rt = [truth[os.path.basename(r["path"])] for r in rej_rows if os.path.basename(r["path"]) in truth]
+                _rw = sum(1 for t in _rt if t != "others")
+                stats["contamination"]["reject_others"] = {"n_with_truth": len(_rt), "n_wrong": _rw,
+                                                           "rate": round(_rw / max(1, len(_rt)), 4),
+                                                           "true_class_distribution": {c: int(v) for c, v in sorted(collections.Counter(_rt).items())}}
+                print(f"[INFO] 전원 거절 → others {len(rej_rows)}행: 진짜 라벨이 others 가 아닌 것 {_rw}/{len(_rt)}")
         else:
             print(f"[WARN] --truth_csv {args.truth_csv} 와 파일 이름이 하나도 맞지 않아 오염률을 못 냈습니다.")
     else:
@@ -392,13 +434,16 @@ def main():
     os.makedirs(aux_dir, exist_ok=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["path", "label", "confidence", "n_segments", "n_segments_kept", "vote_agreement", "generated_at"])
+        # [2026-10-01] origin 열(consensus / reject_others)을 맨 끝에 더했다. 비교모델 common/data.py 는 path·label·confidence 만 필수로 읽는다.
+        w = csv.DictWriter(f, fieldnames=["path", "label", "confidence", "n_segments", "n_segments_kept", "vote_agreement", "generated_at", "origin"])
         w.writeheader()
         w.writerows(kept_rows)
     all_fields = ["path", "keep", "note", "label", "confidence", "n_segments", "n_segments_kept", "vote_agreement",
                   "seg_conf_mean", "seg_conf_max"] + [f"meanprob_{c}" for c in class_names]
     if args.clip_rule == "mean":
         all_fields += ["clip_conf", "clip_gap"]                                   # [2026-09-30 밤 / 가짜 정답 재료] 클립 단위 채택에 쓴 두 값
+    if or_tau > 0:
+        all_fields += ["spec_max"]                                                # [2026-10-01 / 전원 거절(OR)] 미채택 클립의 전문가 확신도(조각 평균) 최댓값
     with open(all_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=all_fields, extrasaction="ignore")
         w.writeheader()
@@ -412,7 +457,9 @@ def main():
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
     print("\n" + "=" * 70)
-    print(f" 합의 라벨[{args.clip_rule}]: {len(kept_rows)}/{n_read} 클립 채택 (클립 채택률 {stats['keep_ratio_clip']}, 세그먼트 채택률 {stats['keep_ratio_segment']}), "
+    print(f" 합의 라벨[{args.clip_rule}]: {len(kept_rows)}/{n_read} 클립 채택"
+          + (f" = 합의 {len(cons_rows)} + 전원 거절→others {len(rej_rows)}" if or_tau > 0 else "")
+          + f" (클립 채택률 {stats['keep_ratio_clip']}, 세그먼트 채택률 {stats['keep_ratio_segment']}), "
           f"파일 없음 {n_missing}, 파싱 실패 {n_parse_fail}")
     print(f" 채택 클래스 분포: {stats['kept_class_distribution']}")
     print(f" 채택 세그먼트 수 분포(클립당): {stats['n_segments_kept_histogram']}   다수결 일치율 평균 {stats['vote_agreement_mean_kept']}")

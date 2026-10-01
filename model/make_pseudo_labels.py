@@ -292,10 +292,14 @@ def main():
     # [2026-09-30 밤 / 가짜 정답 재료] 가짜 정답 재료 플래그 — 여기서는 self 회차의 이름(run_tag _SM·_CT) 맞추기에만 쓰인다.
     ap.add_argument("--teacher_seg_mean", action="store_true", help="[SM] self 학습 때 줬으면 같이(run_tag _SM)")
     ap.add_argument("--teacher_clean_view", action="store_true", help="[CT] self 학습 때 줬으면 같이(run_tag _CT)")
+    # [2026-10-01 / 지도만 격차 진단] --bg_weight 는 이름(run_tag _BG<값>) 맞추기만, --student_raw_wave 는 이름(_RW)에 더해 입력도 바꾼다(원본 진폭 파형).
+    ap.add_argument("--bg_weight", type=float, default=None, help="[BG] self 학습 때 준 값(run_tag _BG<값>)")
+    ap.add_argument("--student_raw_wave", action="store_true", help="[RW] self 학습 때 줬으면 같이(run_tag _RW · 입력도 원본 진폭)")
     args = ap.parse_args()
     _ab_given = any([args.no_feature_kd, args.pl_min_gap is not None, args.no_distill_branch, args.clip_input, args.linear_head,
                      args.segment_input, args.head_pretrained_hidden, args.lp_epochs is not None, args.hard_weight is not None,
-                     args.others_from_reject is not None, args.neg_pl is not None, args.teacher_seg_mean, args.teacher_clean_view])
+                     args.others_from_reject is not None, args.neg_pl is not None, args.teacher_seg_mean, args.teacher_clean_view,
+                     args.bg_weight is not None, args.student_raw_wave])
 
     config = AudioViLDConfig(mark_version=args.mark_version)
     device = config.device
@@ -311,7 +315,8 @@ def main():
                                             clip_input=args.clip_input, linear_head=args.linear_head, segment_input=args.segment_input,
                                             head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs, hard_weight=args.hard_weight,
                                             others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
-                                            teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view)
+                                            teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view,
+                                            bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave)
         if _ab_txt:
             print(f"[ABLATION] {_ab_txt} (self 회차 run_tag·구조 맞추기용) · run_tag {config.run_tag}")
     elif args.lr is not None or args.encoder_lr is not None or _ab_given:

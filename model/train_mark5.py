@@ -647,7 +647,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 pseudo_csv=None, pseudo_source=None, spill_labeled=False, lr=None, encoder_lr=None,
                 no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
                 segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
-                others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False):
+                others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False,
+                bg_weight=None, student_raw_wave=False):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 실험 조건으로 받는다.
     [이식 2026-09-29 / Mark5.2] ablation A1~A4·H 와 격차 분석 대응 묶음(PH·LP-FT·HW·OR·NEG) 플래그를 받는다(vild_config.apply_cli_ablation).
     아무 플래그도 안 주면 mark5.2 기본(클립 입력·조각 teacher 또는 클립 teacher 자동 판정) 그대로다.
@@ -689,7 +690,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                                         clip_input=clip_input, linear_head=linear_head, segment_input=segment_input,
                                         head_pretrained_hidden=head_pretrained_hidden, lp_epochs=lp_epochs, hard_weight=hard_weight,
                                         others_from_reject=others_from_reject, neg_pl=neg_pl,
-                                        teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view)
+                                        teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view,
+                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave)
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} · run_tag {config.run_tag}")
     if _ab_txt:
@@ -1077,6 +1079,10 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     _head_params = list(student_branch.parameters())
     if background_embedding is not None:
         _head_params += list(background_embedding.parameters())
+    # [수정 2026-10-01] 본체(Mark5.2 train_mark5.py)에는 있고 2026-09-26 이식에서 빠져 있던 줄. 이 줄이 없으면 분류 헤드의 파라미터가
+    # 옵티마이저에 들어가지 않아 학습형 로짓 스케일(LT)이 초깃값 1/0.07 에서 한 번도 움직이지 않고(2026-10-01 의 70회 로그 전부 T=0.0700),
+    # --linear_head 의 nn.Linear 도 무작위 초깃값 그대로 고정된다. 본체 로그는 '새 층 640,897개'(스케일 1개 포함), 이 줄이 없던 EXP2 는 640,896개.
+    _head_params += list(student_classifier.parameters())   # 학습형 로짓 스케일·선형 헤드(텍스트 앵커+고정 T 면 빈 목록)
     _enc_trainable = [p for p in student_encoder.parameters() if p.requires_grad]
     # [2026-09-29 밤 / LP-FT] 백본 = 인코더 파라미터 중 투영층(proj)을 뺀 것. 학습률 분리와 LP 고정이 같은 집합을 쓴다.
     _proj_ids = {id(p) for p in getattr(student_encoder, "proj", nn.Identity()).parameters()}
@@ -1217,7 +1223,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 loss = loss + hard_total
                 total_hard_loss += hard_loss.item()
 
-                if config.use_background_embedding and background_embedding is not None:
+                # [2026-10-01 / 지도만 격차 진단] 가중치 0(--bg_weight 0)이면 이 보조 손실을 아예 걸지 않는다(로그의 BG 칸은 0).
+                if config.use_background_embedding and background_embedding is not None and float(config.background_embedding_weight) > 0:
                     others_idx = student_label_map["others"]
                     others_mask = (labeled_targets == others_idx)
                     if others_mask.any():
@@ -1301,7 +1308,9 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 # [Mark5_EXP2] CSV 가짜 정답 경로(_CsvFusion)에는 전문가가 없다 → None. OR·NEG 는 그 경로에서 앞에서 막았다(ValueError).
                 _sw = _spec_max = _reject = None
                 if pseudo_lookup is None:
-                    _sw = torch.stack([fusion_output.specialist_weights[n].to(device).float() for n in _spec_names], dim=1)   # [n*K 또는 n, 8]
+                    _sw = torch.stack([fusion_output.specialist_weights[n].to(device).float() for n in _spec_names], dim=1).squeeze(-1)   # [n*K 또는 n, 8]
+                    # [수정 2026-10-01] specialist_weights[n] 는 [N,1] 이라 stack 이 [N,8,1] 을 만든다. 클립 모드는 아래 view 가 바로잡았지만 조각 모드
+                    # (--segment_input)는 _spec_max 가 [N,1] → _reject 가 [N,N] 이 되어 OR·NEG 를 켜면 멈췄다. squeeze(-1) 로 [N,8]. 클립 모드 결과는 그대로.
                     if _clip_mode:
                         _sw = _sw.view(_n_u, _K, -1).mean(dim=1)                                                        # [n, 8]
                     _spec_max = _sw.max(dim=1).values                                                                    # [n]
@@ -1598,7 +1607,7 @@ if __name__ == "__main__":
     # [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py)용. 안 주면 config 기본값(새 층 1e-4 · 백본 5e-5)·옛 태그 그대로.
     # run_experiments.py 는 plots/lr_selected.json 이 있으면 이 두 값을 자동으로 넘긴다.
     parser.add_argument("--lr", type=float, default=None,
-                        help="[LR 2026-09-25] 새로 만드는 층(투영·branch·background)의 학습률. 기본값과 다르면 run_tag 에 _lr<값>")
+                        help="[LR 2026-09-25] 새로 만드는 층(투영·branch·background·로짓 스케일)의 학습률. 기본값과 다르면 run_tag 에 _lr<값>")
     parser.add_argument("--encoder_lr", type=float, default=None,
                         help="[LR 2026-09-25] 사전학습 백본(mn10)의 학습률. 기본값과 다르면 run_tag 에 _elr<값>. eval 에도 같은 값을 줄 것")
     # [신설 2026-09-28 / ablation A1·A2·A4] 우리 부품 끄기. 셋 다 eval.py 에도 같은 플래그를 줘야 체크포인트(run_tag)를 찾는다.
@@ -1632,6 +1641,11 @@ if __name__ == "__main__":
                         help="[SM] 조각 teacher 출력을 전문가별로 평균한 뒤 클립 단위로 채택(옛 방식 = 조각 다수결). 조각 teacher 에서만. run_tag _SM")
     parser.add_argument("--teacher_clean_view", action="store_true",
                         help="[CT] teacher 는 증강 없는 원본을 본다(SpecAugment 는 student 에만). run_tag _CT")
+    # [신설 2026-10-01 / 지도만 격차 진단] teacher 없이 도는 지도만(u0) 조건에서 EfficientAT 파인튜닝과의 차이를 하나씩 맞춰 보는 스위치. eval 에도 같이 줄 것(run_tag).
+    parser.add_argument("--bg_weight", type=float, default=None,
+                        help="[BG] others 특징을 배경 임베딩 쪽으로 당기는 보조 손실의 가중치(기본 0.1). 0 이면 끔. 기본값과 다르면 run_tag _BG<값>(0 → _BG0)")
+    parser.add_argument("--student_raw_wave", action="store_true",
+                        help="[RW] student 클립 파형을 정규화하지 않은 원본 진폭으로(teacher mel 은 그대로). 비교모델 입력과 같다. run_tag _RW")
     args = parser.parse_args()
     # [신설 2026-09-26] 화면에 찍히는 것을 logFiles/<run_tag>__train.log 에도 그대로 남긴다.
     # run_tag 를 알아야 파일 이름이 정해지므로 config 를 먼저 한 번 만든다(텍스트 임베딩은 이때 안 만들어진다).
@@ -1647,7 +1661,8 @@ if __name__ == "__main__":
     _c.apply_cli_learning_rates(args.lr, args.encoder_lr)
     _bundle = dict(segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs,
                    hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
-                   teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view)
+                   teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view,
+                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave)
     _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
                           clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
     with RunLogger(PROJECT_ROOT, _c.run_tag, "train"):
