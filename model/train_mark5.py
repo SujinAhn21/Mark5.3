@@ -715,7 +715,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     # [신설 2026-09-29 / 헤드 진단 H] 선형 헤드면 위 AC/LT 값은 헤드가 안 쓰므로 뜻이 없다(텍스트 임베딩은 만들되 헤드가 무시한다).
     if getattr(config, "student_head", "text_anchor") == "linear":
         print(f"[H] student 분류 헤드 = 선형(nn.Linear {config.embedding_dim}→{len(config.get_classes_for_evaluation())}) — "
-              f"텍스트 앵커·AC/LT 미사용, 제로샷 불가(진단용). 두 갈래(지도·증류)가 같은 Linear 를 공유한다")
+              f"텍스트 앵커·AC/LT 미사용, 제로샷 불가(2026-10-07 D0 본 레시피). 두 갈래(지도·증류)가 같은 Linear 를 공유한다")
     # [신설 2026-09-29 / A3] 클립 모드 — 학습 단위가 조각에서 클립으로 바뀐다(배치 16 = 클립 16개, 에폭당 스텝 수 1/K). teacher 는 조각 그대로.
     _clip_mode = bool(getattr(config, "student_clip_input", False))
     _clip_min_segments = int(getattr(config, "clip_min_segments", 3))
@@ -1620,9 +1620,9 @@ if __name__ == "__main__":
     # [신설 2026-09-29 / ablation A3] student 가 1초 조각 5개 대신 클립 3초 파형을 통째로 본다. teacher 는 조각 그대로(클립 규칙으로 합침).
     parser.add_argument("--clip_input", action="store_true",
                         help="[A3] 세그먼트 분할을 끈다 — student 입력 = 클립 3초 파형 통째, teacher 조각 출력은 다수결로 합침. run_tag 에 _noSEG. eval 에도 같이 줄 것")
-    # [신설 2026-09-29 / 헤드 진단 H] 텍스트 앵커 헤드를 nn.Linear(384→9) 로 바꾼다(비교모델 헤드와 같은 방식). 제로샷이 없어져 진단용.
+    # [신설 2026-09-29 / 헤드 진단 H] 텍스트 앵커 헤드를 nn.Linear(384→9) 로 바꾼다(비교모델 헤드와 같은 방식). 제로샷이 없어진다. [2026-10-07] 지도만 격차 진단 D0 로 본 레시피에 채택.
     parser.add_argument("--linear_head", action="store_true",
-                        help="[H] 텍스트 앵커 헤드 대신 nn.Linear 분류 헤드(진단용, 제로샷 불가). run_tag 에 _LIN. eval 에도 같이 줄 것")
+                        help="[H] 텍스트 앵커 헤드 대신 nn.Linear 분류 헤드(2026-10-07 D0 본 레시피, 제로샷 불가). run_tag 에 _LIN. eval 에도 같이 줄 것")
     # [신설 2026-09-29 밤 / 격차 분석 대응 묶음] 전부 켜는 것이 실험 기본. 하나씩 끄는 것은 묶음 뒤 ablation 용. eval 에도 같은 플래그를 줄 것.
     parser.add_argument("--segment_input", action="store_true",
                         help="mark5.2 기본(클립 입력)을 끄고 조각(1초×5) 입력으로 되돌린다(2026-09-28 이전 본 모델과 같은 이름). 클립 teacher 와는 함께 못 씀")

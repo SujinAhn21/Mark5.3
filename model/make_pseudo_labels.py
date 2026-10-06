@@ -121,7 +121,7 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
         if not _cls_state or "linear.weight" not in _cls_state:
             raise RuntimeError("[ERROR] 체크포인트에 선형 헤드(linear.weight)가 없습니다 — --linear_head 없이 학습한 모델이거나 run_tag(_LIN)가 어긋난 것입니다.")
         text_head.load_state_dict(_cls_state)
-        print(f"[H] 선형 헤드 로드: linear.weight {tuple(_cls_state['linear.weight'].shape)} — 텍스트 앵커·AC/LT 미사용(진단용)")
+        print(f"[H] 선형 헤드 로드: linear.weight {tuple(_cls_state['linear.weight'].shape)} — 텍스트 앵커·AC/LT 미사용(2026-10-07 D0 본 레시피)")
     elif _cls_state:
         text_head.load_state_dict(_cls_state, strict=False)
     text_emb = config.get_class_text_embeddings(for_evaluation=True).to(device)

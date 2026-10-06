@@ -462,7 +462,8 @@ class AudioViLDConfig:
         # [이식 2026-09-29 / Mark5.2 → Mark5_EXP2] 헤드 진단 H · 격차 분석 대응 묶음(PH·LP-FT·HW·OR·NEG). 본체와 같은 필드·같은 기본값.
         # [신설 2026-09-29 / 헤드 진단 H] student 분류 헤드. "text_anchor"(기본) = ViLDTextHead(텍스트 앵커 코사인 + 위 AC/LT).
         #   "linear" = vild_model.LinearClassHead(nn.Linear(embedding_dim, 9)) — 비교모델 EfficientAT 의 mlp 헤드 마지막 층과 같은 방식.
-        #   --linear_head 로만 켠다(run_tag _LIN). 제로샷이 없어지므로 채택용이 아니라 "2%p 차이가 헤드에서 나는가" 를 보는 진단용이다.
+        #   --linear_head 로만 켠다(run_tag _LIN). 제로샷이 없어진다. 처음(09-29)에는 "2%p 차이가 헤드에서 나는가" 를 보는 진단용이었고, 2026-10-07 지도만 격차 진단(D0)으로
+        #   본 레시피에 채택했다(config 기본값은 그대로 text_anchor — 노트북·실행기가 --linear_head 로 켠다).
         #   이때 anchor_centering·learnable_logit_scale 은 헤드가 안 쓰므로 뜻이 없다(run_tag 의 _AC_LT 는 이름 규칙상 그대로 붙는다).
         self.student_head = "text_anchor"
         # === [신설 2026-09-29 밤 / 격차 분석 대응 묶음] 아래 다섯 가지는 --플래그로 켠다(기본 = 옛 동작). 근거는 Downloads
@@ -682,7 +683,7 @@ class AudioViLDConfig:
                                  (teacher 는 조각 그대로, 조각별 출력을 클립 규칙으로 합침. __init__ 의 student_clip_input 주석 참조).
                                  A1·A2·A4 결과(2026-09-28, seed 1)가 셋 다 본 모델과 1클립 차이라 남은 후보가 이것이었다.
           H  linear_head         : [2026-09-29] student_head="linear" — 텍스트 앵커 헤드 대신 nn.Linear(embedding_dim, 9)(vild_model.LinearClassHead).
-                                 A3 도 1클립 차이(seed 1)라 남은 후보가 헤드였다. 제로샷이 없어져 채택용이 아니라 진단용이다(run_tag _LIN).
+                                 A3 도 1클립 차이(seed 1)라 남은 후보가 헤드였다. 제로샷이 없어진다(run_tag _LIN). [2026-10-07] D0 본 레시피로 채택.
           SM teacher_seg_mean  : [2026-09-30 밤 / 가짜 정답 재료] clip_merge_rule="mean" — 조각 teacher 출력을 전문가별로 평균한 뒤 클립 단위로 채택한다
                                  (run_tag _SM). 클립 입력 student 에서만(조각 입력에는 합치는 단계가 없다), 조각 teacher 에서만(train_mark5 가 검사).
           CT teacher_clean_view: [2026-09-30 밤 / 가짜 정답 재료] spec_augment_teacher_view="clean" — teacher 는 증강 없는 원본을 본다(run_tag _CT).
@@ -752,7 +753,7 @@ class AudioViLDConfig:
         if linear_head:
             self.student_head = "linear"
             changed.append(f"H 텍스트 앵커 헤드 → 선형 헤드(nn.Linear {self.embedding_dim}→{len(self.get_classes_for_evaluation())}, "
-                           "제로샷 없음·진단용)")
+                           "제로샷 없음 · 2026-10-07 D0 본 레시피)")
         # [신설 2026-09-30 밤 / 가짜 정답 재료] 가짜 정답 재료: 조각 평균 합의(_SM) · teacher 원본 입력(_CT). 둘 다 teacher 쪽 설정이라 student 구조는 그대로다.
         if teacher_seg_mean:
             self.clip_merge_rule = "mean"

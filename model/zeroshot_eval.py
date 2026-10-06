@@ -91,7 +91,7 @@ def _student_records(parser, path, clip_mode):
 
 def load_student(config, device):
     if getattr(config, "student_head", "text_anchor") == "linear":
-        raise SystemExit("[ERROR] --linear_head(선형 분류 헤드) 모델에는 텍스트 앵커가 없어 제로샷이 정의되지 않습니다(진단용 H 회차).")
+        raise SystemExit("[ERROR] --linear_head(선형 분류 헤드) 모델에는 텍스트 앵커가 없어 제로샷이 정의되지 않습니다(H 회차·2026-10-07 D0 본 레시피).")
     model_path = os.path.join(BASE_DIR, f"student_model_{config.run_tag}.pth")
     if not os.path.isfile(model_path):
         raise SystemExit(f"[ERROR] 체크포인트가 없습니다: {model_path}")
@@ -365,7 +365,7 @@ def main():
     ap.add_argument("--pl_min_gap", type=float, default=None, help="[A2] 학습 때 준 값(0 이면 run_tag _noGAP)")
     ap.add_argument("--no_distill_branch", action="store_true", help="[A4] 학습 때 줬으면 같이(run_tag _noDB)")
     ap.add_argument("--clip_input", action="store_true", help="[A3] 학습 때 줬으면 같이(run_tag _noSEG · mark5.2 는 기본이 클립 입력)")
-    ap.add_argument("--linear_head", action="store_true", help="[H] 진단용 선형 헤드 — 제로샷 불가(멈춤)")
+    ap.add_argument("--linear_head", action="store_true", help="[H] 선형 헤드(2026-10-07 D0 본 레시피) — 제로샷 불가(멈춤)")
     ap.add_argument("--segment_input", action="store_true", help="학습 때 줬으면 같이(조각 1초×5 입력·이름 표식 없음)")
     ap.add_argument("--head_pretrained_hidden", action="store_true", help="[PH] 학습 때 줬으면 같이(run_tag _PH · 투영/branch 구조)")
     ap.add_argument("--lp_epochs", type=int, default=None, help="[LP-FT] 학습 때 준 값(run_tag _LP<N>)")

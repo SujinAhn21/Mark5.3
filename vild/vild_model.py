@@ -253,7 +253,7 @@ class LinearClassHead(nn.Module):
 
     왜: ablation A1·A2·A4(2026-09-28)·A3(2026-09-29, seed 1)가 전부 본 모델과 1클립 차이라, EfficientAT-pl 과의 2%p 차이의
     남은 후보가 분류 헤드(텍스트 앵커 코사인 + AC/LT)였다. 비교모델 EfficientAT 의 mlp 헤드 마지막 층(nn.Linear(960, 9))과
-    같은 방식으로 바꿔 1회 학습해 보는 진단용이다. 우리 경로는 mn10 960 → proj Linear(960→384) → branch Linear(384→384)+LN+ReLU
+    같은 방식으로 바꿔 1회 학습해 보는 진단용으로 만들었고, 2026-10-07 지도만 격차 진단(D0)으로 본 레시피에 채택했다. 우리 경로는 mn10 960 → proj Linear(960→384) → branch Linear(384→384)+LN+ReLU
     까지 있으므로 마지막 Linear(384→9) 하나만 더하면 깊이가 비교모델과 비슷해진다.
 
     ViLDTextHead 와 같은 호출 모양 forward(region_emb, class_text_emb) 을 받되 class_text_emb 는 쓰지 않는다 — 학습·평가·효율 측정의
@@ -460,7 +460,7 @@ def build_audio_encoder(config):
 
 def build_student_head(config):
     """[신설 2026-09-29 / 헤드 진단 H] student 분류 헤드 선택 지점(단일 스위치). config.student_head 가 "linear" 면
-    LinearClassHead(진단용, --linear_head), 아니면 ViLDTextHead(본 모델, 텍스트 앵커). train_mark5.py·eval.py·profile_efficiency.py 가
+    LinearClassHead(--linear_head, 2026-10-07 D0 본 레시피), 아니면 ViLDTextHead(텍스트 앵커, config 기본값). train_mark5.py·eval.py·profile_efficiency.py 가
     같은 함수를 써야 체크포인트의 classifier_state_dict 구조가 맞는다.
     teacher(train_mark5.EnsembleTeacher)의 헤드는 여기를 거치지 않는다 — Mark4.x 저장본은 ViLDTextHead(learnable=False) 고정."""
     if getattr(config, "student_head", "text_anchor") == "linear":
