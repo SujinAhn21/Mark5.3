@@ -24,6 +24,13 @@
   - 동률이면 config 기본값 조합(새 층 1e-4 · 백본 5e-5)을 우선한다 — 태그가 안 바뀌어 지금까지의 산출물을 그대로 쓸 수 있다.
     그다음은 후보 목록 순서.
 
+[2026-10-07 / D0 레시피] --tied : 새 층과 백본에 **같은 학습률** 을 쓰고 후보 3개(1e-4·5e-5·2e-5)만 돈다 — 3회.
+  왜: 지도만 격차 진단(Mark5_EXP2_1)에서 다섯 가지를 EfficientAT 방식으로 바꾼 D0(선형 헤드·LP-FT 없음·BG 보조 손실 0·원본 진폭
+  파형·새 층=백본 학습률)가 R 대비 +2.23%p(p=0.022)라 본 레시피로 확정했다. D0 는 비교모델처럼 모델 전체를 한 학습률로 미세조정하므로,
+  선정도 비교모델(Baseline_*/run_experiments.py --phase sweep)과 같은 1축 3후보·같은 순서로 한다. 동률은 후보 목록 순서(비교모델과 같음) — 단 config 기본값 쌍이 후보에 있으면
+  그 쌍을 먼저 둔다(태그가 안 바뀌어 산출물·안내가 맞는다. 지금 기본값 1e-4·5e-5 는 같은 값 쌍이 아니라 해당 없음).
+  이 모드에서는 위 "다르다 (가) 축 개수" 가 없어지고 (나) 선정 조건만 남는다. json 에 "tied": true 가 남는다.
+
 산출물
   plots/lr_selected.json       고른 값 + 후보 9개의 val 지표 4종(Accuracy·Macro P·R·F1). run_experiments.py(EXP2)가 읽는다.
   plots/lr_sweep_<mv>.csv      같은 내용을 표로(논문 부록 "후보별 검증 점수" 표의 재료).
@@ -74,6 +81,7 @@ SELECTED_JSON = os.path.join(PLOT_DIR, "lr_selected.json")
 # 후보. 백본은 비교모델이 쓴 후보 그대로, 새 층은 처음부터 학습하는 층이라 위로 한 칸 넓혔다. 둘 다 config 기본값을 품는다.
 DEFAULT_LRS = [2e-4, 1e-4, 5e-5]          # 새 층(투영·branch·background[·로짓 스케일])   기본 1e-4
 DEFAULT_ENCODER_LRS = [1e-4, 5e-5, 2e-5]  # 사전학습 백본(mn10)                          기본 5e-5
+TIED_LRS = [1e-4, 5e-5, 2e-5]             # [2026-10-07] --tied: 새 층=백본 같은 학습률 — 비교모델 sweep 과 같은 후보·순서
 SWEEP_SEED = 0
 METRICS4 = ["Accuracy", "Macro Precision", "Macro Recall", "Macro F1"]
 REQUIRED_METRICS = METRICS4 + ["ROC AUC (Macro, OvR)", "Others FPR"]   # 요약 CSV 가 온전한지 볼 때(EXP2 run_experiments 와 같음)
@@ -379,6 +387,9 @@ def main():
     ap.add_argument("--mark_version", type=str, default="mark5.2")
     ap.add_argument("--lrs", type=float, nargs="+", default=DEFAULT_LRS, help="새 층 학습률 후보")
     ap.add_argument("--encoder_lrs", type=float, nargs="+", default=DEFAULT_ENCODER_LRS, help="백본 학습률 후보")
+    ap.add_argument("--tied", action="store_true",
+                    help="[2026-10-07 D0] 새 층과 백본에 같은 학습률 — 후보 --tied_lrs 만큼(기본 1e-4 5e-5 2e-5, 비교모델과 같음). --lrs/--encoder_lrs 는 무시")
+    ap.add_argument("--tied_lrs", type=float, nargs="+", default=TIED_LRS, help="--tied 일 때 후보(앞쪽이 동률 우선)")
     ap.add_argument("--sweep_seed", type=int, default=SWEEP_SEED, help="선정용 seed(본실험 1~5 와 겹치지 않게 0)")
     ap.add_argument("--extra", type=str, default="", help='train·eval 에 그대로 넘길 인자(화이트리스트). Mark5_EXP2 예: "--unlabeled_n 2000"')
     ap.add_argument("--force", action="store_true", help="끝난 회차도 다시 돈다")
@@ -399,9 +410,15 @@ def main():
     timeout = args.step_timeout_min * 60 if args.step_timeout_min else None
 
     # 조합: 기본값 조합을 맨 앞에(지금까지의 산출물과 태그가 같아 재사용될 수 있다), 나머지는 격자 순서.
-    grid = [(lr, elr) for elr in args.encoder_lrs for lr in args.lrs]
-    grid.sort(key=lambda p: 0 if (p[0] == d_lr and p[1] == d_elr) else 1)
-    if (d_lr, d_elr) not in grid:
+    if args.tied:
+        # [2026-10-07 D0] 비교모델과 같은 1축 3후보. 동률은 후보 목록 순서(비교모델과 같음). 기본값 쌍이 후보에 있을 때만 그것이 먼저
+        #   (_select 의 is_default 규칙 — 리뷰 반영: tied 에서 is_default 를 끄면 기본값 쌍이 뽑혀도 '다시 돌려야' 라고 잘못 안내한다).
+        grid = [(x, x) for x in args.tied_lrs]
+        args.lrs, args.encoder_lrs = list(args.tied_lrs), list(args.tied_lrs)
+    else:
+        grid = [(lr, elr) for elr in args.encoder_lrs for lr in args.lrs]
+        grid.sort(key=lambda p: 0 if (p[0] == d_lr and p[1] == d_elr) else 1)
+    if not args.tied and (d_lr, d_elr) not in grid:
         print(f"[WARN] config 기본값(새 층 {d_lr:g} · 백본 {d_elr:g})이 후보 격자에 없습니다. "
               "지금 쓰는 값이 후보에 포함돼야 '탐색했고 이 값이 최선' 이라고 쓸 수 있습니다.")
 
@@ -420,8 +437,15 @@ def main():
         repo_name = os.path.basename(PROJECT_ROOT)
         print("=" * 78)
         print(f" 학습률 선정 — {repo_name} ({'Mark5_EXP2 방식' if kind == 'exp2' else 'Mark5.2 방식'}) · mark_version {mv} · {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f" 새 층 후보 {[f'{x:g}' for x in args.lrs]} x 백본 후보 {[f'{x:g}' for x in args.encoder_lrs]} = {len(grid)}회 · seed {args.sweep_seed}")
-        print(f" 기본값   : 새 층 {d_lr:g} · 백본 {d_elr:g} (태그가 안 붙는 조합)")
+        if args.tied:
+            print(f" 새 층 = 백본 같은 학습률(--tied) 후보 {[f'{x:g}' for x in args.tied_lrs]} = {len(grid)}회 · seed {args.sweep_seed}"
+                  " · 동률은 후보 순서(비교모델과 같음)")
+            _dp = (d_lr, d_elr) in grid
+            print(f" 기본값   : 새 층 {d_lr:g} · 백본 {d_elr:g} " + ("(후보에 있음 — 태그가 안 붙는 쌍)" if _dp else "(같은 값 쌍이 아니라 후보에 없음 — 세 후보 모두 태그에 _lr/_elr 이 붙는다)"))
+        else:
+            print(f" 새 층 후보 {[f'{x:g}' for x in args.lrs]} x 백본 후보 {[f'{x:g}' for x in args.encoder_lrs]} = {len(grid)}회 · seed {args.sweep_seed}")
+        if not args.tied:
+            print(f" 기본값   : 새 층 {d_lr:g} · 백본 {d_elr:g} (태그가 안 붙는 조합)")
         print(f" 조건     : {' '.join(extra) if extra else '(config 기본)'}")
         print(" 기준     : val Macro F1 (test 는 보지 않음)")
         if master_path:
@@ -504,6 +528,7 @@ def main():
             "lr": best["lr"], "encoder_lr": best["encoder_lr"],
             "default": {"lr": d_lr, "encoder_lr": d_elr}, "selected_is_default": bool(best["is_default"]),
             "criterion": "val Macro F1", "sweep_seed": args.sweep_seed, "sweep_condition": " ".join(extra),
+            "tied": bool(args.tied),   # [2026-10-07 D0] True 면 새 층=백본 같은 학습률 1축 후보(candidates_lrs == candidates_encoder_lrs)
             "candidates_lrs": [float(x) for x in args.lrs], "candidates_encoder_lrs": [float(x) for x in args.encoder_lrs],
             "candidates": {f"lr={r['lr']:g},elr={r['encoder_lr']:g}": {"tag": r["tag"], "is_default": r["is_default"],
                                                                         **{m: r[m] for m in METRICS4}} for r in rows},
