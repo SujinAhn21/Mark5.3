@@ -64,8 +64,14 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_i
     # [신설 2026-09-29 / ablation A3] 클립 입력(mark5.2 기본)이면 student 가 클립 3초 파형을 한 번에 보므로 클립당 연산 = 1회(조각 5회가 아님).
     # [신설 2026-09-29 / 헤드 진단 H] --linear_head 면 헤드가 nn.Linear(384→9)라 파라미터 수가 달라지고 파일 이름에 _LIN 이 붙는다.
     # [2026-09-29 밤 / PH] --head_pretrained_hidden 이면 사전학습 은닉층(960→960)이 남고 branch 지도 갈래가 항등이라 파라미터 수가 달라진다(_PH).
+    # [2026-10-07 / Mark5.3] --m53 의 PF 는 --hard_weight 를 요구한다(apply_cli_ablation 검사). 효율 측정은 손실을 쓰지 않으므로
+    # 검사만 통과시키고(1.0 = D0 레시피) 바로 None 으로 되돌린다 — 파일 이름(ablation_tag)에 _HW1 이 붙지 않아 노트북 [셀 15] 경로가 그대로다.
+    if m53:
+        config.hard_weight = 1.0
     _ab_txt = config.apply_cli_ablation(clip_input=clip_input, linear_head=linear_head, segment_input=segment_input,
                                         head_pretrained_hidden=head_pretrained_hidden, m53=m53)
+    if m53:
+        config.hard_weight = None
     if _ab_txt:
         print(f"[ABLATION] {_ab_txt} · run_tag {config.run_tag}")
     _clip_mode = bool(getattr(config, "student_clip_input", False))
