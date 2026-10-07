@@ -15,6 +15,9 @@ if SHARED_DIR not in os.sys.path:
 
 from prompt_bank import get_class_synonyms, get_prompt_templates, get_prompt_texts_for_class
 
+# [신설 2026-10-07 / Mark5.3] --m53 부품 이름과 고정 순서(run_tag·로그·검사가 모두 이 순서를 쓴다). 뜻은 __init__ 의 m53_* 주석.
+M53_PARTS = ("PF", "SK", "OVA", "FM", "CB", "SC")
+
 class AudioViLDConfig:
     def __init__(self, mark_version="mark5.0"):
         self.mark_version = mark_version
@@ -489,6 +492,33 @@ class AudioViLDConfig:
         self.neg_pl_beta = 0.0
         # (Mark5.2 본체의 run_tag_suffix 는 여기 없다 — Mark5_EXP2 는 실험 조건 태그 _l/_u/_ceil/_sp/_ps/_s 로 회차를 가른다.)
 
+        # === [신설 2026-10-07 / Mark5.3] 전문가 정보를 더 쓰는 부품 6개 (--m53 all 또는 PF,SK,OVA,FM,CB,SC 중 일부) ===
+        # 근거: 2026-10-07 D0 결과 분석(라벨 2,000 격차 35번 중 others 17번 · 라벨 200 격차 34번 중 machine_noise 16번,
+        #       합의에서 빠진 558클립 중 487클립은 1등 전문가 확신도 ≥0.5 이고 정답이 1·2등 안에 있는 비율 89.7%,
+        #       풀에서 "1 − 전문가 최대 확신도" 의 others 판별 AUROC 0.967, 가짜 정답 클래스 쏠림 dragging 86 / dog_bark 216).
+        #   PF  가짜 정답 CE 를 정답 라벨과 같은 가중치(m53_pl_weight)로, 확신도 가중 없이(EfficientAT 의 합의 라벨 사용과 같은 세기). SoftMatch(ICLR 2023)
+        #   SK  합의에서 빠진 클립에 전문가 확신도로 만든 9칸 부드러운 목표(1·2등 전문가 몫 + others 몫 = 1 − 최대 확신도). IOMatch(ICCV 2023)·SoftMatch
+        #   OVA 학생에 전문가별 이진 출력 8개(별도 MLP)를 붙여 전문가 확신도를 따라 하게 하고, 평가 때 others 확률을 "1 − 최대 이진 확률" 과 섞는다.
+        #       IOMatch(multi-binary)·SSB(ICCV 2023, 분리된 투영)
+        #   FM  학생 EMA 사본이 증강 없는 입력으로 낸 답을, 학생이 증강 입력으로 맞춘다(클래스별 자기 적응 문턱). FixMatch 오디오(Grollmisch 외 EUSIPCO 2023)·FreeMatch(ICLR 2023)
+        #   CB  가짜 정답 클래스 쏠림 보정 — 채택 개수의 역수^p 로 클래스 가중, FM 목표에는 분포 정렬. ACR(CVPR 2023)·분포 정렬 계열
+        #   SC  정답 라벨 + 채택 가짜 정답 특징에 지도 대조 손실(작은 가중). You 외(Scientific Reports 2024)
+        self.m53_parts = None           # None = 끔(옛 동작·체크포인트 기록에도 안 남음). 켜면 M53_PARTS 순서의 tuple
+        self.m53_pl_weight = 1.0        # PF: 가짜 정답 CE 가중치(옛 distill_alpha 0.3 대신)
+        self.m53_soft_weight = 0.5      # SK: 부드러운 목표 CE 가중치(1등 전문가 오답 18.5% 를 감안해 PF 의 절반)
+        self.m53_soft_topk = 2          # SK: 몫을 나눠 주는 전문가 수(정답이 1·2등 안 89.7%)
+        self.m53_ova_weight = 0.5       # OVA: 이진 출력 BCE 가중치
+        self.m53_ova_hidden = 384       # OVA: 별도 MLP 은닉 차원
+        self.m53_ova_eval_mix = 0.5     # OVA: 평가 때 others 확률 = (1−m)·p_others + m·(1 − 최대 이진 확률), 나머지 클래스는 비율 유지 재정규화
+        self.m53_fm_weight = 0.5        # FM: 일관성 CE 가중치
+        self.m53_fm_ema = 0.99          # FM: 학생 EMA 사본의 감쇠(에폭당 약 250 스텝이라 0.999 는 4에폭 뒤처짐 — 조기 종료 7~20에폭에 맞춰 0.99)
+        self.m53_fm_rampup_epochs = 2   # FM: 처음 N 에폭 동안 가중치를 0 → 1 로 선형 증가(무작위 선형 헤드의 첫 답을 믿지 않게)
+        self.m53_fm_momentum = 0.99     # FM: FreeMatch 전역·클래스별 확신도 EMA 및 분포 정렬 평균의 감쇠. 논문값 0.999 는 수십만 스텝 기준이라
+                                        #     우리 학습(에폭당 약 250 스텝 × 7~20에폭)에서는 문턱이 1/9 근처에 머물러 거르지 못한다(2026-10-07 스모크 실측) → 0.99
+        self.m53_cb_power = 0.5         # CB: 클래스 가중 = (평균 채택 수 / 그 클래스 채택 수)^p, [0.5, 2.0] 으로 자름
+        self.m53_sc_weight = 0.1        # SC: 지도 대조 손실 가중치
+        self.m53_sc_temperature = 0.1   # SC: 대조 손실 온도
+
         # === 내부 캐시 ===
         self._text_emb = None
         self._eval_text_emb = None # 평가용 텍스트 임베딩 캐시 추가
@@ -671,7 +701,7 @@ class AudioViLDConfig:
                            linear_head=False, segment_input=False, head_pretrained_hidden=False, lp_epochs=None,
                            hard_weight=None, others_from_reject=None, neg_pl=None,
                            teacher_seg_mean=False, teacher_clean_view=False,
-                           bg_weight=None, student_raw_wave=False) -> str:
+                           bg_weight=None, student_raw_wave=False, m53=None) -> str:
         """[신설 2026-09-28 / ablation A1·A2·A4] 명령줄 --no_feature_kd / --pl_min_gap / --no_distill_branch 를 config 에 넣는다.
         EfficientAT-pl(같은 백본·같은 라벨)과의 2%p 차이가 우리가 얹은 부품 중 어디서 나는지 하나씩 빼 보는 실험용.
           A1 no_feature_kd     : use_feature_kd=False — teacher 특징을 따라가는 손실(feature_kd_weight 0.3)을 뺀다.
@@ -777,6 +807,21 @@ class AudioViLDConfig:
         if getattr(self, "clip_merge_rule", "vote") == "mean" and not getattr(self, "student_clip_input", False):
             raise ValueError("[ERROR] --teacher_seg_mean(조각 평균 합의)은 클립 입력 student(mark5.2 기본)에서만 뜻이 있습니다 — "
                              "조각 입력(--segment_input)에는 조각을 클립으로 합치는 단계가 없습니다.")
+        # [신설 2026-10-07 / Mark5.3] --m53 all | PF,SK,OVA,FM,CB,SC (쉼표, 대소문자 무관). 순서는 M53_PARTS 로 고정해 run_tag 가 한 가지가 되게 한다.
+        if m53 is not None and str(m53).strip() != "":
+            _txt = str(m53).strip().upper()
+            _parts = list(M53_PARTS) if _txt == "ALL" else [p.strip() for p in _txt.split(",") if p.strip()]
+            _bad = [p for p in _parts if p not in M53_PARTS]
+            if _bad or not _parts:
+                raise ValueError(f"[ERROR] --m53 에 모르는 부품 {_bad or m53!r}. 허용: all 또는 {','.join(M53_PARTS)} 중 일부(쉼표)")
+            if not getattr(self, "student_clip_input", False) or getattr(self, "student_head", "text_anchor") != "linear":
+                raise ValueError("[ERROR] --m53 은 D0 레시피(클립 입력 mn10 student + --linear_head) 위에서만 씁니다.")
+            self.m53_parts = tuple(p for p in M53_PARTS if p in _parts)
+            # [검수 2026-10-07] PF 는 α 를 m53_pl_weight(1.0)로 바꾼다. 정답 라벨 CE 가중치는 hard_weight 가 None 이면 (1−α) 라서 0 이 된다
+            # (train_mark5.DistillationLoss) — 조용히 정답 라벨을 끄지 않도록 --hard_weight 를 반드시 받는다(D0 레시피는 1.0).
+            if "PF" in self.m53_parts and getattr(self, "hard_weight", None) is None:
+                raise ValueError("[ERROR] --m53 의 PF 는 --hard_weight 와 함께 써야 합니다(없으면 정답 라벨 CE 가중치가 1−α = 0). D0 레시피: --hard_weight 1.0")
+            changed.append("Mark5.3 부품 " + "·".join(self.m53_parts))
         return " / ".join(changed)
 
     @property
@@ -823,6 +868,10 @@ class AudioViLDConfig:
             out += "_BG" + f"{float(_bg):g}".replace(".", "")
         if not getattr(self, "student_wave_normalize", True):
             out += "_RW"
+        # [신설 2026-10-07 / Mark5.3] 여섯 부품 전부면 _M53, 일부면 _M53-PF-SK… (M53_PARTS 순서). 기존 표식의 이름·순서는 그대로다.
+        _m53 = tuple(getattr(self, "m53_parts", ()) or ())
+        if _m53:
+            out += "_M53" if set(_m53) == set(M53_PARTS) else "_M53-" + "-".join(_m53)
         return out
 
     @property

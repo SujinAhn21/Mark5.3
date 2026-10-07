@@ -245,6 +245,8 @@ PAPER_PLAN = [
 # --spill_labeled) 에서 라벨을 붙이는 주체만 바꾼다. 세 조건 모두 같은 풀이어야 공정하므로 합의 조건도 따로 돈다(3 x seed = 15회).
 #   (labeled_n, unlabeled_n, spill, pseudo_source)   pseudo_source None = 전문가 8개 온라인 합의
 PLSOURCE_PLAN = [(200, 2000, True, None), (200, 2000, True, "self"), (200, 2000, True, "gen")]
+# [신설 2026-10-07 / Mark5.3] 논문 본표의 pl 행만(정답 라벨 2,000·1,000·500·200 × 라벨 없는 2,000). 지도만·상한은 D0(Mark5_EXP2) 것을 쓴다.
+PL4_PLAN = [(None, 2000), (1000, 2000), (500, 2000), (200, 2000)]
 PSEUDO_CSV_FMT = "pseudo_labels_{ps}_l{l}_s{s}.csv"   # model/make_pseudo_labels.py 산출물(프로젝트 루트)
 
 
@@ -397,7 +399,7 @@ def main():
     # [신설 2026-09-17 / 8절] labeled 축. 0 은 "전량(2,000, 태그 없음)" 을 뜻한다(argparse 로 None 을 받을 수 없어서).
     ap.add_argument("--labeled_ns", type=int, nargs="+", default=[0],
                     help="labeled 개수 목록(200 500 1000 …). 0 = 전량(태그 없음). unlabeled_ns 와 곱해 조합을 만든다.")
-    ap.add_argument("--preset", type=str, default=None, choices=["paper", "plsource"],
+    ap.add_argument("--preset", type=str, default=None, choices=["paper", "plsource", "pl4"],
                     help="paper: 체크리스트 8절 회차 계획(조합 11개 x seed). plsource: pseudo-label 출처 비교(3 x seed). "
                          "--labeled_ns/--unlabeled_ns/--ceiling 를 무시한다.")
     ap.add_argument("--dry_run", action="store_true", help="무엇을 돌릴지만 출력하고 끝낸다")
@@ -470,6 +472,8 @@ def main():
             if not os.path.isfile(args.ceiling_csv if os.path.isabs(args.ceiling_csv) else os.path.join(PROJECT_ROOT, args.ceiling_csv)):
                 print(f"[ERROR] preset paper 에는 상한(ceil) 회차가 있어 천장용 라벨 CSV 가 필요합니다: {args.ceiling_csv}")
                 sys.exit(1)
+        elif args.preset == "pl4":
+            combos = [(l, n, s, False, None) for (l, n) in PL4_PLAN for s in args.seeds]   # [Mark5.3] pl 4행 x seed
         elif args.preset == "plsource":
             combos = [(l, n, s, sp, ps) for (l, n, sp, ps) in PLSOURCE_PLAN for s in args.seeds]
             _missing = [PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s) for (l, n, sp, ps) in PLSOURCE_PLAN if ps for s in args.seeds
@@ -493,6 +497,8 @@ def main():
         print(f" 시작    : {time.strftime('%Y-%m-%d %H:%M:%S')}")
         if args.preset == "paper":
             print(f" 조건     : PAPER_PLAN {len(PAPER_PLAN)}개 (labeled 전량·200·500·1000 x u0/u2000/ceil/곡선) — 파일 머리 주석 참조")
+        elif args.preset == "pl4":
+            print(f" 조건     : PL4_PLAN {len(PL4_PLAN)}개 (labeled 전량·1000·500·200 x u2000) — Mark5.3 본표 pl 행")
         elif args.preset == "plsource":
             print(f" 조건     : PLSOURCE_PLAN {len(PLSOURCE_PLAN)}개 (labeled 200 + unlabeled 3,800 · 합의/self/gen)")
         elif args.ceiling:

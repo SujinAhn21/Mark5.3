@@ -108,17 +108,19 @@ _ABLATION_FLAGS = {"--head_pretrained_hidden": 0, "--segment_input": 0, "--clip_
                    "--no_distill_branch": 0, "--linear_head": 0,
                    "--teacher_seg_mean": 0, "--teacher_clean_view": 0,   # [2026-09-30 밤 / 가짜 정답 재료] 조각 평균 합의(_SM) · teacher 원본 입력(_CT)
                    "--student_raw_wave": 0, "--bg_weight": 1,           # [2026-10-01 / 지도만 격차 진단] student 원본 진폭 파형(_RW) · BG 보조 손실 가중치(_BG<값>)
-                   "--lp_epochs": 1, "--hard_weight": 1, "--others_from_reject": 1, "--pl_min_gap": 1, "--neg_pl": 2}
+                   "--lp_epochs": 1, "--hard_weight": 1, "--others_from_reject": 1, "--pl_min_gap": 1, "--neg_pl": 2,
+                   "--m53": 1}                                          # [2026-10-07 / Mark5.3] 부품 묶음(문자열: all 또는 PF,SK,…)
 _WHITELIST = {"mark52": dict(_ABLATION_FLAGS),
               "exp2": {**_ABLATION_FLAGS, "--unlabeled_n": 1, "--labeled_n": 1},
               "exp2_runner": dict(_ABLATION_FLAGS)}
 _INT_KEYS = {"--unlabeled_n", "--labeled_n", "--lp_epochs"}
+_STR_KEYS = {"--m53"}            # [2026-10-07 / Mark5.3] 숫자로 바꾸지 않고 문자열 그대로 넘기는 값
 _ABLATION_KW = {"--head_pretrained_hidden": "head_pretrained_hidden", "--segment_input": "segment_input", "--clip_input": "clip_input",
                 "--no_feature_kd": "no_feature_kd", "--no_distill_branch": "no_distill_branch", "--linear_head": "linear_head",
                 "--teacher_seg_mean": "teacher_seg_mean", "--teacher_clean_view": "teacher_clean_view",
                 "--student_raw_wave": "student_raw_wave", "--bg_weight": "bg_weight",
                 "--lp_epochs": "lp_epochs", "--hard_weight": "hard_weight", "--others_from_reject": "others_from_reject",
-                "--pl_min_gap": "pl_min_gap", "--neg_pl": "neg_pl"}
+                "--pl_min_gap": "pl_min_gap", "--neg_pl": "neg_pl", "--m53": "m53"}
 
 
 def _parse_extra(extra, kind):
@@ -139,7 +141,7 @@ def _parse_extra(extra, kind):
                 raise SystemExit(f"[ERROR] --extra 의 {a} 뒤에 값이 {n}개 있어야 합니다.")
             vals = out[i + 1:i + 1 + n]
             if n == 1:
-                cfg[a] = int(vals[0]) if a in _INT_KEYS else float(vals[0])
+                cfg[a] = vals[0] if a in _STR_KEYS else (int(vals[0]) if a in _INT_KEYS else float(vals[0]))
             else:
                 cfg[a] = tuple(float(v) for v in vals)
             i += 1 + n

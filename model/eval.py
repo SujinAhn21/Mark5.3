@@ -40,7 +40,7 @@ from postprocess_utils import (
     select_others_threshold,
 )
 from vild_config import AudioViLDConfig
-from vild_model import LearnableBackgroundEmbedding, build_audio_encoder, build_student_head
+from vild_model import ExpertBinaryHead, LearnableBackgroundEmbedding, build_audio_encoder, build_student_head   # [Mark5.3 OVA]
 from vild_head import DualBranchStudentHead
 from vild_parser_teacher import AudioParser
 SHARED_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "shared_vild"))
@@ -99,6 +99,21 @@ def _clip_prob_from_segments(seg_sup, seg_dis, saliency_scores, w, class_names, 
     """세그먼트별 (지도 헤드 확률, 증류 헤드 확률) 을 가중치 w 로 섞어 클립 확률(others 보정 전)까지 만든다 — 1차 통과와 같은 경로."""
     _, aggregated, _ = _segment_mix(seg_sup, seg_dis, saliency_scores, w, config)
     return apply_class_pair_calibration(aggregated, class_names, config)
+
+
+def _ova_fuse(prob, o, others_idx, mix):
+    """[신설 2026-10-07 / Mark5.3 OVA] 9클래스 확률 prob 의 others 칸을 (1−mix)·p_others + mix·o 로 바꾸고, 나머지 칸은 비율을 지킨 채
+    합이 1 이 되게 줄이거나 늘린다. o = 1 − (전문가 이진 출력 최대 확률). prob 는 numpy 1차원."""
+    p = np.asarray(prob, dtype=np.float64).copy()
+    new_o = (1.0 - mix) * p[others_idx] + mix * float(o)
+    rest = 1.0 - p[others_idx]
+    mask = np.ones_like(p, dtype=bool); mask[others_idx] = False
+    if rest > 1e-12:
+        p[mask] = p[mask] * (1.0 - new_o) / rest
+    else:
+        p[mask] = (1.0 - new_o) / mask.sum()
+    p[others_idx] = new_o
+    return p.astype(np.float32)
 
 
 def _apply_class_bias(prob_rows, bias_vec):
@@ -171,7 +186,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
              no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
              segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
              others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False,
-             bg_weight=None, student_raw_wave=False):
+             bg_weight=None, student_raw_wave=False, m53=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
     [이식 2026-09-29 / Mark5.2] ablation(A1~A4·H)·격차 대응 묶음(PH·LP·HW·OR·NEG) 플래그도 받는다 — 학습 때와 같은 값을 줘야
     run_tag 가 맞고, PH·H·clip/segment 는 헤드·입력 구조까지 바꾸므로 이름 맞추기 이상의 뜻이 있다.
@@ -205,7 +220,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                                         head_pretrained_hidden=head_pretrained_hidden, lp_epochs=lp_epochs, hard_weight=hard_weight,
                                         others_from_reject=others_from_reject, neg_pl=neg_pl,
                                         teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view,
-                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave)
+                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave, m53=m53)
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} (체크포인트 이름 맞추기용) · run_tag {config.run_tag}")
     if _ab_txt:
@@ -291,6 +306,18 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             background_embedding.eval()
         else:
             print("[WARN] background_state_dict가 없어 background embedding 없이 평가합니다. 새 모델 재학습이 권장됩니다.")
+
+    # [신설 2026-10-07 / Mark5.3 OVA] 전문가 이진 출력 헤드. 학습 때 OVA 를 켰으면 체크포인트에 반드시 있어야 한다(없으면 조용히 빼지 않고 멈춤).
+    ova_head = None
+    if "OVA" in tuple(getattr(config, "m53_parts", None) or ()):
+        _ova_sd = checkpoint.get("ova_state_dict")
+        if not _ova_sd or "net.2.weight" not in _ova_sd:
+            raise RuntimeError("[ERROR] 체크포인트에 ova_state_dict 가 없습니다 — --m53 의 OVA 없이 학습한 모델이거나 run_tag(_M53)가 어긋난 것입니다.")
+        ova_head = ExpertBinaryHead(config.embedding_dim, int(_ova_sd["net.2.weight"].shape[0]), int(_ova_sd["net.0.weight"].shape[0])).to(device)
+        ova_head.load_state_dict(_ova_sd)
+        ova_head.eval()
+        _ova_mix = float(getattr(config, "m53_ova_eval_mix", 0.5))
+        print(f"[M53/OVA] 전문가 이진 출력 {int(_ova_sd['net.2.weight'].shape[0])}개 로드 — others 확률 = {1 - _ova_mix:g}·p_others + {_ova_mix:g}·(1 − 최대 이진 확률)")
 
     # [신설 2026-08-22] background embedding 을 others 로짓에 max 로 덮을지 여부.
     # 기본 False. 켜져 있던 1차 평가에서 430클립 중 417개가 others 로 쏠렸다(자세한 근거는
@@ -381,6 +408,12 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                 # [변경 2026-09-21 밤 / C] 두 헤드의 확률을 따로 두고(seg_sup·seg_dis), 섞는 가중치 w 는 val 이 고른다.
                 p_sup = torch.softmax(sup_logits, dim=-1).squeeze(0).cpu().numpy()
                 p_dis = torch.softmax(distill_logits, dim=-1).squeeze(0).cpu().numpy()
+                if ova_head is not None:
+                    # [Mark5.3 OVA] 두 갈래 확률 모두에 같은 o(지도 갈래 특징으로 낸 전문가 이진 출력)를 섞는다.
+                    _o = 1.0 - float(torch.sigmoid(ova_head(supervised_features)).max().item())
+                    _oi = class_names.index("others")
+                    p_sup = _ova_fuse(p_sup, _o, _oi, _ova_mix)
+                    p_dis = _ova_fuse(p_dis, _o, _oi, _ova_mix)
                 seg_sup.append(p_sup); seg_dis.append(p_dis)
                 prob = (1 - w) * p_sup + w * p_dis
                 segment_probs.append(prob)
@@ -766,6 +799,8 @@ if __name__ == "__main__":
     # (파서가 student 클립 파형을 원본 진폭으로 준다 — 학습 때와 같아야 한다).
     parser.add_argument("--bg_weight", type=float, default=None, help="[BG] 학습 때 준 값(run_tag _BG<값>)")
     parser.add_argument("--student_raw_wave", action="store_true", help="[RW] 학습 때 줬으면 같이(run_tag _RW · 평가 입력도 원본 진폭)")
+    # [신설 2026-10-07 / Mark5.3] 학습 때 준 값과 같이(run_tag _M53, OVA 면 others 확률에 전문가 이진 출력을 섞는다)
+    parser.add_argument("--m53", type=str, default=None, help="[Mark5.3] 학습 때 준 값(all 또는 PF,SK,OVA,FM,CB,SC 중 일부)")
     args = parser.parse_args()
     # [신설 2026-09-26] logFiles/<run_tag>__eval_<split>.log 에도 남긴다.
     from run_logger import RunLogger
@@ -780,7 +815,7 @@ if __name__ == "__main__":
     _bundle = dict(segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs,
                    hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
                    teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view,
-                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave)
+                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave, m53=args.m53)
     _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
                           clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
     with RunLogger(PROJECT_ROOT, _c.run_tag, f"eval_{args.split}"):

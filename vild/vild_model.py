@@ -458,6 +458,23 @@ def build_audio_encoder(config):
     return SimpleAudioEncoder(config)
 
 
+class ExpertBinaryHead(nn.Module):
+    """[신설 2026-10-07 / Mark5.3 OVA] 전문가 8명의 "이 소리가 내 클래스인가" 판단을 학생이 따라 하는 이진 출력 8개.
+
+    IOMatch(ICCV 2023)의 multi-binary 분류기와 SSB(ICCV 2023)의 "분류와 바깥 소리 판정을 다른 비선형 투영으로" 를 합친 것.
+    입력은 학생 지도 갈래 특징(384), 출력은 로짓 [B, n_experts] — 순서는 학습 루프의 _spec_names(전문가 순서)와 같다.
+    학습: unlabeled 는 전문가 확신도 p̄(조각 평균)를, labeled 는 정답 클래스의 전문가 1·나머지 0(others 는 전부 0)을 BCE 로 맞춘다.
+    평가(eval.py): o = 1 − max σ(로짓) 을 others 확률과 섞는다(config.m53_ova_eval_mix)."""
+
+    def __init__(self, embedding_dim, n_experts, hidden_dim=None):
+        super().__init__()
+        h = int(hidden_dim or embedding_dim)
+        self.net = nn.Sequential(nn.Linear(int(embedding_dim), h), nn.ReLU(inplace=True), nn.Linear(h, int(n_experts)))
+
+    def forward(self, features):
+        return self.net(features)
+
+
 def build_student_head(config):
     """[신설 2026-09-29 / 헤드 진단 H] student 분류 헤드 선택 지점(단일 스위치). config.student_head 가 "linear" 면
     LinearClassHead(--linear_head, 2026-10-07 D0 본 레시피), 아니면 ViLDTextHead(텍스트 앵커, config 기본값). train_mark5.py·eval.py·profile_efficiency.py 가

@@ -52,6 +52,7 @@ _CONFIG_KEYS = [
     "spec_augment_teacher_view",   #   teacher 가 본 입력("augmented"/"clean"). run_tag _CT 와 같은 정보.
     "background_embedding_weight", # [2026-10-01 / 지도만 격차 진단] provenance 용 — BG 보조 손실 가중치(run_tag _BG<값> 과 같은 정보).
     "student_wave_normalize",      #   student 클립 파형을 최대 진폭 1 로 정규화했나(False = 원본 진폭, run_tag _RW 와 같은 정보).
+    "m53_parts",                   # [2026-10-07 / Mark5.3] provenance 용 — 켠 부품(PF·SK·OVA·FM·CB·SC). run_tag _M53 과 같은 정보. 끄면 None 이라 기록 안 됨.
 ]
 
 # [LR 2026-09-25] 기록만 하고 되돌려 적용하지 않는 키. 학습률은 "이 파일을 만들 때 쓴 값"이지 "이 파일을 읽는 쪽이 써야 할 값"이
@@ -63,7 +64,8 @@ _PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate", "use_feature_
                          "student_clip_input", "student_head", "head_pretrained_hidden", "lp_epochs", "hard_weight",
                          "others_from_reject_tau", "neg_pl_tau", "neg_pl_beta", "teacher_clip_input", "clip_input", "clip_frames",
                          "clip_merge_rule", "spec_augment_teacher_view",   # [2026-09-30 밤 / 가짜 정답 재료] 기록만(teacher 파일에 있어도 student 설정을 안 바꾼다)
-                         "background_embedding_weight", "student_wave_normalize"}   # [2026-10-01 / 지도만 격차 진단] 기록만
+                         "background_embedding_weight", "student_wave_normalize",   # [2026-10-01 / 지도만 격차 진단] 기록만
+                         "m53_parts"}                                               # [2026-10-07 / Mark5.3] 기록만
 
 
 def extract_config_metadata(config) -> dict:
@@ -112,7 +114,10 @@ def save_checkpoint(
     background_state=None,
     text_embeddings=None,
     config=None,
+    extra_states=None,
 ):
+    """[2026-10-07 / Mark5.3] extra_states: {"키": state_dict} — 부품이 더한 모듈(예: "ova_state_dict")을 같은 파일에 넣는다.
+    None 이면 옛 저장 형식과 같다(키가 늘지 않음)."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -125,6 +130,11 @@ def save_checkpoint(
         "background_state_dict": background_state,
         "text_embeddings": text_embeddings,
     }
+    if extra_states:
+        for _k, _v in extra_states.items():
+            if _k in payload:
+                raise ValueError(f"[checkpoint_utils] extra_states 키 {_k!r} 가 기본 키와 겹칩니다.")
+            payload[_k] = _v
     torch.save(payload, path)
 
 

@@ -31,7 +31,7 @@ for p in (PROJECT_ROOT, UTILS_DIR, VILD_DIR):
         sys.path.append(p)
 
 from vild_config import AudioViLDConfig
-from vild_model import LearnableBackgroundEmbedding, build_audio_encoder, build_student_head
+from vild_model import ExpertBinaryHead, LearnableBackgroundEmbedding, build_audio_encoder, build_student_head   # [Mark5.3 OVA]
 from vild_head import DualBranchStudentHead
 
 
@@ -58,14 +58,14 @@ class _EncoderBranchWrapper(torch.nn.Module):
 
 
 def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_input: bool = False, linear_head: bool = False,
-            segment_input: bool = False, head_pretrained_hidden: bool = False):
+            segment_input: bool = False, head_pretrained_hidden: bool = False, m53=None):
     device = torch.device("cpu")  # 엣지 배포 타겟이 CPU이므로 지연시간은 항상 CPU 기준으로 측정
     config = AudioViLDConfig(mark_version=mark_version)
     # [신설 2026-09-29 / ablation A3] 클립 입력(mark5.2 기본)이면 student 가 클립 3초 파형을 한 번에 보므로 클립당 연산 = 1회(조각 5회가 아님).
     # [신설 2026-09-29 / 헤드 진단 H] --linear_head 면 헤드가 nn.Linear(384→9)라 파라미터 수가 달라지고 파일 이름에 _LIN 이 붙는다.
     # [2026-09-29 밤 / PH] --head_pretrained_hidden 이면 사전학습 은닉층(960→960)이 남고 branch 지도 갈래가 항등이라 파라미터 수가 달라진다(_PH).
     _ab_txt = config.apply_cli_ablation(clip_input=clip_input, linear_head=linear_head, segment_input=segment_input,
-                                        head_pretrained_hidden=head_pretrained_hidden)
+                                        head_pretrained_hidden=head_pretrained_hidden, m53=m53)
     if _ab_txt:
         print(f"[ABLATION] {_ab_txt} · run_tag {config.run_tag}")
     _clip_mode = bool(getattr(config, "student_clip_input", False))
@@ -79,7 +79,11 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_i
     if config.use_background_embedding:
         background_embedding = LearnableBackgroundEmbedding(config.embedding_dim).to(device).eval()
 
-    total_params = count_parameters(encoder, branch_head, text_head, background_embedding)
+    # [신설 2026-10-07 / Mark5.3 OVA] 전문가 이진 출력 헤드도 추론 때 쓰므로 파라미터·지연시간에 넣는다(FLOPs 는 인코더+branch 기준 그대로 — 이 헤드는 약 0.15M MACs).
+    ova_head = None
+    if "OVA" in tuple(getattr(config, "m53_parts", None) or ()):
+        ova_head = ExpertBinaryHead(config.embedding_dim, 8, getattr(config, "m53_ova_hidden", None)).to(device).eval()
+    total_params = count_parameters(encoder, branch_head, text_head, background_embedding, ova_head)
     model_size_mb = total_params * 4 / (1024 ** 2)  # fp32 가정
 
     num_classes = len(config.get_classes_for_evaluation())
@@ -115,6 +119,8 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_i
             supervised_features, distill_features = branch_head(base_features)
             _ = text_head(supervised_features, dummy_text_emb)
             _ = text_head(distill_features, dummy_text_emb)
+            if ova_head is not None:
+                _ = ova_head(supervised_features)
 
     for _ in range(num_warmup):
         run_once()
@@ -171,6 +177,7 @@ if __name__ == "__main__":
                         help="[H 2026-09-29] 헤드를 nn.Linear 로 만들어 재고(파라미터 수 반영) 파일 이름에 _LIN 을 붙인다")
     parser.add_argument("--segment_input", action="store_true", help="클립 입력(기본)을 끄고 조각 1초 × 5회로 잰다(이름 표식 없음)")
     parser.add_argument("--head_pretrained_hidden", action="store_true", help="[PH] 사전학습 은닉층 유지·branch 항등 구조로 잰다(_PH)")
+    parser.add_argument("--m53", type=str, default=None, help="[Mark5.3] 학습 때 준 값(OVA 면 전문가 이진 출력 헤드까지 잰다, _M53)")
     args = parser.parse_args()
     profile(mark_version=args.mark_version, num_warmup=args.num_warmup, num_runs=args.num_runs, clip_input=args.clip_input,
-            linear_head=args.linear_head, segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden)
+            linear_head=args.linear_head, segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, m53=args.m53)
