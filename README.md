@@ -14,6 +14,7 @@
 > - run_tag: D0 태그 뒤 `_M53`(전부) 또는 `_M53-PF-SK…`(일부). `--m53` 을 안 주면 Mark5_EXP2 와 텐서 단위로 같은 학습(2026-10-07 회귀 시험).
 > - 실행기 `model/run_experiments.py --preset pl4`(pl 20회: 정답 라벨 2,000·1,000·500·200 × u2000 × seed 5). 학습률은 `model/select_lr.py --tied --extra "… --m53 all"`.
 > - 체크포인트에 `ova_state_dict` 가 더해진다(eval.py 가 읽음). 효율 측정 `profile_efficiency.py --m53 all` 은 OVA 헤드 +150,920 파라미터를 넣는다.
+> - **10-08 `--joint_forward`(run_tag 뒤 `_JF`, `--m53` 과 함께만)**: 정답 클립과 라벨 없는 클립을 학생에 한 번에 통과시켜 BN 을 배치 16개 전체로 계산한다(10-07 판은 따로 통과시켜 정답 라벨 200 이면 지도 손실의 BN 이 정답 1~2개로 계산됐다). 손실 식은 그대로. eval·select_lr `--extra` 에도 같이 준다. 주지 않으면 10-07 판과 체크포인트 텐서 323개가 같다(2026-10-08 회귀 시험).
 > - teacher(resources/) 와 인덱스 CSV 는 D0 가 돈 드라이브 Mark5_EXP2 와 같은 판(3차 조각 teacher `_run3_20260923`, Mark5.2 인덱스).
 > - 노트북: `Mark5.3 실험.ipynb`(현재실험_노트북) — 학습률 3회 → pl 20회 → 효율 → 비교표(Mark5.3 · D0 · 비교모델 4개, 4지표 + Others FPR, 짝지은 검정).
 

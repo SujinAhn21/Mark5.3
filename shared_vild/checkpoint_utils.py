@@ -53,6 +53,7 @@ _CONFIG_KEYS = [
     "background_embedding_weight", # [2026-10-01 / 지도만 격차 진단] provenance 용 — BG 보조 손실 가중치(run_tag _BG<값> 과 같은 정보).
     "student_wave_normalize",      #   student 클립 파형을 최대 진폭 1 로 정규화했나(False = 원본 진폭, run_tag _RW 와 같은 정보).
     "m53_parts",                   # [2026-10-07 / Mark5.3] provenance 용 — 켠 부품(PF·SK·OVA·FM·CB·SC). run_tag _M53 과 같은 정보. 끄면 None 이라 기록 안 됨.
+    "m53_joint_forward",           # [2026-10-08 / Mark5.3 JF] provenance 용 — 정답·라벨 없는 클립을 학생에 한 번에 통과했나(run_tag _JF 와 같은 정보).
 ]
 
 # [LR 2026-09-25] 기록만 하고 되돌려 적용하지 않는 키. 학습률은 "이 파일을 만들 때 쓴 값"이지 "이 파일을 읽는 쪽이 써야 할 값"이
@@ -65,7 +66,7 @@ _PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate", "use_feature_
                          "others_from_reject_tau", "neg_pl_tau", "neg_pl_beta", "teacher_clip_input", "clip_input", "clip_frames",
                          "clip_merge_rule", "spec_augment_teacher_view",   # [2026-09-30 밤 / 가짜 정답 재료] 기록만(teacher 파일에 있어도 student 설정을 안 바꾼다)
                          "background_embedding_weight", "student_wave_normalize",   # [2026-10-01 / 지도만 격차 진단] 기록만
-                         "m53_parts"}                                               # [2026-10-07 / Mark5.3] 기록만
+                         "m53_parts", "m53_joint_forward"}                          # [2026-10-07·10-08 / Mark5.3] 기록만
 
 
 def extract_config_metadata(config) -> dict:

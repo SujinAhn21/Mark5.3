@@ -186,7 +186,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
              no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
              segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
              others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False,
-             bg_weight=None, student_raw_wave=False, m53=None):
+             bg_weight=None, student_raw_wave=False, m53=None, joint_forward=False):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
     [이식 2026-09-29 / Mark5.2] ablation(A1~A4·H)·격차 대응 묶음(PH·LP·HW·OR·NEG) 플래그도 받는다 — 학습 때와 같은 값을 줘야
     run_tag 가 맞고, PH·H·clip/segment 는 헤드·입력 구조까지 바꾸므로 이름 맞추기 이상의 뜻이 있다.
@@ -220,7 +220,8 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                                         head_pretrained_hidden=head_pretrained_hidden, lp_epochs=lp_epochs, hard_weight=hard_weight,
                                         others_from_reject=others_from_reject, neg_pl=neg_pl,
                                         teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view,
-                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave, m53=m53)
+                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave, m53=m53,
+                                        joint_forward=joint_forward)   # [2026-10-08 / JF] 평가에선 이름(_JF) 맞추기만
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} (체크포인트 이름 맞추기용) · run_tag {config.run_tag}")
     if _ab_txt:
@@ -801,6 +802,7 @@ if __name__ == "__main__":
     parser.add_argument("--student_raw_wave", action="store_true", help="[RW] 학습 때 줬으면 같이(run_tag _RW · 평가 입력도 원본 진폭)")
     # [신설 2026-10-07 / Mark5.3] 학습 때 준 값과 같이(run_tag _M53, OVA 면 others 확률에 전문가 이진 출력을 섞는다)
     parser.add_argument("--m53", type=str, default=None, help="[Mark5.3] 학습 때 준 값(all 또는 PF,SK,OVA,FM,CB,SC 중 일부)")
+    parser.add_argument("--joint_forward", action="store_true", help="[Mark5.3 JF] 학습 때 줬으면 같이(run_tag _JF, 평가 동작은 같다)")
     args = parser.parse_args()
     # [신설 2026-09-26] logFiles/<run_tag>__eval_<split>.log 에도 남긴다.
     from run_logger import RunLogger
@@ -815,7 +817,8 @@ if __name__ == "__main__":
     _bundle = dict(segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs,
                    hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
                    teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view,
-                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave, m53=args.m53)
+                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave, m53=args.m53,
+                   joint_forward=args.joint_forward)
     _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
                           clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
     with RunLogger(PROJECT_ROOT, _c.run_tag, f"eval_{args.split}"):

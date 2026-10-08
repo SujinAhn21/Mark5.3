@@ -518,6 +518,10 @@ class AudioViLDConfig:
         self.m53_cb_power = 0.5         # CB: 클래스 가중 = (평균 채택 수 / 그 클래스 채택 수)^p, [0.5, 2.0] 으로 자름
         self.m53_sc_weight = 0.1        # SC: 지도 대조 손실 가중치
         self.m53_sc_temperature = 0.1   # SC: 대조 손실 온도
+        # [신설 2026-10-08 / Mark5.3 JF] 정답 클립과 라벨 없는 클립을 학생에 한 번에 통과시킨다(--joint_forward, run_tag _JF).
+        #   False(옛 동작): 정답만 따로 · 라벨 없음만 따로 통과 → 정답 라벨 200 이면 정답이 배치당 약 1.5개라 지도 손실의 BN 이 1~2개 클립으로 계산된다.
+        #   True: 배치 16개 전체로 BN 을 계산하고 출력을 두 갈래가 잘라 쓴다(손실 식은 그대로). 표준 반지도 기준선의 같은 결함(10-08 수정)과 같은 원인.
+        self.m53_joint_forward = False
 
         # === 내부 캐시 ===
         self._text_emb = None
@@ -701,7 +705,7 @@ class AudioViLDConfig:
                            linear_head=False, segment_input=False, head_pretrained_hidden=False, lp_epochs=None,
                            hard_weight=None, others_from_reject=None, neg_pl=None,
                            teacher_seg_mean=False, teacher_clean_view=False,
-                           bg_weight=None, student_raw_wave=False, m53=None) -> str:
+                           bg_weight=None, student_raw_wave=False, m53=None, joint_forward=False) -> str:
         """[신설 2026-09-28 / ablation A1·A2·A4] 명령줄 --no_feature_kd / --pl_min_gap / --no_distill_branch 를 config 에 넣는다.
         EfficientAT-pl(같은 백본·같은 라벨)과의 2%p 차이가 우리가 얹은 부품 중 어디서 나는지 하나씩 빼 보는 실험용.
           A1 no_feature_kd     : use_feature_kd=False — teacher 특징을 따라가는 손실(feature_kd_weight 0.3)을 뺀다.
@@ -822,6 +826,12 @@ class AudioViLDConfig:
             if "PF" in self.m53_parts and getattr(self, "hard_weight", None) is None:
                 raise ValueError("[ERROR] --m53 의 PF 는 --hard_weight 와 함께 써야 합니다(없으면 정답 라벨 CE 가중치가 1−α = 0). D0 레시피: --hard_weight 1.0")
             changed.append("Mark5.3 부품 " + "·".join(self.m53_parts))
+        # [신설 2026-10-08 / Mark5.3 JF] Mark5.3 학습 경로에만 구현했다(--m53 없이 주면 멈춘다 — 옛 경로에는 이 분기가 없다).
+        if joint_forward:
+            if not tuple(getattr(self, "m53_parts", None) or ()):
+                raise ValueError("[ERROR] --joint_forward 는 --m53 과 함께만 씁니다(Mark5.3 학습 경로에만 구현).")
+            self.m53_joint_forward = True
+            changed.append("JF 정답·라벨 없는 클립을 학생에 한 번에 통과(BN 이 배치 전체로 계산됨)")
         return " / ".join(changed)
 
     @property
@@ -872,6 +882,9 @@ class AudioViLDConfig:
         _m53 = tuple(getattr(self, "m53_parts", ()) or ())
         if _m53:
             out += "_M53" if set(_m53) == set(M53_PARTS) else "_M53-" + "-".join(_m53)
+        # [신설 2026-10-08 / Mark5.3 JF] 맨 뒤. 기존 표식의 이름·순서는 그대로다(옛 Mark5.3 결과는 _M53 로 남는다).
+        if getattr(self, "m53_joint_forward", False):
+            out += "_JF"
         return out
 
     @property
