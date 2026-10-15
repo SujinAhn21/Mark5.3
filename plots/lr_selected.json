@@ -1,0 +1,58 @@
+{
+  "model": "mark5.2",
+  "repo": "Mark5.3",
+  "lr": 0.0001,
+  "encoder_lr": 0.0001,
+  "default": {
+    "lr": 0.0001,
+    "encoder_lr": 5e-05
+  },
+  "selected_is_default": false,
+  "criterion": "val Macro F1",
+  "sweep_seed": 0,
+  "sweep_condition": "--head_pretrained_hidden --hard_weight 1.0 --others_from_reject 0.2 --neg_pl 0.1 0.3 --teacher_seg_mean --teacher_clean_view --linear_head --bg_weight 0 --student_raw_wave --m53 all --joint_forward --unlabeled_n 2000",
+  "tied": true,
+  "candidates_lrs": [
+    0.0001,
+    5e-05,
+    2e-05
+  ],
+  "candidates_encoder_lrs": [
+    0.0001,
+    5e-05,
+    2e-05
+  ],
+  "candidates": {
+    "lr=0.0001,elr=0.0001": {
+      "tag": "mark5.2_PL_SA_G04_AC_LT_noSEG_LIN_PH_HW1_OR02_NEG_SM_CT_BG0_RW_M53_JF_elr0.0001_u2000_s0",
+      "is_default": false,
+      "Accuracy": 0.9534883720930233,
+      "Macro Precision": 0.9556409373986254,
+      "Macro Recall": 0.9535066981875491,
+      "Macro F1": 0.9540325676237167
+    },
+    "lr=5e-05,elr=5e-05": {
+      "tag": "mark5.2_PL_SA_G04_AC_LT_noSEG_LIN_PH_HW1_OR02_NEG_SM_CT_BG0_RW_M53_JF_lr5e-05_u2000_s0",
+      "is_default": false,
+      "Accuracy": 0.9488372093023256,
+      "Macro Precision": 0.9510042460854569,
+      "Macro Recall": 0.9488278171788811,
+      "Macro F1": 0.9492154767340067
+    },
+    "lr=2e-05,elr=2e-05": {
+      "tag": "mark5.2_PL_SA_G04_AC_LT_noSEG_LIN_PH_HW1_OR02_NEG_SM_CT_BG0_RW_M53_JF_lr2e-05_elr2e-05_u2000_s0",
+      "is_default": false,
+      "Accuracy": 0.9325581395348838,
+      "Macro Precision": 0.9332500778089012,
+      "Macro Recall": 0.9325748620961387,
+      "Macro F1": 0.9318524971748618
+    }
+  },
+  "candidates_val_macro_f1": {
+    "lr=0.0001,elr=0.0001": 0.9540325676237167,
+    "lr=5e-05,elr=5e-05": 0.9492154767340067,
+    "lr=2e-05,elr=2e-05": 0.9318524971748618
+  },
+  "selected_tag": "mark5.2_PL_SA_G04_AC_LT_noSEG_LIN_PH_HW1_OR02_NEG_SM_CT_BG0_RW_M53_JF_elr0.0001_u2000_s0",
+  "selected_at": "2026-10-08 12:47:10"
+}

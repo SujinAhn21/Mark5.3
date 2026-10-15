@@ -1,0 +1,17 @@
+{
+  "mark_version": "mark5.2",
+  "encoder_type": "mn10",
+  "input": "waveform 1x48000 (16 kHz, 클립 3.0s 통째 · A3)",
+  "n_segments_per_clip": 1,
+  "ablation_tag": "_noSEG_LIN_PH_M53",
+  "total_parameters": 4997025,
+  "model_size_mb": 19.0621,
+  "gmacs_per_segment": 0.18049,
+  "gflops_per_segment_approx": 0.360979,
+  "gflops_per_clip_approx": 0.360979,
+  "cpu_latency_ms_per_segment": 19.2045,
+  "cpu_latency_ms_per_clip": 19.2045,
+  "num_warmup": 10,
+  "num_runs": 100,
+  "note": "텍스트 임베딩(SentenceTransformer) 계산 비용은 배포 시 1회 캐싱 가정으로 제외됨. FLOPs는 encoder+branch_head만 측정(text_head는 미미해 제외), FLOPs≈2×MACs 근사."
+}
