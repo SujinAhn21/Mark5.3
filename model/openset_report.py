@@ -106,7 +106,7 @@ def _discover(model_root, plot_subdir="plots", pattern=None):
             tag = os.path.basename(p)[len("prediction_details_"):-len(f"_eval_{s}.csv")]
             if "_limit" in tag or "_smoke" in tag:                         # 동작 확인용 산출물(_limitN·_smoke)은 표에 안 넣는다
                 continue
-            if pattern and not fnmatch.fnmatch(tag, pattern):
+            if pattern and not any(fnmatch.fnmatch(tag, p) for p in ((pattern,) if isinstance(pattern, str) else pattern)):
                 continue
             tags.add(tag)
     return sorted(tags)
@@ -245,7 +245,8 @@ def main():
             if not os.path.isdir(d):
                 print(f"[WARN] 비교모델 폴더 없음(건너뜀): {d}")
                 continue
-            pat = f"*_{args.baseline_cond}_lr*" if args.baseline_cond else None
+            # [2026-10-22 / Prodigy] 학습률 자리가 _lr<값>(Adam 시절) 또는 _pd(Prodigy) — 둘 다 찾는다(묶음은 태그별로 갈린다).
+            pat = (f"*_{args.baseline_cond}_lr*", f"*_{args.baseline_cond}_pd*") if args.baseline_cond else None
             jobs.append((d, os.path.basename(d).replace("Baseline_", ""), pat))
 
     raw_rows, per_cat_all = [], {s: [] for s in EVAL_SETS}

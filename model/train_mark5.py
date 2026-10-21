@@ -1726,6 +1726,8 @@ if __name__ == "__main__":
                         help="--labeled_n 으로 뽑고 남은 labeled 를 라벨 없이 unlabeled 풀에 합친다(태그 _sp).")
     # [신설 2026-09-25 / LR] 학습률 선정(model/select_lr.py)용. 안 주면 config 기본값(새 층 1e-4 · 백본 5e-5)·옛 태그 그대로.
     # run_experiments.py 는 plots/lr_selected.json 이 있으면 이 두 값을 자동으로 넘긴다.
+    # [변경 2026-10-22 / Prodigy] 위 두 줄은 Adam 시절 설명이다. 지금은 Prodigy(자동 학습률)라 두 값을 주면 vild_config.apply_cli_learning_rates 가
+    # 멈추고, run_experiments.py 도 넘기지 않는다(lr_selected.json 을 안 읽는다).
     parser.add_argument("--lr", type=float, default=None,
                         help="[LR 2026-09-25] 새로 만드는 층(투영·branch·background·로짓 스케일)의 학습률. 기본값과 다르면 run_tag 에 _lr<값>")
     parser.add_argument("--encoder_lr", type=float, default=None,

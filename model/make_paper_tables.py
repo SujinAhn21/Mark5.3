@@ -350,7 +350,8 @@ def load_zeroshot(mark_version, baseline_plot_dirs=(), baseline_cond="pl"):
                 d = json.load(f)
             m = re.match(r"^(?P<g>.+)_s\d+$", name)
             g = m.group("g") if m else name
-            if baseline_cond != "all" and f"_{baseline_cond}_lr" not in g:
+            # [2026-10-22 / Prodigy] 비교모델 태그의 학습률 자리가 _lr<값>(Adam 시절) 또는 _pd(Prodigy) — 둘 다 받는다(묶음은 태그별로 갈린다).
+            if baseline_cond != "all" and f"_{baseline_cond}_lr" not in g and f"_{baseline_cond}_pd" not in g:
                 continue
             fine.setdefault(g, []).append(d)
     return ([(f"Proposed (Mark5.2) {g}", v) for g, v in ours.items()]
