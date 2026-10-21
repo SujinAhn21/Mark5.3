@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 from unittest.mock import patch
 
@@ -55,18 +56,28 @@ def main():
     assert measurement['total_parameters'] < measurement['training_parameters']
     assert measurement['gmacs_per_segment'] > 0 and measurement['cpu_latency_ms_per_clip'] > 0
 
-    # Execute every notebook cell with its default settings, including the real dry-run.
-    # Defaults must not launch training, test evaluation, or an LR search.
+    # Execute every default cell, keeping verification and the dry-run real.
+    # Capture the training launch so this contract test cannot run a full experiment.
     notebook = json.loads((ROOT / 'notebooks/Mark5.3 제안모델 실험.ipynb').read_text(encoding='utf-8'))
     scope = {'display': lambda obj: None}
     previous_cwd = Path.cwd()
     previous_root = os.environ.get('MARK_ROOT')
     os.environ['MARK_ROOT'] = str(ROOT)
+    real_run = subprocess.run
+    training_commands = []
+    def notebook_run(command, *args, **kwargs):
+        if 'model/run_experiments.py' in command and '--dry_run' not in command:
+            assert '--skip_test' in command
+            assert kwargs.get('check') is True
+            training_commands.append(list(command))
+            return subprocess.CompletedProcess(command, 0)
+        return real_run(command, *args, **kwargs)
     try:
-        for i, cell in enumerate(notebook['cells']):
-            if cell['cell_type'] == 'code':
-                assert not cell['outputs'] and cell['execution_count'] is None
-                exec(compile(''.join(cell['source']), f'notebook-cell-{i}', 'exec'), scope)
+        with patch.object(subprocess, 'run', side_effect=notebook_run):
+            for i, cell in enumerate(notebook['cells']):
+                if cell['cell_type'] == 'code':
+                    assert not cell['outputs'] and cell['execution_count'] is None
+                    exec(compile(''.join(cell['source']), f'notebook-cell-{i}', 'exec'), scope)
     finally:
         os.chdir(previous_cwd)
         if previous_root is None:
@@ -74,7 +85,8 @@ def main():
         else:
             os.environ['MARK_ROOT'] = previous_root
     assert len(scope['SELECTED_TAGS']) == 1
-    assert not scope['RUN_TRAINING'] and not scope['EVALUATE_TEST']
+    assert scope['RUN_TRAINING'] and not scope['EVALUATE_TEST'] and not scope['RUN_PROFILE']
+    assert training_commands == [scope['COMMAND'] + ['--skip_test']]
     assert '--m53' not in scope['BUNDLE'] and '--plain_output' not in scope['BUNDLE']
     # Exercise the notebook result cell with real smoke outputs, not just the empty-results path.
     fixture = ROOT / 'verification/joint'
@@ -93,6 +105,7 @@ def main():
     report = {'status': 'passed', 'release_files_checked': checked,
               'six_component_code_absent': True, 'removed_cli_rejected': True,
               'profile_adapter_unused': True, 'notebook_default_cells_executed': True,
+              'notebook_training_default': True, 'notebook_training_launch_captured': True,
               'lr_tool_new_output_compatible': True, 'deployment_parameters': measurement['total_parameters'],
               'training_parameters': measurement['training_parameters']}
     (output / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

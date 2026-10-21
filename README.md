@@ -41,7 +41,8 @@ python model/run_experiments.py --mark_version mark5.2 \
 데이터 분할, 사전학습, teacher가 사용한 추가 지도 정보와 선정 절차를 함께 명시해야 한다.
 
 Colab은 [notebooks/Mark5.3 제안모델 실험.ipynb](notebooks/Mark5.3%20제안모델%20실험.ipynb)를 사용한다.
-기본은 계획 확인이며 `RUN_TRAINING=True`로 선택 조건을 실행한다. 학습률 탐색이나 여러 조건의 자동 확장은 없다.
+`RUN_TRAINING=True`가 기본값이므로 **모두 실행**하면 선택 조건의 학습과 val 평가를 실행한다.
+학습률 탐색이나 여러 조건의 자동 확장은 없다.
 `EVALUATE_TEST=True`는 최종 test 평가를 실행한다. 이전 아블레이션 l200 결과를 새 결과로 복사하지 않는다.
 
 ## 파일과 환경

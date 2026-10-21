@@ -43,10 +43,10 @@
     "utils/seed_utils.py": "31560b9af39e78383f5e5766a0ac6ee2d6cfb0c157310c4e3ce33209a270839c",
     "utils/vild_utils.py": "162b453160baf9d814f6bbc9238149a825f7b359da24879e5877abdbc9714fbf",
     "tests/verify_single_classifier.py": "ad9d5be836f8a949e1da1b00f1fc50846233a0f59729c3e9e534c48e5957747d",
-    "tests/verify_release_contract.py": "dd9ff7074e8b5c558c140d5b2516e961b2880b626cf7e07e565bf5084436e539",
-    "README.md": "95a3e101bd5e64f103b8e346f49dafa1db3853e7fee15f8f3b0212fc5b5960c7",
+    "tests/verify_release_contract.py": "a37f1dc36f138247e5911aff6333d1b1acb7762064a86b986ccfe10ebd18d20b",
+    "README.md": "68e48a5b87403c06e04468e0370f5ddc2cdb3884398dac1b225ba6d5252ae6ce",
     "SINGLE_CLASSIFIER.md": "f17147e2e11af9eae3502d6b2daeb34d9f1958a794e9006f5b1b6c8c8bed36ce",
-    "notebooks/Mark5.3 제안모델 실험.ipynb": "1aa1cb96cb63847aaa3168d18cca46217ed4cd41e8d4999cb04e67c452224e49"
+    "notebooks/Mark5.3 제안모델 실험.ipynb": "98f176c3ccffa76d28a99416ceeed93c83c58478ad10ca51f5641adbec09901c"
   },
   "materials": {
     "dataset_labeled.csv": "12056eb17d293588c5254a6379c1a420fefc325504f0af60c457882a776443d8",
