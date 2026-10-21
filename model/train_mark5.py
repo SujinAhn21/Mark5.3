@@ -1566,7 +1566,15 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
               + _extra + f" | {_elapsed:.1f}s")
 
         # [추가 2026-08-17] LR 스케줄 · best 저장 · early stopping (mark4.x 와 같은 절차)
+        # [추가 2026-10-22] mark4.x 처럼 학습률이 줄어든 에폭에 [LR] 한 줄을 남긴다. 출력만 추가해 학습 결과는 바뀌지 않는다.
+        # 학습률을 분리했으면 그룹이 [백본, 새 층] 순서로 2개다(위 optimizer_params).
+        _prev_lrs = [g["lr"] for g in optimizer.param_groups]
         scheduler.step(avg_val)
+        _new_lrs = [g["lr"] for g in optimizer.param_groups]
+        if _new_lrs != _prev_lrs:
+            _lr_names = ["백본 ", "새 층 "] if len(_new_lrs) == 2 else [""] * len(_new_lrs)
+            _lr_change = " · ".join(f"{n}{a:g} -> {b:g}" for n, a, b in zip(_lr_names, _prev_lrs, _new_lrs))
+            print(f"[LR] {_lr_change} (val={avg_val:.6f})")
         if avg_val < best_val:
             print(f"[EarlyStopping] Val loss {best_val:.6f} -> {avg_val:.6f}. Saving...")
             best_val = avg_val
