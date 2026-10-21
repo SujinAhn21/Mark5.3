@@ -8,9 +8,8 @@ Mark 모델의 효율성 지표(파라미터 수, 모델 용량, FLOPs, CPU 추�
 - 텍스트 임베딩(SentenceTransformer)은 9개 클래스에 대해 배포 시 1회만 계산해
   캐싱하는 게 정상적인 엣지 배포 방식이므로, 이 스크립트는 그 비용을 추론 지연시간에서 제외한다
   (오디오 1개가 들어올 때마다 반복되는 비용이 아니기 때문).
-- FLOPs는 encoder+branch_head(둘 다 nn.Linear/Conv2d 등 thop이 인식하는 레이어로 구성)만 측정한다.
-  text_head(ViLDTextHead)는 nn.Linear 없이 raw matmul(cosine 유사도)만 쓰는데, 연산량이
-  384×9 수준으로 미미해 무시 가능.
+- MACs는 실제 추론 경로의 encoder + 지도 변환 + 분류기로 측정한다.
+  thop이 지원하지 않는 전처리 연산은 MACs에 포함되지 않으며, 지연시간에는 포함된다.
 """
 
 import argparse
@@ -31,7 +30,7 @@ for p in (PROJECT_ROOT, UTILS_DIR, VILD_DIR):
         sys.path.append(p)
 
 from vild_config import AudioViLDConfig
-from vild_model import ExpertBinaryHead, LearnableBackgroundEmbedding, build_audio_encoder, build_student_head   # [Mark5.3 OVA]
+from vild_model import LearnableBackgroundEmbedding, build_audio_encoder, build_student_head
 from vild_head import DualBranchStudentHead
 
 
@@ -44,34 +43,28 @@ def count_parameters(*modules):
     return total
 
 
-class _EncoderBranchWrapper(torch.nn.Module):
-    """encoder+branch_head를 하나로 묶어 thop이 한 번의 forward로 FLOPs를 잴 수 있게 함."""
-
-    def __init__(self, encoder, branch_head):
+class _InferenceWrapper(torch.nn.Module):
+    """Only the encoder, supervised transform, and classifier run at inference."""
+    def __init__(self, encoder, branch_head, classifier, text_emb=None):
         super().__init__()
         self.encoder = encoder
-        self.branch_head = branch_head
+        self.supervised_branch = branch_head.supervised_branch
+        self.classifier = classifier
+        self.register_buffer("text_emb", text_emb)
 
     def forward(self, x):
-        feat = self.encoder(x)
-        return self.branch_head(feat)
+        return self.classifier(self.supervised_branch(self.encoder(x)), self.text_emb)
 
 
 def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_input: bool = False, linear_head: bool = False,
-            segment_input: bool = False, head_pretrained_hidden: bool = False, m53=None):
+            segment_input: bool = False, head_pretrained_hidden: bool = False):
     device = torch.device("cpu")  # 엣지 배포 타겟이 CPU이므로 지연시간은 항상 CPU 기준으로 측정
     config = AudioViLDConfig(mark_version=mark_version)
     # [신설 2026-09-29 / ablation A3] 클립 입력(mark5.2 기본)이면 student 가 클립 3초 파형을 한 번에 보므로 클립당 연산 = 1회(조각 5회가 아님).
     # [신설 2026-09-29 / 헤드 진단 H] --linear_head 면 헤드가 nn.Linear(384→9)라 파라미터 수가 달라지고 파일 이름에 _LIN 이 붙는다.
     # [2026-09-29 밤 / PH] --head_pretrained_hidden 이면 사전학습 은닉층(960→960)이 남고 branch 지도 갈래가 항등이라 파라미터 수가 달라진다(_PH).
-    # [2026-10-07 / Mark5.3] --m53 의 PF 는 --hard_weight 를 요구한다(apply_cli_ablation 검사). 효율 측정은 손실을 쓰지 않으므로
-    # 검사만 통과시키고(1.0 = D0 레시피) 바로 None 으로 되돌린다 — 파일 이름(ablation_tag)에 _HW1 이 붙지 않아 노트북 [셀 15] 경로가 그대로다.
-    if m53:
-        config.hard_weight = 1.0
     _ab_txt = config.apply_cli_ablation(clip_input=clip_input, linear_head=linear_head, segment_input=segment_input,
-                                        head_pretrained_hidden=head_pretrained_hidden, m53=m53)
-    if m53:
-        config.hard_weight = None
+                                        head_pretrained_hidden=head_pretrained_hidden)
     if _ab_txt:
         print(f"[ABLATION] {_ab_txt} · run_tag {config.run_tag}")
     _clip_mode = bool(getattr(config, "student_clip_input", False))
@@ -81,18 +74,14 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_i
     encoder = build_audio_encoder(config).to(device).eval()
     branch_head = DualBranchStudentHead(config.embedding_dim, supervised_identity=_sup_identity).to(device).eval()
     text_head = build_student_head(config).to(device).eval()   # [H 2026-09-29] 학습·평가와 같은 헤드 선택 함수
-    background_embedding = None
-    if config.use_background_embedding:
-        background_embedding = LearnableBackgroundEmbedding(config.embedding_dim).to(device).eval()
-
-    # [신설 2026-10-07 / Mark5.3 OVA] 전문가 이진 출력 헤드도 추론 때 쓰므로 파라미터·지연시간에 넣는다(FLOPs 는 인코더+branch 기준 그대로 — 이 헤드는 약 0.15M MACs).
-    ova_head = None
-    if "OVA" in tuple(getattr(config, "m53_parts", None) or ()):
-        ova_head = ExpertBinaryHead(config.embedding_dim, 8, getattr(config, "m53_ova_hidden", None)).to(device).eval()
-    total_params = count_parameters(encoder, branch_head, text_head, background_embedding, ova_head)
+    text_emb = None if config.student_head == "linear" else torch.randn(len(config.get_classes_for_evaluation()), config.embedding_dim)
+    inference = _InferenceWrapper(encoder, branch_head, text_head, text_emb).eval()
+    total_params = count_parameters(inference)
+    # Training still constructs the background embedding, even when its loss weight is zero.
+    background = LearnableBackgroundEmbedding(config.embedding_dim) if config.use_background_embedding else None
+    training_params = count_parameters(encoder, branch_head, text_head, background)
     model_size_mb = total_params * 4 / (1024 ** 2)  # fp32 가정
 
-    num_classes = len(config.get_classes_for_evaluation())
     # [변경 2026-09-17 / Mark5.2 6절] student 입력이 파형(mn10)이면 세그먼트 1.0초 파형으로 잰다.
     # mn10 은 mel 프론트엔드(리샘플·STFT·mel)까지 인코더 안에 있으므로 FLOPs·지연시간에 그 몫이 포함된다
     # (비교모델과 같은 기준). cnn 경로는 옛날처럼 mel [1, C, 64, 101] 을 넣는다(mel 계산은 파서 몫이라 제외).
@@ -106,7 +95,6 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_i
         dummy_segment = torch.randn(1, config.num_input_channels, config.n_mels, config.segment_length, device=device)
         _input_desc = f"mel 1x{config.num_input_channels}x{config.n_mels}x{config.segment_length}"
     print(f"[INFO] 측정 입력: {_input_desc} · 인코더 {type(encoder).__name__}")
-    dummy_text_emb = torch.randn(num_classes, config.embedding_dim, device=device)
 
     # [추가] FLOPs 측정 (encoder+branch_head, 세그먼트 1개 기준).
     # thop.profile은 프로파일링 대상 모듈에 total_ops/total_params 훅을 남겨 이후 재사용 시
@@ -114,19 +102,14 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_i
     # 인스턴스를 새로 만들어 여기서만 쓰고 버린다.
     flops_encoder = build_audio_encoder(config).to(device).eval()
     flops_branch_head = DualBranchStudentHead(config.embedding_dim, supervised_identity=_sup_identity).to(device).eval()
-    wrapper = _EncoderBranchWrapper(flops_encoder, flops_branch_head)
+    wrapper = _InferenceWrapper(flops_encoder, flops_branch_head, build_student_head(config).to(device).eval(), text_emb).eval()
     macs, _ = thop_profile(wrapper, inputs=(dummy_segment,), verbose=False)
     gmacs_per_segment = macs / 1e9
     gflops_per_segment = gmacs_per_segment * 2  # 통상 FLOPs ≈ 2 x MACs 관례
 
     def run_once():
         with torch.no_grad():
-            base_features = encoder(dummy_segment)
-            supervised_features, distill_features = branch_head(base_features)
-            _ = text_head(supervised_features, dummy_text_emb)
-            _ = text_head(distill_features, dummy_text_emb)
-            if ova_head is not None:
-                _ = ova_head(supervised_features)
+            inference(dummy_segment)
 
     for _ in range(num_warmup):
         run_once()
@@ -147,6 +130,8 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_i
         "n_segments_per_clip": n_segments_per_clip,                     # [추가 2026-09-29 / A3]
         "ablation_tag": config.ablation_tag,
         "total_parameters": total_params,
+        "training_parameters": training_params,
+        "classification_policy": "supervised_argmax_v1",
         "model_size_mb": round(model_size_mb, 4),
         "gmacs_per_segment": round(gmacs_per_segment, 6),
         "gflops_per_segment_approx": round(gflops_per_segment, 6),
@@ -155,10 +140,7 @@ def profile(mark_version: str, num_warmup: int = 10, num_runs: int = 100, clip_i
         "cpu_latency_ms_per_clip": round(ms_per_clip, 4),
         "num_warmup": num_warmup,
         "num_runs": num_runs,
-        "note": (
-            "텍스트 임베딩(SentenceTransformer) 계산 비용은 배포 시 1회 캐싱 가정으로 제외됨. "
-            "FLOPs는 encoder+branch_head만 측정(text_head는 미미해 제외), FLOPs≈2×MACs 근사."
-        ),
+        "note": "Deployment parameters and latency exclude the training-only KD adapter. MACs include encoder, supervised transform and classifier; thop does not count every frontend operation. FLOPs = 2 x counted MACs.",
     }
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -183,7 +165,6 @@ if __name__ == "__main__":
                         help="[H 2026-09-29] 헤드를 nn.Linear 로 만들어 재고(파라미터 수 반영) 파일 이름에 _LIN 을 붙인다")
     parser.add_argument("--segment_input", action="store_true", help="클립 입력(기본)을 끄고 조각 1초 × 5회로 잰다(이름 표식 없음)")
     parser.add_argument("--head_pretrained_hidden", action="store_true", help="[PH] 사전학습 은닉층 유지·branch 항등 구조로 잰다(_PH)")
-    parser.add_argument("--m53", type=str, default=None, help="[Mark5.3] 학습 때 준 값(OVA 면 전문가 이진 출력 헤드까지 잰다, _M53)")
     args = parser.parse_args()
     profile(mark_version=args.mark_version, num_warmup=args.num_warmup, num_runs=args.num_runs, clip_input=args.clip_input,
-            linear_head=args.linear_head, segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, m53=args.m53)
+            linear_head=args.linear_head, segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden)

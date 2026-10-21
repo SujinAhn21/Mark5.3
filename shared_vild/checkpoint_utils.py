@@ -38,6 +38,8 @@ _CONFIG_KEYS = [
     "use_feature_kd",          # [ablation 2026-09-28] provenance 용 — 이 student 파일이 어느 부품을 끄고 만들어졌나(A1·A2·A4).
     "pseudo_label_min_gap",    #   run_tag(_noFKD/_noGAP/_noDB)와 같은 정보를 파일 안에도 남긴다. 되돌려 적용하지는 않는다.
     "distill_branch_classify",
+    "classification_policy",
+    "joint_forward",
     "student_clip_input",      # [ablation A3 2026-09-29] provenance 용 — student 가 클립 3초 통째(True)로 학습됐나. run_tag _noSEG 와 같은 정보.
     "student_head",            # [헤드 진단 H 2026-09-29] provenance 용 — "text_anchor"(본 모델) / "linear"(nn.Linear 진단). run_tag _LIN 과 같은 정보.
     # [2026-09-29 밤 / 격차 분석 대응 묶음] provenance 용 6키 — 어느 묶음으로 만든 student 파일인지. run_tag 표식(_PH·_LP·_HW·_OR·_NEG)과 같은 정보.
@@ -52,8 +54,6 @@ _CONFIG_KEYS = [
     "spec_augment_teacher_view",   #   teacher 가 본 입력("augmented"/"clean"). run_tag _CT 와 같은 정보.
     "background_embedding_weight", # [2026-10-01 / 지도만 격차 진단] provenance 용 — BG 보조 손실 가중치(run_tag _BG<값> 과 같은 정보).
     "student_wave_normalize",      #   student 클립 파형을 최대 진폭 1 로 정규화했나(False = 원본 진폭, run_tag _RW 와 같은 정보).
-    "m53_parts",                   # [2026-10-07 / Mark5.3] provenance 용 — 켠 부품(PF·SK·OVA·FM·CB·SC). run_tag _M53 과 같은 정보. 끄면 None 이라 기록 안 됨.
-    "m53_joint_forward",           # [2026-10-08 / Mark5.3 JF] provenance 용 — 정답·라벨 없는 클립을 학생에 한 번에 통과했나(run_tag _JF 와 같은 정보).
 ]
 
 # [LR 2026-09-25] 기록만 하고 되돌려 적용하지 않는 키. 학습률은 "이 파일을 만들 때 쓴 값"이지 "이 파일을 읽는 쪽이 써야 할 값"이
@@ -61,12 +61,12 @@ _CONFIG_KEYS = [
 # 저장되면 student 의 학습률(과 run_tag)이 teacher 값으로 조용히 바뀐다. 2026-09-25 실측: 지금 teacher ckpt 에는 이 키가 없다.
 # [ablation 2026-09-28] 절제 플래그 세 개도 같은 이유로 기록만 한다 — teacher(Mark4.x) 파일이 이 키를 가져도 student 설정을 바꾸지 않는다.
 # [2026-09-29 밤] Mark4.x teacher 가 새로 기록하는 clip_input·clip_frames 도 여기 — student config 에 그대로 흘러들면 안 된다(EnsembleTeacher 가 따로 읽는다).
-_PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate", "use_feature_kd", "pseudo_label_min_gap", "distill_branch_classify",
+_PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate", "use_feature_kd", "pseudo_label_min_gap", "distill_branch_classify", "classification_policy",
                          "student_clip_input", "student_head", "head_pretrained_hidden", "lp_epochs", "hard_weight",
                          "others_from_reject_tau", "neg_pl_tau", "neg_pl_beta", "teacher_clip_input", "clip_input", "clip_frames",
                          "clip_merge_rule", "spec_augment_teacher_view",   # [2026-09-30 밤 / 가짜 정답 재료] 기록만(teacher 파일에 있어도 student 설정을 안 바꾼다)
                          "background_embedding_weight", "student_wave_normalize",   # [2026-10-01 / 지도만 격차 진단] 기록만
-                         "m53_parts", "m53_joint_forward"}                          # [2026-10-07·10-08 / Mark5.3] 기록만
+                         "joint_forward"}
 
 
 def extract_config_metadata(config) -> dict:
@@ -115,10 +115,8 @@ def save_checkpoint(
     background_state=None,
     text_embeddings=None,
     config=None,
-    extra_states=None,
 ):
-    """[2026-10-07 / Mark5.3] extra_states: {"키": state_dict} — 부품이 더한 모듈(예: "ova_state_dict")을 같은 파일에 넣는다.
-    None 이면 옛 저장 형식과 같다(키가 늘지 않음)."""
+    """Save the student encoder, feature adapter, and single classifier."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -131,11 +129,6 @@ def save_checkpoint(
         "background_state_dict": background_state,
         "text_embeddings": text_embeddings,
     }
-    if extra_states:
-        for _k, _v in extra_states.items():
-            if _k in payload:
-                raise ValueError(f"[checkpoint_utils] extra_states 키 {_k!r} 가 기본 키와 겹칩니다.")
-            payload[_k] = _v
     torch.save(payload, path)
 
 

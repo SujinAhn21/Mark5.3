@@ -109,19 +109,18 @@ _ABLATION_FLAGS = {"--head_pretrained_hidden": 0, "--segment_input": 0, "--clip_
                    "--teacher_seg_mean": 0, "--teacher_clean_view": 0,   # [2026-09-30 밤 / 가짜 정답 재료] 조각 평균 합의(_SM) · teacher 원본 입력(_CT)
                    "--student_raw_wave": 0, "--bg_weight": 1,           # [2026-10-01 / 지도만 격차 진단] student 원본 진폭 파형(_RW) · BG 보조 손실 가중치(_BG<값>)
                    "--lp_epochs": 1, "--hard_weight": 1, "--others_from_reject": 1, "--pl_min_gap": 1, "--neg_pl": 2,
-                   "--m53": 1,                                          # [2026-10-07 / Mark5.3] 부품 묶음(문자열: all 또는 PF,SK,…)
                    "--joint_forward": 0}                                # [2026-10-08 / Mark5.3 JF] 정답·라벨 없는 클립 한 번에 통과(_JF)
 _WHITELIST = {"mark52": dict(_ABLATION_FLAGS),
               "exp2": {**_ABLATION_FLAGS, "--unlabeled_n": 1, "--labeled_n": 1},
               "exp2_runner": dict(_ABLATION_FLAGS)}
 _INT_KEYS = {"--unlabeled_n", "--labeled_n", "--lp_epochs"}
-_STR_KEYS = {"--m53"}            # [2026-10-07 / Mark5.3] 숫자로 바꾸지 않고 문자열 그대로 넘기는 값
+_STR_KEYS = set()
 _ABLATION_KW = {"--head_pretrained_hidden": "head_pretrained_hidden", "--segment_input": "segment_input", "--clip_input": "clip_input",
                 "--no_feature_kd": "no_feature_kd", "--no_distill_branch": "no_distill_branch", "--linear_head": "linear_head",
                 "--teacher_seg_mean": "teacher_seg_mean", "--teacher_clean_view": "teacher_clean_view",
                 "--student_raw_wave": "student_raw_wave", "--bg_weight": "bg_weight",
                 "--lp_epochs": "lp_epochs", "--hard_weight": "hard_weight", "--others_from_reject": "others_from_reject",
-                "--pl_min_gap": "pl_min_gap", "--neg_pl": "neg_pl", "--m53": "m53", "--joint_forward": "joint_forward"}
+                "--pl_min_gap": "pl_min_gap", "--neg_pl": "neg_pl", "--joint_forward": "joint_forward"}
 
 
 def _parse_extra(extra, kind):
@@ -186,8 +185,8 @@ def _artifacts(tag):
     return {
         "ckpt": os.path.join(PROJECT_ROOT, "model", f"student_model_{tag}.pth"),
         "loss": os.path.join(PLOT_DIR, f"loss_history_{tag}.csv"),            # 완주 표식(train_mark5.py 가 에폭 루프 뒤에만 쓴다)
-        "val": os.path.join(PLOT_DIR, f"performance_summary_{tag}_val.csv"),
-        "rule": os.path.join(PLOT_DIR, f"others_threshold_{tag}.json"),
+        "val": os.path.join(PLOT_DIR, f"performance_summary_{tag}_val_plain.csv"),
+        "rule": os.path.join(PLOT_DIR, f"output_policy_{tag}_val_plain.json"),
     }
 
 
@@ -227,15 +226,9 @@ def _sha256(path):
 
 
 def _rule_ok(tag, a):
-    """others 규칙 json 이 **지금 체크포인트**로 고른 것인가(run_tag·sha256). eval.py --split val 이 쓰는 형식."""
-    if not (os.path.isfile(a["rule"]) and os.path.isfile(a["ckpt"])):
-        return False
-    try:
-        with open(a["rule"], encoding="utf-8") as f:
-            j = json.load(f)
-    except Exception:
-        return False
-    return j.get("run_tag") == tag and (j.get("checkpoint") or {}).get("sha256") == _sha256(a["ckpt"])
+    """The saved val evaluation must match this single-classifier checkpoint."""
+    from output_policy import matches_plain_policy
+    return matches_plain_policy(a["rule"], a["ckpt"], tag, "val")
 
 
 def _needs(tag, force):
@@ -251,8 +244,8 @@ def _clear_outputs(tag):
     옛 체크포인트가 '학습됨' 으로, 옛 val 요약이 선정 근거로 들어간다."""
     a = _artifacts(tag)
     victims = [a["ckpt"], a["loss"], a["val"], a["rule"]]
-    for pat in ("prediction_details_{t}_val.csv", "calibration_details_{t}_val.csv", "confusion_matrix_{t}_val.*",
-                "roc_curve_{t}_val.png", "loss_curve_student_{t}.png"):   # [수정 2026-09-25] train_mark5.py 는 loss_curve_student_<tag>.png 로 저장한다
+    for pat in ("prediction_details_{t}_val_plain.csv", "calibration_details_{t}_val_plain.csv", "confusion_matrix_{t}_val_plain.*",
+                "roc_curve_{t}_val_plain.png", "loss_curve_student_{t}.png"):   # [수정 2026-09-25] train_mark5.py 는 loss_curve_student_<tag>.png 로 저장한다
         victims += glob.glob(os.path.join(PLOT_DIR, pat.format(t=tag)))
     n = 0
     for v in victims:

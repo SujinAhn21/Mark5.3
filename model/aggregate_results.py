@@ -77,6 +77,7 @@ import json
 import os
 import re
 import sys
+from output_policy import matches_plain_policy
 
 import numpy as np
 import pandas as pd
@@ -202,7 +203,7 @@ def collect(mark_version, split, allow_mixed=False, bases=None):
     [신설 2026-10-01] bases 를 주면 설정(base = 조건 꼬리표 앞부분)이 그 목록에 든 회차만 모은다. 같은 plots/ 에 진단 회차
     (지도만 격차 진단의 _LIN·_BG0·_RW·학습률·LP 변형)가 함께 있어도 본 표(본 조건 묶음 + 출처 비교 묶음)만 집계하려는 것이다.
     목록에 있는데 회차가 하나도 없는 설정이 있으면 이름이 틀린 것이라 멈춘다."""
-    suffix = "" if split == "test" else f"_{split}"
+    suffix = "_plain" if split == "test" else f"_{split}_plain"
     patterns = [os.path.join(PLOT_DIR, f"performance_summary_{mark_version}*_u*_s*{suffix}.csv"),
                 os.path.join(PLOT_DIR, f"performance_summary_{mark_version}*_ceil*_s*{suffix}.csv")]  # [2026-09-06] 천장 [2026-09-17] _l 앞 허용
 
@@ -220,7 +221,12 @@ def collect(mark_version, split, allow_mixed=False, bases=None):
         elif not suffix and re.search(r"_(val)$", tag):
             continue                              # test 를 모을 때 _val 파일은 제외
         base, n, s, cond, lab, sp, ps = _parse_tag_full(tag)
-        if cond is None:
+        if cond is None or "_SINGLE" not in base:
+            continue
+        policy = os.path.join(PLOT_DIR, f"output_policy_{tag}{suffix}.json")
+        checkpoint = os.path.join(PROJECT_ROOT, "model", f"student_model_{tag}.pth")
+        if not matches_plain_policy(policy, checkpoint, tag, split):
+            broken.append((name, ["current checkpoint / supervised_argmax_v1 policy"]))
             continue
         if bases and base not in bases:          # [2026-10-01] --bases 밖의 설정(진단 회차 등)은 이 집계에 넣지 않는다
             skipped_bases[base] = skipped_bases.get(base, 0) + 1
@@ -837,7 +843,7 @@ def classwise_and_confusion(df_runs, split):
     """[신설 2026-09-17 / 체크리스트 7절 '클래스별 표, machine_noise 의 dragging·construction 혼동 칸'] 주어진 회차들(보통 본 조건
     u<max> seed 5회)의 클래스별 Precision·Recall·F1 평균±표본SD 와, prediction_details 의 True/Predicted Label 로 만든 혼동행렬
     (회차 합·회차 평균). 반환: (classwise DataFrame, confusion_sum DataFrame, confusion_mean DataFrame, 회차 수)"""
-    suffix = "" if split == "test" else f"_{split}"
+    suffix = "_plain" if split == "test" else f"_{split}_plain"
     per_class, cms, n_used = {}, [], 0
     for tag in df_runs["run_tag"]:
         summ = os.path.join(PLOT_DIR, f"performance_summary_{tag}{suffix}.csv")
@@ -1059,14 +1065,14 @@ def main():
         if ceil_summary is not None:
             print("\n (마지막 'ceiling' 행 = 천장: unlabeled 전부에 진짜 라벨을 붙인 지도학습. 제안 모델이 아니라 상한 기준선)")
 
-        raw_csv = os.path.join(PLOT_DIR, f"aggregate_raw_{args.mark_version}_{args.split}.csv")
-        sum_csv = os.path.join(PLOT_DIR, f"aggregate_summary_{args.mark_version}_{args.split}.csv")
-        tab_csv = os.path.join(PLOT_DIR, f"paper_table_{args.mark_version}_{args.split}.csv")
+        raw_csv = os.path.join(PLOT_DIR, f"aggregate_raw_{args.mark_version}_{args.split}_plain.csv")
+        sum_csv = os.path.join(PLOT_DIR, f"aggregate_summary_{args.mark_version}_{args.split}_plain.csv")
+        tab_csv = os.path.join(PLOT_DIR, f"paper_table_{args.mark_version}_{args.split}_plain.csv")
         # 원자료에는 천장 행도 같이 들어간다(cond 열로 구분). 요약·논문표에는 "ceiling" 행이 맨 끝에 붙는다.
         df_all.to_csv(raw_csv, index=False, encoding=CSV_ENCODING)
         # [2026-09-17 / 11절] 라벨 효율·출처 비교 회차까지 전부 담은 원자료도 남긴다(본 조건 15회만 든 위 파일과 구분).
         pd.concat([df_le_all, df_ps_all], ignore_index=True).to_csv(
-            os.path.join(PLOT_DIR, f"aggregate_raw_all_{args.mark_version}_{args.split}.csv"), index=False, encoding=CSV_ENCODING)
+            os.path.join(PLOT_DIR, f"aggregate_raw_all_{args.mark_version}_{args.split}_plain.csv"), index=False, encoding=CSV_ENCODING)
         (summary if ceil_summary is None else pd.concat([summary, ceil_summary])).to_csv(sum_csv, encoding=CSV_ENCODING)
         show_table.to_csv(tab_csv, index=False, encoding=CSV_ENCODING)
         print(f"\n[INFO] 원자료   : {raw_csv}")
@@ -1112,7 +1118,7 @@ def main():
                         print(keyc[[c for c in show_cols if c in keyc.columns]].to_string(index=False))
                     tests = pd.concat([tests, ctests], ignore_index=True)
                 tst_csv = os.path.join(PLOT_DIR,
-                                       f"aggregate_tests_{args.mark_version}_{args.split}.csv")
+                                       f"aggregate_tests_{args.mark_version}_{args.split}_plain.csv")
                 tests.to_csv(tst_csv, index=False, encoding=CSV_ENCODING)
                 print(f"\n[INFO] 검정표   : {tst_csv} (전체 지표 · 보정 p 포함"
                       + (" · 천장 검정 포함" if not ctests.empty else "") + ")")
@@ -1128,12 +1134,12 @@ def main():
                     print(gap.to_string(index=False))
                 print("  · 1.0 이면 라벨이 완벽했을 때만큼 올랐다는 뜻. 0.5 면 갈 수 있는 거리의 절반.")
                 print("  · 'seed 짝' 값은 같은 seed 의 세 조건으로 seed 마다 계산한 것의 평균 ± SD.")
-                gap_csv = os.path.join(PLOT_DIR, f"aggregate_gap_closed_{args.mark_version}_{args.split}.csv")
+                gap_csv = os.path.join(PLOT_DIR, f"aggregate_gap_closed_{args.mark_version}_{args.split}_plain.csv")
                 gap.to_csv(gap_csv, index=False, encoding=CSV_ENCODING)
                 print(f"[INFO] 메운 비율 : {gap_csv}")
 
         plot_curve(summary, args.split,
-                   os.path.join(PLOT_DIR, f"data_efficiency_curve_{args.mark_version}_{args.split}.png"),
+                   os.path.join(PLOT_DIR, f"data_efficiency_curve_{args.mark_version}_{args.split}_plain.png"),
                    ceiling=ceil_summary)
 
         # 회수가 조건마다 다르면 표가 들쭉날쭉해진다. 조용히 넘기지 않는다.
@@ -1151,7 +1157,7 @@ def main():
             _main_runs = df[df["unlabeled"] == _umax]
             cw, cm_sum, cm_mean, n_cm = classwise_and_confusion(_main_runs, args.split)
             if not cw.empty:
-                cw_csv = os.path.join(PLOT_DIR, f"paper_table_classwise_{args.mark_version}_{args.split}.csv")
+                cw_csv = os.path.join(PLOT_DIR, f"paper_table_classwise_{args.mark_version}_{args.split}_plain.csv")
                 cw.to_csv(cw_csv, index=False, encoding=CSV_ENCODING)
                 print("\n" + "=" * 78)
                 print(f" 클래스별 지표 ({args.split}, 본 조건 u{_umax}, {len(_main_runs)}회 평균 ± 표본SD)")
@@ -1160,9 +1166,9 @@ def main():
                     print(cw.to_string(index=False))
                 print(f"[INFO] 클래스별 표 : {cw_csv}")
             if not cm_sum.empty:
-                cm_csv = os.path.join(PLOT_DIR, f"confusion_sum_{args.mark_version}_{args.split}.csv")
+                cm_csv = os.path.join(PLOT_DIR, f"confusion_sum_{args.mark_version}_{args.split}_plain.csv")
                 cm_sum.to_csv(cm_csv, encoding=CSV_ENCODING)
-                cm_mean.round(2).to_csv(os.path.join(PLOT_DIR, f"confusion_mean_{args.mark_version}_{args.split}.csv"), encoding=CSV_ENCODING)
+                cm_mean.round(2).to_csv(os.path.join(PLOT_DIR, f"confusion_mean_{args.mark_version}_{args.split}_plain.csv"), encoding=CSV_ENCODING)
                 print(f"\n 혼동행렬 합 ({n_cm}회, 행 = 정답, 열 = 판정):")
                 with pd.option_context("display.width", 240):
                     print(cm_sum.to_string())
@@ -1180,14 +1186,14 @@ def main():
             show_le = ["labeled", "condition", "N"] + [c for c in le_sum.columns if c.endswith(" (mean)") or c.endswith(" (std)")]
             with pd.option_context("display.width", 240, "display.float_format", "{:.4f}".format):
                 print(le_sum[show_le].to_string(index=False))
-            le_csv = os.path.join(PLOT_DIR, f"paper_table_label_eff_{args.mark_version}_{args.split}.csv")
+            le_csv = os.path.join(PLOT_DIR, f"paper_table_label_eff_{args.mark_version}_{args.split}_plain.csv")
             le_sum.to_csv(le_csv, index=False, encoding=CSV_ENCODING)
             print(f"[INFO] 라벨 효율 표 : {le_csv}")
             if not args.no_tests and not le_tests.empty:
                 keyt = le_tests[le_tests["지표"].isin(KEY_METRICS)]
                 with pd.option_context("display.width", 240):
                     print(keyt[[c for c in ["labeled", "비교", "지표", "평균차", "Cohen's d", "효과크기", "p (paired)", "p (paired, Holm)", "n(짝)"] if c in keyt.columns]].to_string(index=False))
-                le_t_csv = os.path.join(PLOT_DIR, f"aggregate_tests_label_eff_{args.mark_version}_{args.split}.csv")
+                le_t_csv = os.path.join(PLOT_DIR, f"aggregate_tests_label_eff_{args.mark_version}_{args.split}_plain.csv")
                 le_tests.to_csv(le_t_csv, index=False, encoding=CSV_ENCODING)
                 print(f"[INFO] 라벨 효율 검정: {le_t_csv}")
             # labeled 200 의 unlabeled 곡선(중간점 회차가 있으면)
@@ -1198,7 +1204,7 @@ def main():
                     csum = None
                     if len(cs):
                         csum = summarize(cs); csum.index = ["ceiling"] * len(csum); csum.index.name = "unlabeled"
-                    out_png = os.path.join(PLOT_DIR, f"data_efficiency_curve_{args.mark_version}_l{lab}_{args.split}.png")
+                    out_png = os.path.join(PLOT_DIR, f"data_efficiency_curve_{args.mark_version}_l{lab}_{args.split}_plain.png")
                     plot_curve(summarize(g), args.split, out_png, ceiling=csum)
                     print(f"[INFO] labeled {lab} 곡선: {out_png}")
         # ---- [2026-09-17 / 8절] pseudo-label 출처 표 ----
@@ -1210,14 +1216,14 @@ def main():
             show_ps = ["labeled", "pseudo_source", "N"] + [c for c in ps_sum.columns if c.endswith(" (mean)") or c.endswith(" (std)")]
             with pd.option_context("display.width", 240, "display.float_format", "{:.4f}".format):
                 print(ps_sum[show_ps].to_string(index=False))
-            ps_csv = os.path.join(PLOT_DIR, f"paper_table_plsource_{args.mark_version}_{args.split}.csv")
+            ps_csv = os.path.join(PLOT_DIR, f"paper_table_plsource_{args.mark_version}_{args.split}_plain.csv")
             ps_sum.to_csv(ps_csv, index=False, encoding=CSV_ENCODING)
             print(f"[INFO] 출처 비교 표 : {ps_csv}")
             if not args.no_tests and not ps_tests.empty:
                 keyp = ps_tests[ps_tests["지표"].isin(KEY_METRICS)]
                 with pd.option_context("display.width", 240):
                     print(keyp[[c for c in ["labeled", "비교", "지표", "평균차", "Cohen's d", "효과크기", "p (paired)", "p (paired, Holm)", "n(짝)"] if c in keyp.columns]].to_string(index=False))
-                ps_t_csv = os.path.join(PLOT_DIR, f"aggregate_tests_plsource_{args.mark_version}_{args.split}.csv")
+                ps_t_csv = os.path.join(PLOT_DIR, f"aggregate_tests_plsource_{args.mark_version}_{args.split}_plain.csv")
                 ps_tests.to_csv(ps_t_csv, index=False, encoding=CSV_ENCODING)
                 print(f"[INFO] 출처 비교 검정: {ps_t_csv}")
         # ---- [2026-09-17 / 8절] 비교모델 짝지은 검정 ----
@@ -1232,7 +1238,7 @@ def main():
                 keyb = bt[bt["지표"].isin(KEY_METRICS)]
                 with pd.option_context("display.width", 240):
                     print(keyb[[c for c in ["labeled", "baseline", "비교", "지표", "평균차", "Cohen's d", "효과크기", "p (paired)", "p (paired, Holm)", "n(짝)"] if c in keyb.columns]].to_string(index=False))
-                bt_csv = os.path.join(PLOT_DIR, f"aggregate_tests_vs_baseline_{args.mark_version}_{args.split}.csv")
+                bt_csv = os.path.join(PLOT_DIR, f"aggregate_tests_vs_baseline_{args.mark_version}_{args.split}_plain.csv")
                 bt.to_csv(bt_csv, index=False, encoding=CSV_ENCODING)
                 print(f"[INFO] 비교모델 검정: {bt_csv}")
 

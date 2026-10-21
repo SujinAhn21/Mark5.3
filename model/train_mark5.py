@@ -4,7 +4,6 @@ import csv
 import argparse
 import hashlib
 import random          # [추가 2026-08-30 / Mark5_EXP] unlabeled 누적 서브샘플링용 별도 난수기
-import copy            # [신설 2026-10-07 / Mark5.3 FM] 학생 EMA 사본
 import time
 
 import matplotlib.pyplot as plt
@@ -27,7 +26,6 @@ for p in (PROJECT_ROOT, UTILS_DIR, VILD_DIR):
 from feature_cache import get_feature_cache_path, get_metadata_cache_path
 from vild_config import AudioViLDConfig
 from vild_model import (
-    ExpertBinaryHead,      # [신설 2026-10-07 / Mark5.3 OVA]
     LearnableBackgroundEmbedding,
     ViLDTextHead,
     build_audio_encoder,
@@ -509,21 +507,6 @@ class DistillationLoss(nn.Module):
         return total, hard_loss, soft_loss, feat_loss
 
 
-def _supcon_loss(features, labels, temperature):
-    """[신설 2026-10-07 / Mark5.3 SC] 지도 대조 손실(Khosla 외 2020 형식). 같은 클래스 쌍을 당기고 다른 클래스를 민다.
-    양성 쌍이 하나도 없는 샘플은 평균에서 뺀다. 그런 샘플뿐이면 None."""
-    f = F.normalize(features, dim=1)
-    n = f.shape[0]
-    eye = torch.eye(n, dtype=torch.bool, device=f.device)
-    pos = (labels.view(-1, 1) == labels.view(1, -1)) & ~eye
-    valid = pos.any(dim=1)
-    if not bool(valid.any()):
-        return None
-    logits = (f @ f.t()) / float(temperature)
-    logits = logits.masked_fill(eye, -1e9)
-    log_prob = logits - torch.logsumexp(logits, dim=1, keepdim=True)
-    loss_i = -(log_prob * pos.float()).sum(dim=1) / pos.float().sum(dim=1).clamp_min(1.0)
-    return loss_i[valid].mean()
 
 
 def merge_segments_to_clip(fusion_output, n_clips, n_seg, min_conf, min_gap, min_segments, rule="vote",
@@ -662,12 +645,33 @@ def _stable_file_split(path, val_ratio=0.1):
     return "val" if bucket < val_ratio else "train"
 
 
+def _runtime_desc(device):
+    """[신설 2026-10-18 / Ablation 재실행] 실행 환경 한 줄 — GPU 이름·계산 능력(sm)·torch·CUDA·드라이버 판.
+    10-17 G4(RTX PRO 6000 Blackwell) 런타임에서 CB 누적 수 한 칸에 2^44 가 끼어든 사고 때 GPU·드라이버 기록이 없어 대조를 못 했다.
+    노트북의 'G4 결과 옮기기' 셀이 학습 로그의 이 줄(`[RUNTIME]`)로 새 회차를 알아본다."""
+    out = f"device {device} · torch {torch.__version__} · CUDA {torch.version.cuda}"
+    if str(device).startswith("cuda") and torch.cuda.is_available():
+        _i = torch.device(device).index or 0
+        _cc = torch.cuda.get_device_capability(_i)
+        out += f" · GPU {torch.cuda.get_device_name(_i)} · sm_{_cc[0]}{_cc[1]}"
+        try:
+            import subprocess
+            _drv = subprocess.run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+                                  capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
+            out += f" · 드라이버 {_drv[_i] if len(_drv) > _i else '확인 불가'}"
+        except Exception:
+            out += " · 드라이버 확인 불가"
+    return out
+
+
+
+
 def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceiling_csv=None, labeled_n=None,
                 pseudo_csv=None, pseudo_source=None, spill_labeled=False, lr=None, encoder_lr=None,
                 no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
                 segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
                 others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False,
-                bg_weight=None, student_raw_wave=False, m53=None, joint_forward=False):
+                bg_weight=None, student_raw_wave=False, joint_forward=False):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 실험 조건으로 받는다.
     [이식 2026-09-29 / Mark5.2] ablation A1~A4·H 와 격차 분석 대응 묶음(PH·LP-FT·HW·OR·NEG) 플래그를 받는다(vild_config.apply_cli_ablation).
     아무 플래그도 안 주면 mark5.2 기본(클립 입력·조각 teacher 또는 클립 teacher 자동 판정) 그대로다.
@@ -710,7 +714,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                                         head_pretrained_hidden=head_pretrained_hidden, lp_epochs=lp_epochs, hard_weight=hard_weight,
                                         others_from_reject=others_from_reject, neg_pl=neg_pl,
                                         teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view,
-                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave, m53=m53,
+                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave,
                                         joint_forward=joint_forward)
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} · run_tag {config.run_tag}")
@@ -735,7 +739,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     # [신설 2026-09-29 / 헤드 진단 H] 선형 헤드면 위 AC/LT 값은 헤드가 안 쓰므로 뜻이 없다(텍스트 임베딩은 만들되 헤드가 무시한다).
     if getattr(config, "student_head", "text_anchor") == "linear":
         print(f"[H] student 분류 헤드 = 선형(nn.Linear {config.embedding_dim}→{len(config.get_classes_for_evaluation())}) — "
-              f"텍스트 앵커·AC/LT 미사용, 제로샷 불가(2026-10-07 D0 본 레시피). 두 갈래(지도·증류)가 같은 Linear 를 공유한다")
+              f"텍스트 앵커·AC/LT 미사용, 제로샷 불가(2026-10-07 D0 본 레시피). 지도 갈래만 Linear 분류기를 사용하고 증류 갈래는 feature KD 전용이다")
     # [신설 2026-09-29 / A3] 클립 모드 — 학습 단위가 조각에서 클립으로 바뀐다(배치 16 = 클립 16개, 에폭당 스텝 수 1/K). teacher 는 조각 그대로.
     _clip_mode = bool(getattr(config, "student_clip_input", False))
     _clip_min_segments = int(getattr(config, "clip_min_segments", 3))
@@ -988,13 +992,14 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         supervised_identity=bool(getattr(config, "head_pretrained_hidden", False)),   # [PH 2026-09-29 밤] 지도 갈래 항등
     ).to(device)
     student_classifier = build_student_head(config).to(device)   # [H 2026-09-29] config.student_head 로 텍스트 앵커/선형 선택(eval 과 같은 함수)
-    student_text_emb = config.get_class_text_embeddings(for_evaluation=True).to(device)
+    student_text_emb = (None if config.student_head == "linear"
+                        else config.get_class_text_embeddings(for_evaluation=True).to(device))
     student_label_map = config.get_target_label_map()
 
     # [추가] dummy_label 등이 student 차원에 새지 않았는지 즉시 검증(누수 시 학습 전에 터지게).
     eval_classes = config.get_classes_for_evaluation()
-    assert student_text_emb.shape[0] == len(student_label_map) == len(eval_classes), (
-        f"[ERROR] student 클래스 차원 불일치: text_emb={student_text_emb.shape[0]}, "
+    assert (student_text_emb is None or student_text_emb.shape[0] == len(eval_classes)) and len(student_label_map) == len(eval_classes), (
+        f"[ERROR] student 클래스 차원 불일치: text_emb={None if student_text_emb is None else student_text_emb.shape[0]}, "
         f"label_map={len(student_label_map)}, eval_classes={len(eval_classes)} (현재 기대값 9). "
         "for_evaluation=True 누락 또는 dummy_label 누수/ config 불일치를 의심하세요."
     )
@@ -1004,18 +1009,9 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     if config.use_background_embedding:
         background_embedding = LearnableBackgroundEmbedding(config.embedding_dim).to(device)
 
-    # [신설 2026-10-07 / Mark5.3] 켠 부품(vild_config.M53_PARTS 순서). 빈 tuple 이면 아래 Mark5.3 분기를 모두 건너뛴다(옛 동작 그대로).
-    _m53 = tuple(getattr(config, "m53_parts", None) or ())
-    _m53_on = bool(_m53)
-    # [신설 2026-10-08 / Mark5.3 JF] 정답·라벨 없는 클립을 학생에 한 번에 통과(vild_config m53_joint_forward 주석). 클립 파형 student 에서만.
-    _m53_jf = bool(getattr(config, "m53_joint_forward", False))
-    if _m53_jf and (not _m53_on or _student_input != "waveform"):
-        raise ValueError("[ERROR] --joint_forward 는 Mark5.3(--m53) · 클립 파형 student 에서만 씁니다.")
-    if _m53_jf:
-        print("[M53/JF] 정답 클립과 라벨 없는 클립을 학생에 한 번에 통과시킨다(BN = 배치 전체). 한쪽만 있는 배치는 그 배치 전체로 통과(옛 경로와 같다).")
-    ova_head = None
-    if "OVA" in _m53:
-        ova_head = ExpertBinaryHead(config.embedding_dim, len(specialist_config), getattr(config, "m53_ova_hidden", None)).to(device)
+    _joint_forward = bool(getattr(config, "joint_forward", False))
+    if _joint_forward:
+        print("[JF] 정답 클립과 라벨 없는 클립을 학생에 한 번에 통과시킨다(BN = 배치 전체). 한쪽만 있는 배치는 그 배치 전체로 통과(옛 경로와 같다).")
 
     # teacher 8개 목록(specialist_config)은 위에서 이미 만들었다(2026-09-29 밤 분리 — dataset 을 만들기 전에 provenance 를 읽기 위해).
     # make_consensus_labels.py 도 같은 specialist_config_for(config) 를 쓴다.
@@ -1086,29 +1082,6 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         # [Mark5_EXP2] CSV 로 들어온 가짜 정답(자기 학습·단일 generalist 출처 비교)은 합의 정보(1등−2등 차이)가 없다 — 조건을 끈다.
         print(f"[INFO] --pseudo_csv 경로: 1등−2등 차이 조건 {_pl_min_gap:g} 은 적용하지 않음(CSV 라벨엔 합의 정보가 없음)")
         _pl_min_gap = 0.0
-    _distill_classify = getattr(config, "distill_branch_classify", False)
-    if _m53_on:
-        if pseudo_csv is not None:
-            raise ValueError("[ERROR] --m53 은 전문가 8명의 확신도를 쓰므로 --pseudo_csv(CSV 가짜 정답) 경로와 함께 쓸 수 없습니다.")
-        print(f"[M53] Mark5.3 부품 {'·'.join(_m53)}")
-        if "PF" in _m53:
-            _alpha = float(config.m53_pl_weight)
-            _pl_weighting = False
-            print(f"[M53/PF] 가짜 정답 CE 가중치 {_alpha:g}(옛 α 0.3), 확신도 가중 끔 — 합의 가짜 정답을 정답 라벨과 같은 세기로")
-        if "SK" in _m53:
-            print(f"[M53/SK] 합의에서 빠진 클립에 9칸 부드러운 목표: 전문가 확신도 1~{int(config.m53_soft_topk)}등 몫 + others 몫(1 − 최대 확신도), "
-                  f"가중치 {float(config.m53_soft_weight):g}")
-        if "OVA" in _m53:
-            print(f"[M53/OVA] 전문가 이진 출력 {len(specialist_config)}개(MLP {config.embedding_dim}→{int(config.m53_ova_hidden)}→{len(specialist_config)}), "
-                  f"BCE 가중치 {float(config.m53_ova_weight):g}, 평가 때 others 섞음 {float(config.m53_ova_eval_mix):g}")
-        if "FM" in _m53:
-            print(f"[M53/FM] 학생 EMA 사본(감쇠 {float(config.m53_fm_ema):g}) 무증강 답 → 증강 입력 CE, FreeMatch 클래스별 문턱, "
-                  f"가중치 {float(config.m53_fm_weight):g}(처음 {int(config.m53_fm_rampup_epochs)}에폭 선형 증가)")
-        if "CB" in _m53:
-            print(f"[M53/CB] 가짜 정답 클래스 가중 = (평균 채택 수/클래스 채택 수)^{float(config.m53_cb_power):g} [0.5, 2.0]"
-                  + (", FM 목표 분포 정렬(균등)" if "FM" in _m53 else ""))
-        if "SC" in _m53:
-            print(f"[M53/SC] 지도 대조 손실(정답 라벨 + 채택 가짜 정답, 온도 {float(config.m53_sc_temperature):g}) 가중치 {float(config.m53_sc_weight):g}")
     criterion = DistillationLoss(
         temperature=_temp, alpha=_alpha,
         feature_kd_weight=(config.feature_kd_weight if (config.use_feature_kd and pseudo_csv is None) else 0.0),
@@ -1125,7 +1098,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
           + (f" (dkd_alpha={_dkd_a}, dkd_beta={_dkd_b}, 타겟축=teacher argmax)" if _use_dkd and not _use_pl else "")
           + (f" | 채택 임계값={_pl_min_conf}, 1등−2등 차이≥{_pl_min_gap:g}, 확신도 가중={_pl_weighting}" if _use_pl else f" | T={_temp}")
           + f" | alpha={_alpha}, feature_kd={config.feature_kd_weight if config.use_feature_kd else 0.0}"
-          + f" | distill branch 분류손실={_distill_classify}")
+          + " | classification=supervised_only (feature KD retained)")
     # [변경 2026-09-17] 백본 학습률 분리. config.encoder_learning_rate 가 있으면(mn10: 5e-5) 사전학습 백본만 그 값,
     # 새로 만드는 층(투영·branch·background)은 learning_rate(1e-4). None 이면 전부 learning_rate(옛 동작).
     # [검수 C5 / 2026-09-17] 투영층 proj(Dropout+Linear 960->384)는 Mn10AudioEncoder 안에 있어 전에는 인코더 그룹(5e-5)에
@@ -1138,8 +1111,6 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     # 옵티마이저에 들어가지 않아 학습형 로짓 스케일(LT)이 초깃값 1/0.07 에서 한 번도 움직이지 않고(2026-10-01 의 70회 로그 전부 T=0.0700),
     # --linear_head 의 nn.Linear 도 무작위 초깃값 그대로 고정된다. 본체 로그는 '새 층 640,897개'(스케일 1개 포함), 이 줄이 없던 EXP2 는 640,896개.
     _head_params += list(student_classifier.parameters())   # 학습형 로짓 스케일·선형 헤드(텍스트 앵커+고정 T 면 빈 목록)
-    if ova_head is not None:
-        _head_params += list(ova_head.parameters())          # [Mark5.3 OVA] 새 층 학습률 그룹
     _enc_trainable = [p for p in student_encoder.parameters() if p.requires_grad]
     # [2026-09-29 밤 / LP-FT] 백본 = 인코더 파라미터 중 투영층(proj)을 뺀 것. 학습률 분리와 LP 고정이 같은 집합을 쓴다.
     _proj_ids = {id(p) for p in getattr(student_encoder, "proj", nn.Identity()).parameters()}
@@ -1172,20 +1143,6 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     # 올라갔을 때 정규화 없이 조용히 학습된다.
     _weight_decay = getattr(config, "weight_decay", 1e-4)
     optimizer = optim.Adam(optimizer_params, lr=config.learning_rate, weight_decay=_weight_decay)
-    # [신설 2026-10-07 / Mark5.3] FM 의 학생 EMA 사본(기울기 없음, 평가 모드)과 FreeMatch·분포 정렬·CB 의 누적 상태.
-    _ema = None
-    if "FM" in _m53:
-        _ema = {"enc": copy.deepcopy(student_encoder), "branch": copy.deepcopy(student_branch), "cls": copy.deepcopy(student_classifier)}
-        for _m in _ema.values():
-            _m.eval()
-            for _p in _m.parameters():
-                _p.requires_grad_(False)
-    _n_cls_student = len(config.get_classes_for_evaluation())
-    _m53_pl_count = torch.zeros(_n_cls_student, device=device)                     # CB: 지금까지 채택된 가짜 정답의 클래스별 누적 수
-    _fm_tau_g = 1.0 / _n_cls_student                                              # FM: FreeMatch 전역 문턱(평균 최대 확률의 EMA)
-    _fm_p_local = torch.full((_n_cls_student,), 1.0 / _n_cls_student, device=device)   # FM: 클래스별 평균 확률의 EMA
-    _da_mean = torch.full((_n_cls_student,), 1.0 / _n_cls_student, device=device)      # CB+FM: 분포 정렬용 EMA 평균 예측
-    _m53_mom = float(getattr(config, "m53_fm_momentum", 0.999))
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
     _patience = getattr(config, "early_stopping_patience", 10)
     print(f"[INFO] 학습 절차: weight_decay={_weight_decay}, ReduceLROnPlateau(factor=0.5, patience=3), "
@@ -1199,19 +1156,13 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
              f"unlabeled={'전량' if unlabeled_n is None else unlabeled_n}개 (실제 {len(unlabeled_files)}개), ")
           + f"cudnn_deterministic={getattr(config, 'cudnn_deterministic', False)}, "
           f"run_tag={config.run_tag}")
-    # [신설 2026-09-07] 이 run_tag 로 val 이 골라 둔 others 규칙 json 은 이전 체크포인트의 것이다. 새 학습이
-    # 시작되면 지워서, test 가 옛 값을 읽는 일이 없게 한다(eval.py 는 지문도 대조한다 — 리뷰 지적 3).
-    _stale = os.path.join(PROJECT_ROOT, "plots", f"others_threshold_{config.run_tag}.json")
-    if os.path.exists(_stale):
-        os.remove(_stale)
-        print(f"[INFO] 이전 학습의 others 규칙 json 삭제: {_stale}")
     # [2026-09-18 / 3차 검수 P-3] 옛 완주 표식(loss_history)·체크포인트·val/test 요약도 지운다. 안 그러면 --force 재실행이 에폭 도중에
     # 죽었을 때 "새 중도 체크포인트 + 옛 완주 표식 + 옛 요약" 이 남아 run_experiments._needs 가 통째로 [건너뜀] 한다
     # (비교모델 common/train_loop.fit 이 09-05 에 고친 것과 같은 구멍).
     for _stale in (os.path.join(PROJECT_ROOT, "plots", f"loss_history_{config.run_tag}.csv"),
                    os.path.join(PROJECT_ROOT, "model", f"student_model_{config.run_tag}.pth"),
-                   os.path.join(PROJECT_ROOT, "plots", f"performance_summary_{config.run_tag}_val.csv"),
-                   os.path.join(PROJECT_ROOT, "plots", f"performance_summary_{config.run_tag}.csv")):
+                   os.path.join(PROJECT_ROOT, "plots", f"performance_summary_{config.run_tag}_val_plain.csv"),
+                   os.path.join(PROJECT_ROOT, "plots", f"performance_summary_{config.run_tag}_plain.csv")):
         if os.path.exists(_stale):
             os.remove(_stale)
             print(f"[INFO] 이전 학습의 산출물 삭제: {_stale}")
@@ -1227,6 +1178,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     train_bg_hist = []
     val_hard_hist = []
     print(f"[INFO] Student training ({mark_version}) started on {device}")
+    print("[RUNTIME] " + _runtime_desc(device))   # [신설 2026-10-18] GPU·드라이버 기록 — 노트북 옮기기 셀이 새 회차 표식으로 읽는다
     # [추가 2026-08-17] best val 체크포인트 + early stopping 상태
     best_val = float("inf")
     best_epoch = -1
@@ -1245,6 +1197,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     for epoch in range(config.num_epochs):
         student_encoder.train()
         student_branch.train()
+        student_classifier.train()
         # [LP-FT] LP 구간: 백본 BN 통계 고정(eval 모드) · FT 진입 에폭: 백본 해제 + best/early stopping 초기화
         _in_lp = _lp_epochs > 0 and epoch < _lp_epochs
         if _in_lp and _backbone_module is not None:
@@ -1256,7 +1209,6 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         total_loss = total_hard_loss = total_soft_loss = total_feat_loss = 0.0
         total_bg_loss = 0.0
         # [추가 2026-08-22] pseudo-label 채택 통계와 epoch 소요시간.
-        total_distill_cls_loss = 0.0
         total_neg_loss = 0.0
         epoch_pseudo_total = 0
         epoch_pseudo_kept = 0
@@ -1264,8 +1216,6 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         epoch_or_kept = 0          # [OR] 전원 거절로 others 가짜 정답이 된 샘플 수
         epoch_neg_samples = 0      # [NEG] 부정 라벨을 받은 샘플 수
         epoch_neg_labels = 0       # [NEG] 그 샘플들의 부정 라벨(클래스) 총수
-        _m53_tot = {"SK": 0.0, "OVA": 0.0, "FM": 0.0, "SC": 0.0}   # [Mark5.3] 부품별 손실 합(에폭 로그용)
-        _m53_sk_n = 0; _m53_fm_kept = 0.0; _m53_fm_n = 0
         epoch_started_at = time.time()
         # [추가 2026-08-17] 캐시를 에폭마다 비운다. teacher 는 eval·no_grad·가중치 고정이라
         # 같은 입력에 늘 같은 값을 내므로 에폭마다 쌓아봐야 같은 값이 num_epochs 벌 중복될 뿐이다.
@@ -1281,12 +1231,11 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
             labeled_indices = [i for i, lbl in enumerate(label_batch) if isinstance(lbl, str)]
             unlabeled_indices = [i for i, lbl in enumerate(label_batch) if lbl == -1]
             loss = torch.tensor(0.0, device=device)
-            _sc_feats, _sc_lbls = [], []   # [Mark5.3 SC] 이 배치의 정답 라벨·채택 가짜 정답 특징
             # [신설 2026-10-08 / Mark5.3 JF] 정답·라벨 없는 클립을 학생에 한 번에 통과시키고(BN = 배치 16개 전체), 아래 정답 갈래와
             # Mark5.3 라벨 없는 갈래가 이 출력을 잘라 쓴다. 손실 식·증강(augment=_use_sa, 옛 두 호출과 같다)은 그대로다.
             # 옛 경로는 정답만 따로 통과시켜 정답 라벨 200 이면 지도 손실의 BN 이 1~2개 클립으로 계산됐다.
             _jf = None
-            if _m53_jf and labeled_indices and unlabeled_indices:
+            if _joint_forward and labeled_indices and unlabeled_indices:
                 _jf_base = run_student_encoder(None, wave[labeled_indices + unlabeled_indices], augment=_use_sa)
                 _jf_sup, _jf_dis = student_branch(_jf_base)
                 _jf_logits = student_classifier(_jf_sup, student_text_emb)
@@ -1305,19 +1254,11 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                     supervised_features, student_logits = _jf["l_sup"], _jf["l_logits"]     # [JF] 한 번에 통과한 출력의 정답 부분
                 else:
                     base_features = run_student_encoder(labeled_mel, wave[labeled_indices] if wave is not None else None, augment=_use_sa)
-                    supervised_features, _ = student_branch(base_features)
+                    supervised_features = student_branch.forward_supervised(base_features)
                     student_logits = student_classifier(supervised_features, student_text_emb)
                 hard_total, hard_loss, _, _ = criterion(student_logits, hard_targets=labeled_targets)
                 loss = loss + hard_total
                 total_hard_loss += hard_loss.item()
-                if ova_head is not None:
-                    # [Mark5.3 OVA] 정답 라벨 클립: 정답 클래스의 전문가 1, 나머지 0(others 는 전부 0).
-                    _ova_t = (labeled_targets.view(-1, 1) == _spec_cls_idx.view(1, -1)).to(supervised_features.dtype)
-                    _ova_l = F.binary_cross_entropy_with_logits(ova_head(supervised_features), _ova_t)
-                    loss = loss + float(config.m53_ova_weight) * _ova_l
-                    _m53_tot["OVA"] += _ova_l.item()
-                if "SC" in _m53:
-                    _sc_feats.append(supervised_features); _sc_lbls.append(labeled_targets)
 
                 # [2026-10-01 / 지도만 격차 진단] 가중치 0(--bg_weight 0)이면 이 보조 손실을 아예 걸지 않는다(로그의 BG 칸은 0).
                 if config.use_background_embedding and background_embedding is not None and float(config.background_embedding_weight) > 0:
@@ -1429,148 +1370,38 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 epoch_pseudo_kept += int(keep_mask.sum().item())
                 epoch_pseudo_conf_sum += float(pseudo_conf.sum().item())
 
-                if (not _m53_on) and _use_neg and (~keep_mask).any():
-                    # [NEG] 미채택 샘플: 전문가 c 가 "내 것 아님" 을 확신(확신도 < τ_neg)하는 클래스마다 −β·log(1 − p_student(c)).
+
+
+                # [신설 2026-10-07 / Mark5.3] unlabeled 를 학생에 한 번만 통과시키고(증강 입력, 옛 경로와 같은 augment) 아래 손실이 모두 이 출력을 쓴다.
+                # NEG·채택 가짜 정답 CE·특징 증류를 유지한다. 증류 갈래에는 분류 손실을 걸지 않는다.
+                if _jf is not None:
+                    _u_sup, _u_dis, _u_logits = _jf["u_sup"], _jf["u_dis"], _jf["u_logits"]   # [JF] 한 번에 통과한 출력의 라벨 없는 부분
+                else:
+                    _u_base = run_student_encoder(None if _clip_mode else student_input, unlabeled_wave, augment=_use_sa)
+                    _u_sup, _u_dis = student_branch(_u_base)
+                    _u_logits = student_classifier(_u_sup, student_text_emb)
+                if _use_neg and _sw is not None and (~keep_mask).any():
                     _neg_idx = (~keep_mask).nonzero(as_tuple=True)[0]
-                    _neg_cls = (_sw[_neg_idx] < _neg_tau)                                                              # [m, 8]
+                    _neg_cls = (_sw[_neg_idx] < _neg_tau)
                     if _neg_cls.any():
-                        _nm = None if _clip_mode else student_input[_neg_idx]
-                        _nw = unlabeled_wave[_neg_idx] if unlabeled_wave is not None else None
-                        _nf = run_student_encoder(_nm, _nw, augment=_use_sa)
-                        _nsup, _ = student_branch(_nf)
-                        _np = torch.softmax(student_classifier(_nsup, student_text_emb), dim=1)                          # [m, C]
-                        _p_neg = _np[:, _spec_cls_idx]                                                                   # [m, 8] 전문가 클래스만
+                        _p_neg = torch.softmax(_u_logits[_neg_idx], dim=1)[:, _spec_cls_idx]
                         _neg_loss = (-torch.log((1.0 - _p_neg).clamp_min(1e-6)) * _neg_cls.float()).sum() / _neg_cls.float().sum().clamp_min(1.0)
                         loss = loss + _neg_beta * _neg_loss
                         total_neg_loss += _neg_loss.item()
                         epoch_neg_samples += int(_neg_cls.any(dim=1).sum().item())
                         epoch_neg_labels += int(_neg_cls.sum().item())
-
-                if (not _m53_on) and keep_mask.any():
-                    kept_mel = None if _clip_mode else student_input[keep_mask]     # [A3] 클립 모드의 student 는 파형만 쓴다
-                    kept_wave = unlabeled_wave[keep_mask] if unlabeled_wave is not None else None
+                if keep_mask.any():
                     kept_teacher_logits = _t_logits[keep_mask]
-                    kept_teacher_feats = _t_feats[keep_mask] if _t_feats is not None else None   # CSV 모드(_CsvFusion)는 features 가 None → feature KD 0 (검수 C2)
-                    kept_targets = _t_labels[keep_mask] if _t_labels is not None else None   # [A3] 클립 다수결 라벨(조각 모드·CSV 모드 None → argmax)
+                    kept_teacher_feats = _t_feats[keep_mask] if _t_feats is not None else None
+                    kept_targets = _t_labels[keep_mask] if _t_labels is not None else kept_teacher_logits.argmax(dim=1)
                     kept_weights = pseudo_conf[keep_mask] if (_use_pl and _pl_weighting) else None
-
-                    base_features = run_student_encoder(kept_mel, kept_wave, augment=_use_sa)
-                    supervised_features, distill_features = student_branch(base_features)
-                    student_logits = student_classifier(supervised_features, student_text_emb)
                     soft_total, _, soft_loss, feat_loss = criterion(
-                        student_logits,
-                        teacher_logits=kept_teacher_logits,
-                        student_features=distill_features,
-                        teacher_features=kept_teacher_feats,
-                        pseudo_weights=kept_weights,
-                        pseudo_targets=kept_targets,
-                    )
+                        _u_logits[keep_mask], teacher_logits=kept_teacher_logits,
+                        student_features=_u_dis[keep_mask], teacher_features=kept_teacher_feats,
+                        pseudo_weights=kept_weights, pseudo_targets=kept_targets)
                     loss = loss + soft_total
                     total_soft_loss += soft_loss.item()
                     total_feat_loss += feat_loss.item()
-
-                    # [신설 2026-08-22] distill branch 에도 분류 손실을 건다.
-                    # 이 갈래는 지금까지 feature KD 만 받아 분류를 배운 적이 없는데,
-                    # eval.py 는 distill_branch_eval_weight=0.5 로 최종 확률의 절반을
-                    # 이 갈래에서 가져간다. 분류를 배운 적 없는 표현으로 분류를 하고 있었던 셈이다.
-                    if _use_pl and _distill_classify:
-                        distill_logits = student_classifier(distill_features, student_text_emb)
-                        db_total, _, db_loss, _ = criterion(
-                            distill_logits,
-                            teacher_logits=kept_teacher_logits,
-                            pseudo_weights=kept_weights,
-                            pseudo_targets=kept_targets,
-                        )
-                        loss = loss + db_total
-                        total_distill_cls_loss += db_loss.item()
-                if _m53_on:
-                    # [신설 2026-10-07 / Mark5.3] unlabeled 를 학생에 한 번만 통과시키고(증강 입력, 옛 경로와 같은 augment) 아래 손실이 모두 이 출력을 쓴다.
-                    # NEG·채택 가짜 정답 CE·증류 갈래 CE·특징 증류는 옛 식 그대로이고, 가중치(PF·CB)와 새 손실(SK·OVA·FM·SC)만 다르다.
-                    if _jf is not None:
-                        _u_sup, _u_dis, _u_logits = _jf["u_sup"], _jf["u_dis"], _jf["u_logits"]   # [JF] 한 번에 통과한 출력의 라벨 없는 부분
-                    else:
-                        _u_base = run_student_encoder(None if _clip_mode else student_input, unlabeled_wave, augment=_use_sa)
-                        _u_sup, _u_dis = student_branch(_u_base)
-                        _u_logits = student_classifier(_u_sup, student_text_emb)
-                    _cbw = None
-                    if "CB" in _m53:
-                        _seen = _m53_pl_count > 0
-                        _cbw = torch.ones_like(_m53_pl_count)
-                        if bool(_seen.any()):
-                            _cbw[_seen] = (_m53_pl_count[_seen].mean() / _m53_pl_count[_seen]).pow(float(config.m53_cb_power)).clamp(0.5, 2.0)
-                    if _use_neg and _sw is not None and (~keep_mask).any():
-                        _neg_idx = (~keep_mask).nonzero(as_tuple=True)[0]
-                        _neg_cls = (_sw[_neg_idx] < _neg_tau)
-                        if _neg_cls.any():
-                            _p_neg = torch.softmax(_u_logits[_neg_idx], dim=1)[:, _spec_cls_idx]
-                            _neg_loss = (-torch.log((1.0 - _p_neg).clamp_min(1e-6)) * _neg_cls.float()).sum() / _neg_cls.float().sum().clamp_min(1.0)
-                            loss = loss + _neg_beta * _neg_loss
-                            total_neg_loss += _neg_loss.item()
-                            epoch_neg_samples += int(_neg_cls.any(dim=1).sum().item())
-                            epoch_neg_labels += int(_neg_cls.sum().item())
-                    if keep_mask.any():
-                        kept_teacher_logits = _t_logits[keep_mask]
-                        kept_teacher_feats = _t_feats[keep_mask] if _t_feats is not None else None
-                        kept_targets = _t_labels[keep_mask] if _t_labels is not None else kept_teacher_logits.argmax(dim=1)
-                        kept_weights = pseudo_conf[keep_mask] if (_use_pl and _pl_weighting) else None
-                        if _cbw is not None:
-                            _w_cls = _cbw[kept_targets]
-                            kept_weights = _w_cls if kept_weights is None else kept_weights * _w_cls
-                            _m53_pl_count += torch.bincount(kept_targets, minlength=_n_cls_student).to(_m53_pl_count.dtype)
-                        soft_total, _, soft_loss, feat_loss = criterion(
-                            _u_logits[keep_mask], teacher_logits=kept_teacher_logits,
-                            student_features=_u_dis[keep_mask], teacher_features=kept_teacher_feats,
-                            pseudo_weights=kept_weights, pseudo_targets=kept_targets)
-                        loss = loss + soft_total
-                        total_soft_loss += soft_loss.item()
-                        total_feat_loss += feat_loss.item()
-                        if _use_pl and _distill_classify:
-                            db_total, _, db_loss, _ = criterion(
-                                student_classifier(_u_dis[keep_mask], student_text_emb), teacher_logits=kept_teacher_logits,
-                                pseudo_weights=kept_weights, pseudo_targets=kept_targets)
-                            loss = loss + db_total
-                            total_distill_cls_loss += db_loss.item()
-                        if "SC" in _m53:
-                            _sc_feats.append(_u_sup[keep_mask]); _sc_lbls.append(kept_targets)
-                    if "SK" in _m53 and _sw is not None and (~keep_mask).any():
-                        # [Mark5.3 SK] 9칸 부드러운 목표: others 몫 o = 1 − 최대 확신도, 나머지 (1−o) 를 1~k등 전문가 확신도 비율로 나눈다.
-                        _sk_idx = (~keep_mask).nonzero(as_tuple=True)[0]
-                        _p = _sw[_sk_idx].clamp(0.0, 1.0)
-                        _tv, _ti = torch.topk(_p, k=min(int(config.m53_soft_topk), _p.shape[1]), dim=1)
-                        _o = (1.0 - _p.max(dim=1).values).clamp(0.0, 1.0)
-                        _share = _tv / _tv.sum(dim=1, keepdim=True).clamp_min(1e-6) * (1.0 - _o).unsqueeze(1)
-                        _q = torch.zeros(_sk_idx.numel(), _u_logits.shape[1], device=_u_logits.device, dtype=_u_logits.dtype)
-                        _q.scatter_(1, _spec_cls_idx[_ti], _share.to(_q.dtype))
-                        _q[:, _others_idx_student] = _o.to(_q.dtype)
-                        _ce = -(_q * F.log_softmax(_u_logits[_sk_idx], dim=1)).sum(dim=1)
-                        _w = _cbw[_q.argmax(dim=1)] if _cbw is not None else torch.ones_like(_ce)
-                        _sk_l = (_ce * _w).sum() / _w.sum().clamp_min(1e-6)
-                        loss = loss + float(config.m53_soft_weight) * _sk_l
-                        _m53_tot["SK"] += _sk_l.item(); _m53_sk_n += int(_sk_idx.numel())
-                    if ova_head is not None and _sw is not None:
-                        # [Mark5.3 OVA] unlabeled 전부: 전문가 8명의 확신도(조각 평균)를 이진 출력이 따라 하게 한다.
-                        _ova_l = F.binary_cross_entropy_with_logits(ova_head(_u_sup), _sw.clamp(0.0, 1.0).to(_u_sup.dtype))
-                        loss = loss + float(config.m53_ova_weight) * _ova_l
-                        _m53_tot["OVA"] += _ova_l.item()
-                    if _ema is not None:
-                        # [Mark5.3 FM] EMA 사본이 무증강 파형으로 낸 답(+CB 면 분포 정렬) → FreeMatch 클래스별 문턱을 넘는 것만 학생 증강 출력의 CE 목표로.
-                        with torch.no_grad():
-                            _eb = _ema["enc"](unlabeled_wave, augment=False)
-                            _es, _ = _ema["branch"](_eb)
-                            _pw = torch.softmax(_ema["cls"](_es, student_text_emb), dim=1)
-                            if "CB" in _m53:
-                                _da_mean.mul_(_m53_mom).add_(_pw.mean(dim=0), alpha=1.0 - _m53_mom)
-                                _pw = _pw * (1.0 / _n_cls_student) / _da_mean.clamp_min(1e-6)
-                                _pw = _pw / _pw.sum(dim=1, keepdim=True)
-                            _maxp, _tgt = _pw.max(dim=1)
-                            _fm_tau_g = _m53_mom * _fm_tau_g + (1.0 - _m53_mom) * float(_maxp.mean().item())
-                            _fm_p_local.mul_(_m53_mom).add_(_pw.mean(dim=0), alpha=1.0 - _m53_mom)
-                            _mask = (_maxp >= (_fm_tau_g * _fm_p_local / _fm_p_local.max())[_tgt]).float()
-                        _ramp = min(1.0, float(epoch) / max(1, int(config.m53_fm_rampup_epochs)))
-                        _fm_l = (F.cross_entropy(_u_logits, _tgt, reduction="none") * _mask).mean()
-                        if _ramp > 0:
-                            loss = loss + float(config.m53_fm_weight) * _ramp * _fm_l
-                        _m53_tot["FM"] += _fm_l.item(); _m53_fm_kept += float(_mask.sum().item()); _m53_fm_n += int(_mask.numel())
                 _fc = _t_feats if merged is not None else fusion_output.features
                 if _fc is not None:                                   # CSV 모드(_CsvFusion)는 features 가 None → 캐시 없음
                     teacher_feature_cache.append(_fc.detach().cpu())
@@ -1602,24 +1433,10 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                     meta["pseudo_kept"] = bool(keep_mask[local_pos].item())
                     unlabeled_metadata_cache.append(meta)
 
-            if "SC" in _m53 and _sc_feats:
-                _sc_l = _supcon_loss(torch.cat(_sc_feats), torch.cat(_sc_lbls), float(config.m53_sc_temperature))
-                if _sc_l is not None:
-                    loss = loss + float(config.m53_sc_weight) * _sc_l
-                    _m53_tot["SC"] += _sc_l.item()
             if loss.requires_grad and loss.item() > 0:
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
-                if _ema is not None:
-                    # [Mark5.3 FM] EMA 갱신: 파라미터는 감쇠 평균, BN 통계 등 버퍼는 그대로 복사.
-                    with torch.no_grad():
-                        _d = float(config.m53_fm_ema)
-                        for _k, _src in (("enc", student_encoder), ("branch", student_branch), ("cls", student_classifier)):
-                            for _pe, _ps in zip(_ema[_k].parameters(), _src.parameters()):
-                                _pe.mul_(_d).add_(_ps.detach(), alpha=1.0 - _d)
-                            for _be, _bs in zip(_ema[_k].buffers(), _src.buffers()):
-                                _be.copy_(_bs)
 
         avg_loss = total_loss / max(1, len(train_loader))
         avg_hard = total_hard_loss / max(1, len(train_loader))
@@ -1634,6 +1451,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
 
         student_encoder.eval()
         student_branch.eval()
+        student_classifier.eval()
         val_total = 0.0
         val_hard_total = 0.0
         with torch.no_grad():
@@ -1641,7 +1459,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 mel = mel_batch.to(device)
                 targets = torch.tensor([student_label_map[lbl] for lbl in label_batch], dtype=torch.long, device=device)
                 base_features = run_student_encoder(mel, wave_batch.to(device) if _student_input == "waveform" else None, augment=False)
-                supervised_features, _ = student_branch(base_features)
+                supervised_features = student_branch.forward_supervised(base_features)
                 logits = student_classifier(supervised_features, student_text_emb)
                 # [수정] total((1-α)·hard)뿐 아니라 raw hard CE도 따로 기록해 train_hard와 동일 척도로 비교
                 val_loss, val_hard, _, _ = criterion(logits, hard_targets=targets)
@@ -1662,9 +1480,6 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         _extra = ""
         if _use_pl:
             _extra = f" | PL채택 {_keep_ratio:.3f}({epoch_pseudo_kept}/{epoch_pseudo_total}) conf {_mean_conf:.3f}"
-            if _distill_classify:
-                _avg_db = total_distill_cls_loss / max(1, len(train_loader))
-                _extra += f" | DistillCls {_avg_db:.4f}"
         if _or_tau > 0:
             _extra += f" | OR→others {epoch_or_kept}"
         if _use_neg:
@@ -1673,15 +1488,6 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
             _extra += " | LP" if _in_lp else " | FT"
         if getattr(student_classifier, "learnable", False):
             _extra += f" | T={student_classifier.temperature:.4f}"   # [LT] 학습형 스케일이 움직이는지 본다
-        if _m53_on:
-            _nb = max(1, len(train_loader))
-            _extra += " | M53 " + " ".join(f"{k} {_m53_tot[k] / _nb:.4f}" for k in ("SK", "OVA", "FM", "SC") if k in _m53)
-            if "SK" in _m53:
-                _extra += f" SK클립 {_m53_sk_n}"
-            if "FM" in _m53:
-                _extra += f" FM통과 {(_m53_fm_kept / max(1, _m53_fm_n)):.3f} τ {_fm_tau_g:.3f}"
-            if "CB" in _m53 and bool((_m53_pl_count > 0).any()):
-                _extra += " CB채택 " + "/".join(str(int(x)) for x in _m53_pl_count.tolist())
         print(f"[Epoch {epoch+1}] Total {avg_loss:.4f} | Hard {avg_hard:.4f} | Soft {avg_soft:.4f} | Feat {avg_feat:.4f} | BG {avg_bg:.4f} | Val(hard*) {avg_val_hard:.4f}"
               + _extra + f" | {_elapsed:.1f}s")
 
@@ -1703,7 +1509,6 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 # [추가 2026-08-17] config 를 넘겨 config_metadata 를 남긴다. 전에는 인자가 빠져 있어
                 # mark5 산출물만 provenance 가 빈 dict 였다(teacher 파일에는 10개가 들어 있다).
                 config=config,
-                extra_states=({"ova_state_dict": ova_head.state_dict()} if ova_head is not None else None),   # [Mark5.3 OVA]
             )
         elif _in_lp:
             print(f"[EarlyStopping] LP 구간 — counter 를 세지 않는다 ({epoch + 1}/{_lp_epochs})")
@@ -1855,11 +1660,9 @@ if __name__ == "__main__":
     parser.add_argument("--student_raw_wave", action="store_true",
                         help="[RW] student 클립 파형을 정규화하지 않은 원본 진폭으로(teacher mel 은 그대로). 비교모델 입력과 같다. run_tag _RW")
     # [신설 2026-10-07 / Mark5.3] 부품 묶음. eval 에도 같은 값을 줄 것(run_tag·OVA 헤드 구조).
-    parser.add_argument("--m53", type=str, default=None,
-                        help="[Mark5.3] all 또는 PF,SK,OVA,FM,CB,SC 중 일부(쉼표). D0 레시피(--linear_head·클립 입력) 위에서만. run_tag _M53 / _M53-PF-…")
     # [신설 2026-10-08 / Mark5.3 JF] eval 에도 같이 줄 것(run_tag _JF).
     parser.add_argument("--joint_forward", action="store_true",
-                        help="[Mark5.3 JF] 정답·라벨 없는 클립을 학생에 한 번에 통과(BN = 배치 전체). --m53 과 함께만. run_tag _JF")
+                        help="[Mark5.3 JF] 정답·라벨 없는 클립을 학생에 한 번에 통과(BN = 배치 전체). run_tag _JF")
     args = parser.parse_args()
     # [신설 2026-09-26] 화면에 찍히는 것을 logFiles/<run_tag>__train.log 에도 그대로 남긴다.
     # run_tag 를 알아야 파일 이름이 정해지므로 config 를 먼저 한 번 만든다(텍스트 임베딩은 이때 안 만들어진다).
@@ -1876,7 +1679,7 @@ if __name__ == "__main__":
     _bundle = dict(segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs,
                    hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
                    teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view,
-                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave, m53=args.m53,
+                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave,
                    joint_forward=args.joint_forward)
     _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
                           clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)

@@ -93,6 +93,7 @@ import subprocess
 import sys
 import threading
 import time
+from output_policy import matches_plain_policy
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
@@ -257,8 +258,10 @@ def _artifacts(mark_version, tag):
         "ckpt": os.path.join(PROJECT_ROOT, "model", f"student_model_{tag}.pth"),
         # 학습이 끝까지 갔다는 표식. train_mark5.py 가 에폭 루프를 다 돈 뒤에만 쓴다.
         "loss": os.path.join(plot_dir, f"loss_history_{tag}.csv"),
-        "val": os.path.join(plot_dir, f"performance_summary_{tag}_val.csv"),
-        "test": os.path.join(plot_dir, f"performance_summary_{tag}.csv"),
+        "val": os.path.join(plot_dir, f"performance_summary_{tag}_val_plain.csv"),
+        "test": os.path.join(plot_dir, f"performance_summary_{tag}_plain.csv"),
+        "val_policy": os.path.join(plot_dir, f"output_policy_{tag}_val_plain.json"),
+        "test_policy": os.path.join(plot_dir, f"output_policy_{tag}_plain.json"),
     }
 
 
@@ -272,8 +275,10 @@ def _needs(mark_version, tag, force, skip_test):
     a = _artifacts(mark_version, tag)
     trained = os.path.exists(a["ckpt"]) and os.path.exists(a["loss"])
     need_train = force or not trained
-    need_val = force or not _summary_is_complete(a["val"])
-    need_test = (not skip_test) and (force or not _summary_is_complete(a["test"]))
+    need_val = need_train or not (_summary_is_complete(a["val"]) and
+                matches_plain_policy(a["val_policy"], a["ckpt"], tag, "val"))
+    need_test = (not skip_test) and (need_train or not (_summary_is_complete(a["test"]) and
+                matches_plain_policy(a["test_policy"], a["ckpt"], tag, "test")))
     return need_train, need_val, need_test
 
 
@@ -579,6 +584,7 @@ def main():
                 common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)] + _lab + _lr_args + _extra_tokens
                 train_args = common + _sp + _ps
                 eval_args = common + _sp + (["--pseudo_source", ps] if ps else [])
+            eval_args = eval_args + ["--plain_output"]
             failed_stage = None
 
             # [H2] 자식은 반드시 -u (무버퍼). 안 그러면 죽는 순간의 로그가 사라진다.

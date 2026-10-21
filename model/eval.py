@@ -3,7 +3,6 @@ import sys
 import csv
 import argparse
 import hashlib
-import time
 import json
 
 import matplotlib.pyplot as plt
@@ -11,7 +10,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
-import torch.nn.functional as F
 from sklearn.metrics import (
     accuracy_score,
     auc,
@@ -30,17 +28,8 @@ for p in (PROJECT_ROOT, UTILS_DIR, VILD_DIR):
     if p not in sys.path:
         sys.path.append(p)
 
-from postprocess_utils import (
-    aggregate_segment_probs,
-    apply_abstention,
-    apply_class_pair_calibration,
-    apply_others_calibration,
-    apply_temporal_smoothing,
-    save_visual_explanation,
-    select_others_threshold,
-)
 from vild_config import AudioViLDConfig
-from vild_model import ExpertBinaryHead, LearnableBackgroundEmbedding, build_audio_encoder, build_student_head   # [Mark5.3 OVA]
+from vild_model import build_audio_encoder, build_student_head
 from vild_head import DualBranchStudentHead
 from vild_parser_teacher import AudioParser
 SHARED_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "shared_vild"))
@@ -69,124 +58,12 @@ def _resolve_dataset_csv_path(split: str):
     raise FileNotFoundError(f"[ERROR] {split} 인덱스 파일을 찾을 수 없습니다: {candidates}")
 
 
-_VIS_KEYS = ("tensor", "segment_index", "start_frame", "end_frame")
-
-
-def _slim_segment_records(segment_records):
-    """save_visual_explanation 이 쓰는 필드만 남긴 세그먼트 기록(파형 wave 는 뺀다 — 세그먼트당 64KB 로 가장 크다).
-    [수정 2026-09-22 / 검수] 예전엔 1차 통과(w=config 기본값)의 가중치로 상위 k 만 남겼는데, 최종 판정은 val 이 고른 w·편향으로
-    하므로 그림 안의 세그먼트 확률·가중치와 최종 확률이 서로 어긋났다. 이제 전체 세그먼트를 얇게 들고 있다가 2차 통과에서
-    val 이 고른 w 로 _segment_mix 를 다시 돌려 그린다(클립당 세그먼트 5개 × mel 64×101 ≈ 130KB)."""
-    return [{k: r[k] for k in _VIS_KEYS} for r in segment_records]
-
-
-def _segment_mix(seg_sup, seg_dis, saliency_scores, w, config):
-    """세그먼트별 (지도 헤드 확률, 증류 헤드 확률) 을 w 로 섞고 temporal smoothing 까지 한 세그먼트 확률과,
-    aggregate_segment_probs 의 (클립 확률, 세그먼트 가중치) 를 돌려준다 — 1차 통과와 같은 경로."""
-    segment_probs = [(1.0 - w) * ps + w * pd_ for ps, pd_ in zip(seg_sup, seg_dis)]
-    if config.enable_temporal_smoothing:
-        segment_probs = apply_temporal_smoothing(segment_probs, config.temporal_smoothing_alpha)
-    aggregated, seg_weights = aggregate_segment_probs(segment_probs, saliency_scores, config)
-    return segment_probs, aggregated, seg_weights
-
-
-# ----------------------------------------------------------------------------------------------
-# [신설 2026-09-21 밤 / C·A] val 이 고르는 두 가지 — 증류 헤드 가중치(C)와 클래스별 로짓 편향(A).
-#   둘 다 others 임계값과 같은 자리(val_select)에서, 같은 기준(val Macro F1)으로 고르고 같은 json 에 적는다.
-#   test 는 json 을 읽어 그대로 쓴다. 근거 실측은 vild_config.py 의 distill_eval_weight_candidates / class_bias_grid 주석.
-# ----------------------------------------------------------------------------------------------
-def _clip_prob_from_segments(seg_sup, seg_dis, saliency_scores, w, class_names, config):
-    """세그먼트별 (지도 헤드 확률, 증류 헤드 확률) 을 가중치 w 로 섞어 클립 확률(others 보정 전)까지 만든다 — 1차 통과와 같은 경로."""
-    _, aggregated, _ = _segment_mix(seg_sup, seg_dis, saliency_scores, w, config)
-    return apply_class_pair_calibration(aggregated, class_names, config)
-
-
-def _ova_fuse(prob, o, others_idx, mix):
-    """[신설 2026-10-07 / Mark5.3 OVA] 9클래스 확률 prob 의 others 칸을 (1−mix)·p_others + mix·o 로 바꾸고, 나머지 칸은 비율을 지킨 채
-    합이 1 이 되게 줄이거나 늘린다. o = 1 − (전문가 이진 출력 최대 확률). prob 는 numpy 1차원."""
-    p = np.asarray(prob, dtype=np.float64).copy()
-    new_o = (1.0 - mix) * p[others_idx] + mix * float(o)
-    rest = 1.0 - p[others_idx]
-    mask = np.ones_like(p, dtype=bool); mask[others_idx] = False
-    if rest > 1e-12:
-        p[mask] = p[mask] * (1.0 - new_o) / rest
-    else:
-        p[mask] = (1.0 - new_o) / mask.sum()
-    p[others_idx] = new_o
-    return p.astype(np.float32)
-
-
-def _apply_class_bias(prob_rows, bias_vec):
-    """확률에 exp(편향)을 곱하고 다시 정규화한다(로짓에 편향을 더한 것과 같다). bias_vec 가 전부 0 이면 그대로."""
-    p = np.asarray(prob_rows, dtype=np.float64)
-    if bias_vec is None or not np.any(np.asarray(bias_vec)):
-        return p
-    q = p * np.exp(np.asarray(bias_vec, dtype=np.float64))[None, :]
-    return q / np.maximum(q.sum(axis=1, keepdims=True), 1e-12)
-
-
-def _macro_f1_np(labels, preds, n_cls):
-    """sklearn f1_score(average='macro', labels=range(n_cls), zero_division=0) 과 같은 값을 numpy 로."""
-    cm = np.bincount(labels * n_cls + preds, minlength=n_cls * n_cls).reshape(n_cls, n_cls)
-    tp = np.diag(cm).astype(np.float64); fp = cm.sum(axis=0) - tp; fn = cm.sum(axis=1) - tp
-    prec = np.where(tp + fp > 0, tp / np.maximum(tp + fp, 1), 0.0)
-    rec = np.where(tp + fn > 0, tp / np.maximum(tp + fn, 1), 0.0)
-    f1 = np.where(prec + rec > 0, 2 * prec * rec / np.maximum(prec + rec, 1e-12), 0.0)
-    return float(f1.mean())
-
-
-def _best_rule_f1(prob_rows, labels, class_names, config):
-    """주어진 확률(편향 적용 뒤)에 대해 others 규칙 후보(argmax + direct 격자) 중 최고 val Macro F1 — 빠른 탐색용(numpy).
-    최종 임계값은 select_others_threshold(동률 가운데 규칙 포함)가 다시 고른다."""
-    n_cls = len(class_names); oidx = class_names.index("others")
-    g = getattr(config, "others_threshold_grid", (0.02, 0.95, 0.01))
-    grid = np.round(np.arange(float(g[0]), float(g[1]) + 1e-9, float(g[2])), 4)
-    p = np.asarray(prob_rows); am = p.argmax(axis=1); po = p[:, oidx]
-    best = _macro_f1_np(labels, am, n_cls)
-    # [수정 2026-09-22 / 검수] direct 규칙의 "others 아님" 쪽은 실제 규칙(apply_others_calibration)과 같이 others 열을 빼고
-    # 나머지 8개 중 argmax 다(비교모델 best_rule_f1 도 같음). 9클래스 argmax 를 쓰면 Prob_others < t 인데 argmax 가 others 인
-    # 클립을 others 로 남겨, 편향·w 탐색이 배포 규칙과 다른 F1 표면 위에서 돌았다(val 430클립·격자 94개 중 69개에서 어긋남).
-    masked = p.copy(); masked[:, oidx] = -1.0
-    am8 = masked.argmax(axis=1)
-    for t in grid:
-        best = max(best, _macro_f1_np(labels, np.where(po >= t, oidx, am8), n_cls))
-    return best
-
-
-def _select_class_bias(prob_rows, labels, class_names, config):
-    """[A] 클래스별 로짓 편향(others 제외)을 좌표 상승으로 고른다. 반환 (bias_vec, f1_before, f1_after)."""
-    n_cls = len(class_names); oidx = class_names.index("others")
-    grid_spec = getattr(config, "class_bias_grid", None)
-    bias = np.zeros(n_cls)
-    f0 = _best_rule_f1(prob_rows, labels, class_names, config)
-    if not grid_spec:
-        return bias, f0, f0
-    grid = np.round(np.arange(float(grid_spec[0]), float(grid_spec[1]) + 1e-9, float(grid_spec[2])), 4)
-    best = f0
-    for _ in range(int(getattr(config, "class_bias_rounds", 3))):
-        improved = False
-        for i in range(n_cls):
-            if i == oidx:
-                continue
-            cur = bias[i]; cand_best, cand_val = best, cur
-            for gval in grid:
-                b = bias.copy(); b[i] = gval
-                f = _best_rule_f1(_apply_class_bias(prob_rows, b), labels, class_names, config)
-                if f > cand_best + 1e-12 or (abs(f - cand_best) <= 1e-12 and abs(gval) < abs(cand_val)):
-                    cand_best, cand_val = f, gval
-            if cand_val != cur:
-                bias[i] = cand_val; best = cand_best; improved = True
-        if not improved:
-            break
-    return bias, f0, best
-
-
 def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_n=None, ceiling=False,
              others_threshold=None, labeled_n=None, spill_labeled=False, pseudo_source=None, lr=None, encoder_lr=None,
              no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
              segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
              others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False,
-             bg_weight=None, student_raw_wave=False, m53=None, joint_forward=False):
+             bg_weight=None, student_raw_wave=False, joint_forward=False, plain_output=True):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
     [이식 2026-09-29 / Mark5.2] ablation(A1~A4·H)·격차 대응 묶음(PH·LP·HW·OR·NEG) 플래그도 받는다 — 학습 때와 같은 값을 줘야
     run_tag 가 맞고, PH·H·clip/segment 는 헤드·입력 구조까지 바꾸므로 이름 맞추기 이상의 뜻이 있다.
@@ -196,6 +73,10 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
     student_model_mark5.0_PL_SA_u500_s3.pth 이므로, eval 에도 같은 인자를 줘야 그 파일을 읽는다.
     안 주면 예전처럼 태그 없는 이름을 찾는다(기존 동작 보존).
     """
+    if not plain_output:
+        raise ValueError("This model uses supervised argmax only; calibrated output is unsupported.")
+    if plain_output and others_threshold is not None:
+        raise ValueError("--plain_output 은 지도 갈래의 9-class argmax 를 사용하므로 --others_threshold 와 함께 쓸 수 없습니다.")
     config = AudioViLDConfig(mark_version=mark_version)
     config.experiment_seed = seed_value
     # [신설 2026-09-06] 천장 조건은 태그가 _ceil 이라 --ceiling 을 같이 줘야 그 체크포인트를 찾는다.
@@ -220,13 +101,27 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                                         head_pretrained_hidden=head_pretrained_hidden, lp_epochs=lp_epochs, hard_weight=hard_weight,
                                         others_from_reject=others_from_reject, neg_pl=neg_pl,
                                         teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view,
-                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave, m53=m53,
+                                        bg_weight=bg_weight, student_raw_wave=student_raw_wave,
                                         joint_forward=joint_forward)   # [2026-10-08 / JF] 평가에선 이름(_JF) 맞추기만
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} (체크포인트 이름 맞추기용) · run_tag {config.run_tag}")
     if _ab_txt:
         print(f"[ABLATION] {_ab_txt} · run_tag {config.run_tag}")
     _clip_mode = bool(getattr(config, "student_clip_input", False))
+    if plain_output:
+        if not _clip_mode:
+            raise ValueError("--plain_output 은 클립 입력 모델에만 적용합니다(세그먼트 집계 정책을 바꾸지 않음).")
+        # 학습과 같은 지도 갈래 분류기를 사용하고 평가 보정을 적용하지 않는다.
+        config.distill_branch_eval_weight = 0.0
+        config.distill_eval_weight_candidates = (0.0,)
+        config.class_bias_grid = None
+        config.class_pair_margin_overrides = {}
+        config.others_decision_mode = "argmax"
+        config.others_threshold_mode = "fixed"
+        config.enable_abstention = False
+        config.use_background_override_at_eval = False
+        config.save_visual_explanations = False
+        print("[OUTPUT] 단일 분류 경로: 지도 갈래의 9-class argmax · 증류 변환층 미실행 · 평가 보정 없음")
     if _clip_mode:
         print(f"[A3] 평가 단위 = 클립(파형 {getattr(config, 'student_clip_samples', 48000)}샘플 통째, 조각 1개 취급 → 조각 가중 평균은 가중치 1)")
     device = config.device
@@ -235,12 +130,16 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
     # [추가 2026-08-17] split 이 test 가 아니면 결과 파일명에 _{split} 을 붙여
     # test 결과를 덮어쓰지 않게 한다(mark4.x eval.py 의 out_tag 규칙과 동일).
     out_tag = config.run_tag if split == "test" else f"{config.run_tag}_{split}"
+    if plain_output:
+        out_tag += "_plain"
 
     csv_path = _resolve_dataset_csv_path(split)
     print(f"[INFO] 평가 대상: split={split} · 인덱스={csv_path}")
     test_files = list(csv.DictReader(open(csv_path, newline="", encoding="utf-8")))
     model_path = os.path.join(BASE_DIR, f"student_model_{config.run_tag}.pth")
     checkpoint = load_checkpoint(model_path, map_location=device)
+    if (checkpoint.get("config_metadata") or {}).get("classification_policy") != "supervised_argmax_v1":
+        raise ValueError("Checkpoint was not trained with this single-classifier implementation.")
     # [신설 2026-09-07] 체크포인트 지문. val 이 고른 임계값 json 에 적어 두고 test 가 대조한다
     # (재학습 뒤 옛 json 을 조용히 읽는 사고 방지 — code-reviewer 지적 3).
     with open(model_path, "rb") as _f:
@@ -271,9 +170,9 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
         or checkpoint.get("head")
     )
     if branch_state is not None:
-        branch_head.load_state_dict(branch_state, strict=False)
+        branch_head.load_state_dict(branch_state, strict=True)
     else:
-        print("[WARN] branch_state_dict가 없어 기본 branch head로 평가합니다. 새 모델 재학습이 권장됩니다.")
+        raise ValueError("Checkpoint has no trained branch_state_dict.")
     text_head = build_student_head(config).to(device)   # [H 2026-09-29] config.student_head 로 텍스트 앵커/선형 선택(학습과 같은 함수)
     # [이식 2026-09-26 / Mark5.2] classifier_state_dict 를 헤드에 로드한다. 학습형 로짓 스케일(LT)을 켠 뒤로는
     # 이 줄이 없으면 학습된 온도가 평가에서 조용히 무시된다.
@@ -294,52 +193,9 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
         print(f"[H] 선형 헤드 로드: linear.weight {tuple(_cls_state['linear.weight'].shape)} — 텍스트 앵커·AC/LT 미사용(2026-10-07 D0 본 레시피)")
     elif _cls_state:
         text_head.load_state_dict(_cls_state, strict=False)
-    text_emb = config.get_class_text_embeddings(for_evaluation=True).to(device)
-
-    # [추가] 학습형 background(others) 임베딩 로드. use_background_embedding=False거나
-    # 체크포인트에 없으면(구버전 호환) None으로 두고 아래 max-override 로직을 건너뜀.
-    background_embedding = None
-    if config.use_background_embedding:
-        bg_state = checkpoint.get("background_state_dict")
-        if bg_state is not None:
-            background_embedding = LearnableBackgroundEmbedding(config.embedding_dim).to(device)
-            background_embedding.load_state_dict(bg_state)
-            background_embedding.eval()
-        else:
-            print("[WARN] background_state_dict가 없어 background embedding 없이 평가합니다. 새 모델 재학습이 권장됩니다.")
-
-    # [신설 2026-10-07 / Mark5.3 OVA] 전문가 이진 출력 헤드. 학습 때 OVA 를 켰으면 체크포인트에 반드시 있어야 한다(없으면 조용히 빼지 않고 멈춤).
-    ova_head = None
-    if "OVA" in tuple(getattr(config, "m53_parts", None) or ()):
-        _ova_sd = checkpoint.get("ova_state_dict")
-        if not _ova_sd or "net.2.weight" not in _ova_sd:
-            raise RuntimeError("[ERROR] 체크포인트에 ova_state_dict 가 없습니다 — --m53 의 OVA 없이 학습한 모델이거나 run_tag(_M53)가 어긋난 것입니다.")
-        ova_head = ExpertBinaryHead(config.embedding_dim, int(_ova_sd["net.2.weight"].shape[0]), int(_ova_sd["net.0.weight"].shape[0])).to(device)
-        ova_head.load_state_dict(_ova_sd)
-        ova_head.eval()
-        _ova_mix = float(getattr(config, "m53_ova_eval_mix", 0.5))
-        print(f"[M53/OVA] 전문가 이진 출력 {int(_ova_sd['net.2.weight'].shape[0])}개 로드 — others 확률 = {1 - _ova_mix:g}·p_others + {_ova_mix:g}·(1 − 최대 이진 확률)")
-
-    # [신설 2026-08-22] background embedding 을 others 로짓에 max 로 덮을지 여부.
-    # 기본 False. 켜져 있던 1차 평가에서 430클립 중 417개가 others 로 쏠렸다(자세한 근거는
-    # vild_config.py 의 use_background_override_at_eval 주석).
-    use_bg_override = getattr(config, "use_background_override_at_eval", False)
-    if background_embedding is not None:
-        print(f"[INFO] background override: {'적용' if use_bg_override else '미적용'} "
-              f"(others 로짓을 background embedding 으로 max 덮어쓰기)")
-    # [추가 2026-08-22] others 결정 방식을 로그에 남긴다. 이 값이 결과를 크게 가른다.
-    # [변경 2026-09-07 / Mark5_EXP2] direct 모드의 임계값은 회차마다 val 에서 고른다(아래 "임계값 결정" 참조).
-    _od_mode = getattr(config, "others_decision_mode", "direct")
-    _thr_mode = "fixed" if others_threshold is not None else getattr(config, "others_threshold_mode", "val_select")
-    if _od_mode in ("direct", "argmax"):
-        print(f"[INFO] others 결정 규칙 정하는 법 = {_thr_mode}"
-              + (f" (--others_threshold {others_threshold})" if others_threshold is not None else "")
-              + " · 후보 = argmax(9클래스) + direct(Prob_others >= 임계값이면 others) 격자")
-    else:
-        if others_threshold is not None:
-            print(f"[WARN] others_decision_mode={_od_mode!r} 라 --others_threshold {others_threshold} 는 쓰이지 않습니다.")
-        print(f"[INFO] others 결정: confidence — top_conf<{config.others_confidence_threshold} 또는 "
-              f"margin<{config.others_margin_threshold} 또는 entropy>{config.others_entropy_threshold:.3f} 이면 others 강제")
+    # 선형 분류기는 텍스트 앵커를 사용하지 않는다(체크포인트에도 None).
+    text_emb = (None if getattr(config, "student_head", "text_anchor") == "linear"
+                else config.get_class_text_embeddings(for_evaluation=True).to(device))
 
     encoder.eval()
     branch_head.eval()
@@ -374,8 +230,6 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             continue
 
         segment_probs = []
-        seg_sup, seg_dis = [], []
-        saliency_scores = [record["saliency"] for record in segment_records]
         with torch.no_grad():
             for record in segment_records:
                 seg = record["tensor"]
@@ -387,53 +241,17 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                     base_features = encoder(record["wave"].unsqueeze(0).to(device))
                 else:
                     base_features = encoder(seg)
-                supervised_features, distill_features = branch_head(base_features)
+                supervised_features = branch_head.forward_supervised(base_features)
                 sup_logits = text_head(supervised_features, text_emb)
-                distill_logits = text_head(distill_features, text_emb)
+                # Only this classifier contributes to inference.
+                segment_probs.append(torch.softmax(sup_logits, dim=-1).squeeze(0).cpu().numpy())
 
-                if background_embedding is not None and use_bg_override:
-                    others_idx = class_names.index("others")
-                    bg_norm = F.normalize(background_embedding(), dim=0)
-
-                    sup_norm = F.normalize(supervised_features, dim=1)
-                    sup_bg_logit = (sup_norm @ bg_norm) / text_head.temperature
-                    sup_logits = sup_logits.clone()
-                    sup_logits[:, others_idx] = torch.maximum(sup_logits[:, others_idx], sup_bg_logit)
-
-                    distill_norm = F.normalize(distill_features, dim=1)
-                    distill_bg_logit = (distill_norm @ bg_norm) / text_head.temperature
-                    distill_logits = distill_logits.clone()
-                    distill_logits[:, others_idx] = torch.maximum(distill_logits[:, others_idx], distill_bg_logit)
-
-                w = getattr(config, "distill_branch_eval_weight", 0.5)
-                # [변경 2026-09-21 밤 / C] 두 헤드의 확률을 따로 두고(seg_sup·seg_dis), 섞는 가중치 w 는 val 이 고른다.
-                p_sup = torch.softmax(sup_logits, dim=-1).squeeze(0).cpu().numpy()
-                p_dis = torch.softmax(distill_logits, dim=-1).squeeze(0).cpu().numpy()
-                if ova_head is not None:
-                    # [Mark5.3 OVA] 두 갈래 확률 모두에 같은 o(지도 갈래 특징으로 낸 전문가 이진 출력)를 섞는다.
-                    _o = 1.0 - float(torch.sigmoid(ova_head(supervised_features)).max().item())
-                    _oi = class_names.index("others")
-                    p_sup = _ova_fuse(p_sup, _o, _oi, _ova_mix)
-                    p_dis = _ova_fuse(p_dis, _o, _oi, _ova_mix)
-                seg_sup.append(p_sup); seg_dis.append(p_dis)
-                prob = (1 - w) * p_sup + w * p_dis
-                segment_probs.append(prob)
-
-        if config.enable_temporal_smoothing:
-            segment_probs = apply_temporal_smoothing(segment_probs, config.temporal_smoothing_alpha)
-
-        aggregated, seg_weights = aggregate_segment_probs(segment_probs, saliency_scores, config)
-        calibrated_prob = apply_class_pair_calibration(aggregated, class_names, config)
-        # [추가 2026-08-17] others 보정 전 확률과 그 argmax 를 남긴다.
-        # 이 두 가지가 있어야 others_confidence/margin/entropy 를 바꿨을 때의 결과를
-        # 모델 재실행 없이 CSV 만으로 다시 계산할 수 있다(mark4.x 의 threshold 스윕과 같은 원리).
-        # [변경 2026-09-07] others 판정은 임계값을 정한 뒤 2차 통과에서 한다. 여기서는 모아만 둔다.
+        # Clip input has exactly one prediction; no temporal or class calibration.
+        if len(segment_probs) != 1:
+            raise ValueError("Single-classifier evaluation requires one full-clip prediction.")
+        calibrated_prob = segment_probs[0]
         clip_records.append({
             "path": path, "label": label, "raw_prob": calibrated_prob.copy(),
-            "seg_sup": seg_sup, "seg_dis": seg_dis, "saliency": saliency_scores,      # [C·A] w·편향 재계산용
-            # 시각화가 켜져 있을 때만, 그것도 상위 k 세그먼트만 남긴다(전부 들고 있으면 430클립에 약 160MB — 리뷰 지적 12).
-            # [수정 2026-09-22 / 검수] 그림은 2차 통과에서 val 이 고른 w 로 다시 만들므로 여기서는 얇은 세그먼트 기록만 둔다.
-            "vis": _slim_segment_records(segment_records) if config.save_visual_explanations else None,
         })
 
     # [변경 2026-09-07] 라벨 경고와 "샘플 0개" 검사를 임계값 결정보다 앞에 둔다(리뷰 지적 21).
@@ -448,144 +266,32 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             f"dataset_{split}.csv 라벨이 9-class와 일치하는지 확인하세요."
         )
 
-    # ------------------------------------------------------------------
-    # [신설 2026-09-07 / Mark5_EXP2] others 판정 규칙(운영점) 결정
-    #   fixed      : --others_threshold 로 준 값("argmax" 또는 실수). 없으면 config 의 direct/others_direct_threshold.
-    #   val_select : split=val 이면 지금 모은 확률로 후보(argmax + direct 격자)를 훑어 val Macro F1 최대를 고르고
-    #                json 에 저장(체크포인트 지문 포함), split=test 면 그 json 을 읽고 지문이 맞을 때만 쓴다.
-    # ------------------------------------------------------------------
-    thr_json = os.path.join(plot_dir, f"others_threshold_{config.run_tag}.json")
-    thr_info = {"mode": _thr_mode}
-    if _od_mode not in ("direct", "argmax"):
-        pass                                   # 옛 confidence 규칙은 임계값 개념이 다르다. 그대로 둔다.
-    elif _thr_mode == "fixed":
-        if others_threshold is not None:
-            if str(others_threshold).strip().lower() == "argmax":
-                config.others_decision_mode = "argmax"
-            else:
-                config.others_decision_mode = "direct"
-                config.others_direct_threshold = float(others_threshold)
-        thr_info.update({"rule": config.others_decision_mode,
-                         "threshold": float(config.others_direct_threshold) if config.others_decision_mode == "direct" else None})
-        # [수정 2026-09-22 / 검수] 고정 규칙은 others 판정만 고정한다. val 이 고른 w·클래스 편향(json)은 같은 체크포인트 것이면
-        # 그대로 쓰고, json 이 없거나 다른 체크포인트 것이면 w 기본값·편향 0(옛 동작)으로 두되 어느 쪽인지 로그와 thr_info 에 남긴다.
-        _w_default = float(getattr(config, "distill_branch_eval_weight", 0.5))
-        _w_sel, _bias_vec, _wb_from = _w_default, np.zeros(len(class_names)), None
-        if os.path.exists(thr_json):
-            with open(thr_json, encoding="utf-8") as f:
-                _saved_fx = json.load(f)
-            if _saved_fx.get("run_tag") == config.run_tag and (_saved_fx.get("checkpoint") or {}).get("sha256") == ckpt_fingerprint["sha256"]:
-                _w_sel = float(_saved_fx.get("distill_eval_weight", _w_default))
-                _cb = _saved_fx.get("class_bias") or {}
-                _bias_vec = np.asarray([float(_cb.get(n, 0.0)) for n in class_names])
-                _wb_from = thr_json
-        config.distill_branch_eval_weight = _w_sel
-        for r in clip_records:
-            r["raw_prob_prebias"] = _clip_prob_from_segments(r["seg_sup"], r["seg_dis"], r["saliency"], _w_sel, class_names, config)
-        _raw_b = _apply_class_bias(np.stack([r["raw_prob_prebias"] for r in clip_records]), _bias_vec)
-        for r, row in zip(clip_records, _raw_b):
-            r["raw_prob"] = row.copy()
-        thr_info.update({"distill_eval_weight": _w_sel, "class_bias": {n: float(_bias_vec[i]) for i, n in enumerate(class_names)},
-                         "w_and_bias_from": _wb_from})
-        print(f"[INFO] 고정 규칙 모드: 증류 헤드 가중치 w={_w_sel:g}, 클래스 편향 "
-              f"{{{', '.join(f'{n} {_bias_vec[i]:+g}' for i, n in enumerate(class_names) if _bias_vec[i]) or '없음'}}} — "
-              + (f"{os.path.basename(_wb_from)} 의 값(체크포인트 지문 일치)" if _wb_from else "json 없음/다른 체크포인트 → 기본값(옛 동작)"))
-    elif _thr_mode == "val_select":
-        _lab_np = np.asarray([label_map[r["label"]] for r in clip_records], dtype=int)
-        _w_default = float(getattr(config, "distill_branch_eval_weight", 0.5))
-        _bias_vec = np.zeros(len(class_names)); _w_sel = _w_default; _wa_info = {}
-        if split == "val":
-            # [신설 2026-09-21 밤 / C·A] 증류 헤드 가중치 w 와 클래스별 편향을 val Macro F1 로 고른다(others 규칙은 그 안에서 같이 훑는다).
-            _cands = list(getattr(config, "distill_eval_weight_candidates", ()) or ())
-            if _w_default not in _cands:
-                _cands = [_w_default] + _cands
-            _cands = sorted(set(float(c) for c in _cands), key=lambda c: (abs(c - _w_default), c))   # 동률이면 기본값(0.5)에 가까운 쪽
-            _w_curve = []; _best = None
-            for _w in _cands:
-                _pw = np.stack([_clip_prob_from_segments(r["seg_sup"], r["seg_dis"], r["saliency"], _w, class_names, config) for r in clip_records])
-                _b, _f0, _f1 = _select_class_bias(_pw, _lab_np, class_names, config)
-                _w_curve.append([_w, round(_f0, 6), round(_f1, 6)])
-                if _best is None or _f1 > _best[0] + 1e-12:
-                    _best = (_f1, _w, _b, _f0)
-            _f1_sel, _w_sel, _bias_vec, _f0_sel = _best
-            config.distill_branch_eval_weight = _w_sel
-            for r in clip_records:
-                r["raw_prob_prebias"] = _clip_prob_from_segments(r["seg_sup"], r["seg_dis"], r["saliency"], _w_sel, class_names, config)
-            _raw_pre = np.stack([r["raw_prob_prebias"] for r in clip_records])
-            _raw_b = _apply_class_bias(_raw_pre, _bias_vec)
-            for r, row in zip(clip_records, _raw_b):
-                r["raw_prob"] = row.copy()
-            _wa_info = {"distill_eval_weight": _w_sel, "distill_eval_weight_candidates": _cands, "distill_eval_weight_curve(w, f1_before_bias, f1_after_bias)": _w_curve,
-                        "class_bias": {n: float(_bias_vec[i]) for i, n in enumerate(class_names)},
-                        "class_bias_grid": list(getattr(config, "class_bias_grid", None) or []), "class_bias_rounds": int(getattr(config, "class_bias_rounds", 0)),
-                        "val_macro_f1_w_only": round(_f0_sel, 6), "val_macro_f1_w_and_bias": round(_f1_sel, 6)}
-            print(f"[INFO] 증류 헤드 가중치 val 선택: w={_w_sel:g} (후보 {_cands}) · 클래스 편향 {{{', '.join(f'{n} {_bias_vec[i]:+g}' for i, n in enumerate(class_names) if _bias_vec[i])}}}"
-                  f" · val Macro F1 w만 {_f0_sel:.4f} → 편향까지 {_f1_sel:.4f}")
-            _raw = np.stack([r["raw_prob"] for r in clip_records])
-            _lab = list(_lab_np)
-            rule, best_thr, best_f1, curve = select_others_threshold(_raw, _lab, class_names, config)
-            config.others_decision_mode = rule
-            if rule == "direct":
-                config.others_direct_threshold = best_thr
-            g = getattr(config, "others_threshold_grid", (0.02, 0.95, 0.01))
-            thr_info.update({"rule": rule, "threshold": best_thr, "val_macro_f1_at_threshold": best_f1,
-                             "criterion": getattr(config, "others_threshold_criterion", "macro_f1"),
-                             "grid": [float(g[0]), float(g[1]), float(g[2])], "n_val_clips": len(clip_records),
-                             "candidates": "argmax + direct grid", "curve": curve, "run_tag": config.run_tag,
-                             "checkpoint": ckpt_fingerprint, "selected_at": time.strftime("%Y-%m-%d %H:%M:%S")})
-            thr_info.update(_wa_info)                                     # [C·A] w·편향도 같은 json 에
-            with open(thr_json, "w", encoding="utf-8") as f:
-                json.dump(thr_info, f, ensure_ascii=False, indent=2)
-            _shown = f"direct thr {best_thr:.2f}" if rule == "direct" else "argmax"
-            print(f"[INFO] others 규칙 val 선택: {_shown} (val Macro F1 {best_f1:.4f}) -> {thr_json}")
-        else:
-            if not os.path.exists(thr_json):
-                raise FileNotFoundError(
-                    f"[ERROR] {thr_json} 이 없습니다. others_threshold_mode=val_select 에서는 --split val 을 먼저 돌려 "
-                    f"규칙을 골라야 test 를 평가할 수 있습니다(run_experiments.py 는 이 순서로 돕니다). "
-                    f"옛 고정값으로 보려면 --others_threshold 0.09 를 주십시오.")
-            with open(thr_json, encoding="utf-8") as f:
-                saved = json.load(f)
-            _fp = saved.get("checkpoint") or {}
-            if saved.get("run_tag") != config.run_tag or _fp.get("sha256") != ckpt_fingerprint["sha256"]:
-                raise RuntimeError(
-                    f"[ERROR] {thr_json} 은 지금 체크포인트로 고른 값이 아닙니다"
-                    f"(json run_tag={saved.get('run_tag')} sha256={str(_fp.get('sha256'))[:12]} / "
-                    f"지금 {config.run_tag} sha256={ckpt_fingerprint['sha256'][:12]}). "
-                    f"재학습했으면 --split val 을 다시 돌려 규칙을 다시 고르십시오.")
-            rule = saved.get("rule", "direct")
-            config.others_decision_mode = rule
-            if rule == "direct":
-                config.others_direct_threshold = float(saved["threshold"])
-            thr_info.update({"rule": rule, "threshold": saved.get("threshold"), "from": thr_json})
-            # [신설 2026-09-21 밤 / C·A] val 이 고른 w·편향을 그대로 쓴다. 옛 json(둘 다 없음)이면 w 기본값·편향 0 → 옛 동작.
-            _w_sel = float(saved.get("distill_eval_weight", _w_default))
-            _cb = saved.get("class_bias") or {}
-            _bias_vec = np.asarray([float(_cb.get(n, 0.0)) for n in class_names])
-            config.distill_branch_eval_weight = _w_sel
-            for r in clip_records:
-                r["raw_prob_prebias"] = _clip_prob_from_segments(r["seg_sup"], r["seg_dis"], r["saliency"], _w_sel, class_names, config)
-            _raw_b = _apply_class_bias(np.stack([r["raw_prob_prebias"] for r in clip_records]), _bias_vec)
-            for r, row in zip(clip_records, _raw_b):
-                r["raw_prob"] = row.copy()
-            thr_info.update({"distill_eval_weight": _w_sel, "class_bias": {n: float(_bias_vec[i]) for i, n in enumerate(class_names)}})
-            print(f"[INFO] 증류 헤드 가중치·클래스 편향: val 에서 고른 w={_w_sel:g}, 편향 {{{', '.join(f'{n} {_bias_vec[i]:+g}' for i, n in enumerate(class_names) if _bias_vec[i]) or '없음'}}} 사용")
-            _shown = f"direct thr {float(saved['threshold']):.2f}" if rule == "direct" else "argmax"
-            print(f"[INFO] others 규칙: val 에서 고른 {_shown} 사용 ({thr_json}, 체크포인트 지문 일치)")
-    else:
-        raise ValueError(f"[ERROR] others_threshold_mode={_thr_mode!r} 는 모릅니다. 'val_select' 또는 'fixed'.")
-    if config.others_decision_mode == "direct":
-        print(f"[INFO] others 결정: direct — Prob_others >= {config.others_direct_threshold:g} 이면 others")
-    elif config.others_decision_mode == "argmax":
-        print("[INFO] others 결정: argmax — 9클래스 argmax(others 강제 없음)")
+    for rec in clip_records:
+        rec["raw_prob_prebias"] = rec["raw_prob"].copy()
+    thr_info = {"mode": "plain_output", "rule": "argmax", "threshold": None,
+                "distill_eval_weight": 0.0, "class_bias": {}, "checkpoint": ckpt_fingerprint,
+                "classification_policy": "supervised_argmax_v1",
+                "training_classification_policy": (checkpoint.get("config_metadata") or {}).get("classification_policy"),
+                "run_tag": config.run_tag, "split": split}
+    if plain_output:
+        with open(os.path.join(plot_dir, f"output_policy_{out_tag}.json"), "w", encoding="utf-8") as f:
+            json.dump(thr_info, f, ensure_ascii=False, indent=2)
 
     # 2차 통과: 정해진 임계값으로 판정하고, 기존과 같은 행을 만든다.
     for rec in clip_records:
         path, label = rec["path"], rec["label"]
         raw_prob = rec["raw_prob"]
         raw_pred = int(np.argmax(raw_prob))
-        calibrated_prob, pred, calib_meta = apply_others_calibration(raw_prob.copy(), class_names, config)
-        calibrated_prob, pred, abstained = apply_abstention(calibrated_prob, class_names, config, pred)
+        calibrated_prob, pred = raw_prob.copy(), raw_pred
+        ordered = np.sort(raw_prob)
+        calib_meta = {
+            "forced_to_others": False,
+            "raw_top_conf": float(raw_prob[raw_pred]),
+            "raw_margin": float(ordered[-1] - ordered[-2]),
+            "entropy": float(-(raw_prob * np.log(np.clip(raw_prob, 1e-8, 1.0))).sum() / np.log(len(class_names))),
+            "prob_others": float(raw_prob[class_names.index("others")]),
+        }
+        abstained = False
         all_labels.append(label_map[label])
         all_preds.append(pred)
         all_probs.append(calibrated_prob)
@@ -619,11 +325,6 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
             "raw_margin": calib_meta["raw_margin"],
             "entropy": calib_meta["entropy"],
         })
-        if rec["vis"] is not None:
-            # [수정 2026-09-22 / 검수] 세그먼트 확률·가중치를 최종 판정과 같은 w(config.distill_branch_eval_weight = val 이 고른 값)로 다시 만든다.
-            segment_probs, _, seg_weights = _segment_mix(rec["seg_sup"], rec["seg_dis"], rec["saliency"],
-                                                         float(getattr(config, "distill_branch_eval_weight", 0.5)), config)
-            save_visual_explanation(path, rec["vis"], segment_probs, seg_weights, class_names, calibrated_prob, pred, config, plot_dir)
 
     print(f"[INFO] 유효 {split} 샘플: {len(all_labels)}개")
 
@@ -777,6 +478,8 @@ if __name__ == "__main__":
     # 이 값을 주면 그 값으로 고정해 평가한다(옛 결과 재현·수동 점검용). json 은 건드리지 않는다.
     parser.add_argument("--others_threshold", type=str, default=None,
                         help="others 규칙을 고정: 실수(direct 임계값) 또는 'argmax'. 주지 않으면 val 에서 고른 값 사용")
+    parser.add_argument("--plain_output", action="store_true", default=True,
+                        help="클립 모델의 지도 갈래 9-class argmax. OVA·갈래 혼합·편향·임계값 선택 없이 평가하고 별도 _plain 결과에 저장(학습은 그대로)")
     # [신설 2026-09-28 / ablation A1·A2·A4] 학습(train_mark5.py) 때 준 것과 같은 플래그를 준다(run_tag 맞추기 + A4 는 w=0 고정).
     parser.add_argument("--no_feature_kd", action="store_true", help="[A1] 학습 때 --no_feature_kd 를 줬으면 같이(run_tag _noFKD)")
     parser.add_argument("--pl_min_gap", type=float, default=None, help="[A2] 학습 때 준 --pl_min_gap 과 같은 값(0 이면 run_tag _noGAP)")
@@ -800,8 +503,6 @@ if __name__ == "__main__":
     # (파서가 student 클립 파형을 원본 진폭으로 준다 — 학습 때와 같아야 한다).
     parser.add_argument("--bg_weight", type=float, default=None, help="[BG] 학습 때 준 값(run_tag _BG<값>)")
     parser.add_argument("--student_raw_wave", action="store_true", help="[RW] 학습 때 줬으면 같이(run_tag _RW · 평가 입력도 원본 진폭)")
-    # [신설 2026-10-07 / Mark5.3] 학습 때 준 값과 같이(run_tag _M53, OVA 면 others 확률에 전문가 이진 출력을 섞는다)
-    parser.add_argument("--m53", type=str, default=None, help="[Mark5.3] 학습 때 준 값(all 또는 PF,SK,OVA,FM,CB,SC 중 일부)")
     parser.add_argument("--joint_forward", action="store_true", help="[Mark5.3 JF] 학습 때 줬으면 같이(run_tag _JF, 평가 동작은 같다)")
     args = parser.parse_args()
     # [신설 2026-09-26] logFiles/<run_tag>__eval_<split>.log 에도 남긴다.
@@ -817,15 +518,15 @@ if __name__ == "__main__":
     _bundle = dict(segment_input=args.segment_input, head_pretrained_hidden=args.head_pretrained_hidden, lp_epochs=args.lp_epochs,
                    hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
                    teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view,
-                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave, m53=args.m53,
+                   bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave,
                    joint_forward=args.joint_forward)
     _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
                           clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
-    with RunLogger(PROJECT_ROOT, _c.run_tag, f"eval_{args.split}"):
+    with RunLogger(PROJECT_ROOT, _c.run_tag, f"eval_{args.split}" + ("_plain" if args.plain_output else "")):
         evaluate(mark_version=args.mark_version, split=args.split,
                  seed_value=args.seed, unlabeled_n=args.unlabeled_n, ceiling=args.ceiling,
                  others_threshold=args.others_threshold, labeled_n=args.labeled_n,
                  spill_labeled=args.spill_labeled, pseudo_source=args.pseudo_source,
                  lr=args.lr, encoder_lr=args.encoder_lr,
                  no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
-                 clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
+                 clip_input=args.clip_input, linear_head=args.linear_head, plain_output=args.plain_output, **_bundle)

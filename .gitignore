@@ -10,3 +10,8 @@ data_unlabeled/
 data_val/
 data_test/
 *.wav
+
+# Local verification artifacts are not research results.
+__pycache__/
+verification/
+delivery/

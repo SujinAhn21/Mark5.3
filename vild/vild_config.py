@@ -15,8 +15,7 @@ if SHARED_DIR not in os.sys.path:
 
 from prompt_bank import get_class_synonyms, get_prompt_templates, get_prompt_texts_for_class
 
-# [신설 2026-10-07 / Mark5.3] --m53 부품 이름과 고정 순서(run_tag·로그·검사가 모두 이 순서를 쓴다). 뜻은 __init__ 의 m53_* 주석.
-M53_PARTS = ("PF", "SK", "OVA", "FM", "CB", "SC")
+
 
 class AudioViLDConfig:
     def __init__(self, mark_version="mark5.0"):
@@ -242,19 +241,11 @@ class AudioViLDConfig:
         self.temporal_smoothing_alpha = 0.65
         self.enable_abstention = False
         self.abstention_confidence_threshold = 0.40
-        # [추가] eval 시 supervised_features 로짓과 distill_features 로짓을 섞는 비중.
-        # 0=supervised만, 1=distill만, 0.5=평균
-        self.distill_branch_eval_weight = 0.5
-        # [신설 2026-09-21 밤 / C·A] eval.py 의 val_select 가 others 규칙과 함께 고르는 두 가지.
-        #   C  distill_branch_eval_weight 후보 — 증류 헤드는 가짜 정답으로만 배우므로 0.5 고정이 최선이라는 보장이 없다.
-        #      빈 tuple 이면 위 고정값을 쓴다. val 이 고른 값은 others_threshold json 에 적히고 test 는 그 값을 읽는다.
-        #   A  클래스별 로짓 편향(others 제외 8칸): 2차 학습의 val·test CSV 로 재현하면 편향 {water_shower −1.5, construction −1.0,
-        #      water_toilet +1.25, heavy_impact·dragging +0.5, talking −0.5} 에서 val 0.8907→0.9302, test 0.9233→0.9465 (test 는 선택에 안 씀).
-        #      원인은 가짜 정답 개수가 water_shower 1,640 / construction 1,199 대 water_toilet 619 / dragging 541 로 기운 것.
-        #      격자 (−1.5, 1.5, 0.25) 좌표 상승 3회, 기준은 others 임계값과 같이 val Macro F1. 확률에 exp(편향)을 곱하고 다시 정규화한다.
-        #      class_bias_grid 를 None 으로 두면 편향을 고르지 않는다(옛 동작).
-        self.distill_eval_weight_candidates = (0.0, 0.25, 0.5, 0.75, 1.0)
-        self.class_bias_grid = (-1.5, 1.5, 0.25)
+        # 단일 분류 경로: 증류 변환층은 feature KD 학습에만 사용한다.
+        self.distill_branch_eval_weight = 0.0
+        # 분류 출력은 지도 갈래로 고정하며 평가 시 혼합 비중·클래스 편향을 탐색하지 않는다.
+        self.distill_eval_weight_candidates = (0.0,)
+        self.class_bias_grid = None
         self.class_bias_rounds = 3
         self.explain_topk_segments = 3
         self.save_visual_explanations = False   # [Mark5_EXP2] 반복실험에서는 세그먼트 그림을 안 남긴다
@@ -331,10 +322,9 @@ class AudioViLDConfig:
         # 58% 였고 확신도로는 못 거른다(0.9~0.95 구간 79%). 차이 ≥0.4 를 더하면 채택 37%·정확도 92.5%.
         # 0 이면 옛 동작. 태그 _G<값> 이 붙는다(예: 0.4 → _G04).
         self.pseudo_label_min_gap = 0.4
-        # distill branch 에도 분류 손실(pseudo CE)을 건다.
-        # 지금까지 이 갈래는 feature KD 만 받아 분류를 배운 적이 없는데, eval 에서는
-        # distill_branch_eval_weight=0.5 로 최종 확률의 절반을 차지하고 있었다.
-        self.distill_branch_classify = True
+        # 정답 CE와 가짜 정답 CE는 지도 갈래의 분류기에만 적용한다.
+        self.distill_branch_classify = False
+        self.classification_policy = "supervised_argmax_v1"
         # distill branch 마지막 ReLU. 기본은 뺀다(근거는 vild/vild_head.py docstring).
         self.distill_branch_final_relu = False
 
@@ -492,36 +482,8 @@ class AudioViLDConfig:
         self.neg_pl_beta = 0.0
         # (Mark5.2 본체의 run_tag_suffix 는 여기 없다 — Mark5_EXP2 는 실험 조건 태그 _l/_u/_ceil/_sp/_ps/_s 로 회차를 가른다.)
 
-        # === [신설 2026-10-07 / Mark5.3] 전문가 정보를 더 쓰는 부품 6개 (--m53 all 또는 PF,SK,OVA,FM,CB,SC 중 일부) ===
-        # 근거: 2026-10-07 D0 결과 분석(라벨 2,000 격차 35번 중 others 17번 · 라벨 200 격차 34번 중 machine_noise 16번,
-        #       합의에서 빠진 558클립 중 487클립은 1등 전문가 확신도 ≥0.5 이고 정답이 1·2등 안에 있는 비율 89.7%,
-        #       풀에서 "1 − 전문가 최대 확신도" 의 others 판별 AUROC 0.967, 가짜 정답 클래스 쏠림 dragging 86 / dog_bark 216).
-        #   PF  가짜 정답 CE 를 정답 라벨과 같은 가중치(m53_pl_weight)로, 확신도 가중 없이(EfficientAT 의 합의 라벨 사용과 같은 세기). SoftMatch(ICLR 2023)
-        #   SK  합의에서 빠진 클립에 전문가 확신도로 만든 9칸 부드러운 목표(1·2등 전문가 몫 + others 몫 = 1 − 최대 확신도). IOMatch(ICCV 2023)·SoftMatch
-        #   OVA 학생에 전문가별 이진 출력 8개(별도 MLP)를 붙여 전문가 확신도를 따라 하게 하고, 평가 때 others 확률을 "1 − 최대 이진 확률" 과 섞는다.
-        #       IOMatch(multi-binary)·SSB(ICCV 2023, 분리된 투영)
-        #   FM  학생 EMA 사본이 증강 없는 입력으로 낸 답을, 학생이 증강 입력으로 맞춘다(클래스별 자기 적응 문턱). FixMatch 오디오(Grollmisch 외 EUSIPCO 2023)·FreeMatch(ICLR 2023)
-        #   CB  가짜 정답 클래스 쏠림 보정 — 채택 개수의 역수^p 로 클래스 가중, FM 목표에는 분포 정렬. ACR(CVPR 2023)·분포 정렬 계열
-        #   SC  정답 라벨 + 채택 가짜 정답 특징에 지도 대조 손실(작은 가중). You 외(Scientific Reports 2024)
-        self.m53_parts = None           # None = 끔(옛 동작·체크포인트 기록에도 안 남음). 켜면 M53_PARTS 순서의 tuple
-        self.m53_pl_weight = 1.0        # PF: 가짜 정답 CE 가중치(옛 distill_alpha 0.3 대신)
-        self.m53_soft_weight = 0.5      # SK: 부드러운 목표 CE 가중치(1등 전문가 오답 18.5% 를 감안해 PF 의 절반)
-        self.m53_soft_topk = 2          # SK: 몫을 나눠 주는 전문가 수(정답이 1·2등 안 89.7%)
-        self.m53_ova_weight = 0.5       # OVA: 이진 출력 BCE 가중치
-        self.m53_ova_hidden = 384       # OVA: 별도 MLP 은닉 차원
-        self.m53_ova_eval_mix = 0.5     # OVA: 평가 때 others 확률 = (1−m)·p_others + m·(1 − 최대 이진 확률), 나머지 클래스는 비율 유지 재정규화
-        self.m53_fm_weight = 0.5        # FM: 일관성 CE 가중치
-        self.m53_fm_ema = 0.99          # FM: 학생 EMA 사본의 감쇠(에폭당 약 250 스텝이라 0.999 는 4에폭 뒤처짐 — 조기 종료 7~20에폭에 맞춰 0.99)
-        self.m53_fm_rampup_epochs = 2   # FM: 처음 N 에폭 동안 가중치를 0 → 1 로 선형 증가(무작위 선형 헤드의 첫 답을 믿지 않게)
-        self.m53_fm_momentum = 0.99     # FM: FreeMatch 전역·클래스별 확신도 EMA 및 분포 정렬 평균의 감쇠. 논문값 0.999 는 수십만 스텝 기준이라
-                                        #     우리 학습(에폭당 약 250 스텝 × 7~20에폭)에서는 문턱이 1/9 근처에 머물러 거르지 못한다(2026-10-07 스모크 실측) → 0.99
-        self.m53_cb_power = 0.5         # CB: 클래스 가중 = (평균 채택 수 / 그 클래스 채택 수)^p, [0.5, 2.0] 으로 자름
-        self.m53_sc_weight = 0.1        # SC: 지도 대조 손실 가중치
-        self.m53_sc_temperature = 0.1   # SC: 대조 손실 온도
-        # [신설 2026-10-08 / Mark5.3 JF] 정답 클립과 라벨 없는 클립을 학생에 한 번에 통과시킨다(--joint_forward, run_tag _JF).
-        #   False(옛 동작): 정답만 따로 · 라벨 없음만 따로 통과 → 정답 라벨 200 이면 정답이 배치당 약 1.5개라 지도 손실의 BN 이 1~2개 클립으로 계산된다.
-        #   True: 배치 16개 전체로 BN 을 계산하고 출력을 두 갈래가 잘라 쓴다(손실 식은 그대로). 표준 반지도 기준선의 같은 결함(10-08 수정)과 같은 원인.
-        self.m53_joint_forward = False
+        # Joint forward keeps labeled/unlabeled clips in the same BatchNorm batch.
+        self.joint_forward = False
 
         # === 내부 캐시 ===
         self._text_emb = None
@@ -705,7 +667,7 @@ class AudioViLDConfig:
                            linear_head=False, segment_input=False, head_pretrained_hidden=False, lp_epochs=None,
                            hard_weight=None, others_from_reject=None, neg_pl=None,
                            teacher_seg_mean=False, teacher_clean_view=False,
-                           bg_weight=None, student_raw_wave=False, m53=None, joint_forward=False) -> str:
+                           bg_weight=None, student_raw_wave=False, joint_forward=False) -> str:
         """[신설 2026-09-28 / ablation A1·A2·A4] 명령줄 --no_feature_kd / --pl_min_gap / --no_distill_branch 를 config 에 넣는다.
         EfficientAT-pl(같은 백본·같은 라벨)과의 2%p 차이가 우리가 얹은 부품 중 어디서 나는지 하나씩 빼 보는 실험용.
           A1 no_feature_kd     : use_feature_kd=False — teacher 특징을 따라가는 손실(feature_kd_weight 0.3)을 뺀다.
@@ -783,7 +745,7 @@ class AudioViLDConfig:
             self.distill_branch_classify = False
             self.distill_branch_eval_weight = 0.0
             self.distill_eval_weight_candidates = (0.0,)
-            changed.append("A4 증류 갈래 끔(distill_branch_classify=False · eval w=0 고정)")
+            changed.append("A4 증류 갈래의 분류 끔(feature KD 유지 · eval w=0 고정)")
         if linear_head:
             self.student_head = "linear"
             changed.append(f"H 텍스트 앵커 헤드 → 선형 헤드(nn.Linear {self.embedding_dim}→{len(self.get_classes_for_evaluation())}, "
@@ -811,27 +773,11 @@ class AudioViLDConfig:
         if getattr(self, "clip_merge_rule", "vote") == "mean" and not getattr(self, "student_clip_input", False):
             raise ValueError("[ERROR] --teacher_seg_mean(조각 평균 합의)은 클립 입력 student(mark5.2 기본)에서만 뜻이 있습니다 — "
                              "조각 입력(--segment_input)에는 조각을 클립으로 합치는 단계가 없습니다.")
-        # [신설 2026-10-07 / Mark5.3] --m53 all | PF,SK,OVA,FM,CB,SC (쉼표, 대소문자 무관). 순서는 M53_PARTS 로 고정해 run_tag 가 한 가지가 되게 한다.
-        if m53 is not None and str(m53).strip() != "":
-            _txt = str(m53).strip().upper()
-            _parts = list(M53_PARTS) if _txt == "ALL" else [p.strip() for p in _txt.split(",") if p.strip()]
-            _bad = [p for p in _parts if p not in M53_PARTS]
-            if _bad or not _parts:
-                raise ValueError(f"[ERROR] --m53 에 모르는 부품 {_bad or m53!r}. 허용: all 또는 {','.join(M53_PARTS)} 중 일부(쉼표)")
-            if not getattr(self, "student_clip_input", False) or getattr(self, "student_head", "text_anchor") != "linear":
-                raise ValueError("[ERROR] --m53 은 D0 레시피(클립 입력 mn10 student + --linear_head) 위에서만 씁니다.")
-            self.m53_parts = tuple(p for p in M53_PARTS if p in _parts)
-            # [검수 2026-10-07] PF 는 α 를 m53_pl_weight(1.0)로 바꾼다. 정답 라벨 CE 가중치는 hard_weight 가 None 이면 (1−α) 라서 0 이 된다
-            # (train_mark5.DistillationLoss) — 조용히 정답 라벨을 끄지 않도록 --hard_weight 를 반드시 받는다(D0 레시피는 1.0).
-            if "PF" in self.m53_parts and getattr(self, "hard_weight", None) is None:
-                raise ValueError("[ERROR] --m53 의 PF 는 --hard_weight 와 함께 써야 합니다(없으면 정답 라벨 CE 가중치가 1−α = 0). D0 레시피: --hard_weight 1.0")
-            changed.append("Mark5.3 부품 " + "·".join(self.m53_parts))
-        # [신설 2026-10-08 / Mark5.3 JF] Mark5.3 학습 경로에만 구현했다(--m53 없이 주면 멈춘다 — 옛 경로에는 이 분기가 없다).
         if joint_forward:
-            if not tuple(getattr(self, "m53_parts", None) or ()):
-                raise ValueError("[ERROR] --joint_forward 는 --m53 과 함께만 씁니다(Mark5.3 학습 경로에만 구현).")
-            self.m53_joint_forward = True
-            changed.append("JF 정답·라벨 없는 클립을 학생에 한 번에 통과(BN 이 배치 전체로 계산됨)")
+            if not self.student_clip_input or self.encoder_type != "mn10":
+                raise ValueError("--joint_forward requires a clip-input mn10 student.")
+            self.joint_forward = True
+            changed.append("JF labeled and unlabeled clips share one encoder forward")
         return " / ".join(changed)
 
     @property
@@ -878,14 +824,9 @@ class AudioViLDConfig:
             out += "_BG" + f"{float(_bg):g}".replace(".", "")
         if not getattr(self, "student_wave_normalize", True):
             out += "_RW"
-        # [신설 2026-10-07 / Mark5.3] 여섯 부품 전부면 _M53, 일부면 _M53-PF-SK… (M53_PARTS 순서). 기존 표식의 이름·순서는 그대로다.
-        _m53 = tuple(getattr(self, "m53_parts", ()) or ())
-        if _m53:
-            out += "_M53" if set(_m53) == set(M53_PARTS) else "_M53-" + "-".join(_m53)
-        # [신설 2026-10-08 / Mark5.3 JF] 맨 뒤. 기존 표식의 이름·순서는 그대로다(옛 Mark5.3 결과는 _M53 로 남는다).
-        if getattr(self, "m53_joint_forward", False):
+        if self.joint_forward:
             out += "_JF"
-        return out
+        return out + "_SINGLE"
 
     @property
     def others_entropy_threshold(self) -> float:

@@ -60,5 +60,10 @@ class DualBranchStudentHead(nn.Module):
             distill_layers.append(nn.ReLU(inplace=True))
         self.distill_branch = nn.Sequential(*distill_layers)
 
+    def forward_supervised(self, features):
+        """The prediction path; does not execute the feature KD adapter."""
+        return self.supervised_branch(features)
+
     def forward(self, features):
-        return self.supervised_branch(features), self.distill_branch(features)
+        # Both outputs are needed only when computing feature KD during training.
+        return self.forward_supervised(features), self.distill_branch(features)
