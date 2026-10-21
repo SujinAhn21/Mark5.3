@@ -94,6 +94,7 @@ import sys
 import threading
 import time
 from output_policy import matches_plain_policy
+from experiment_identity import current_experiment_identity, checkpoint_experiment_id
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
@@ -265,7 +266,7 @@ def _artifacts(mark_version, tag):
     }
 
 
-def _needs(mark_version, tag, force, skip_test):
+def _needs(mark_version, tag, force, skip_test, identity_extra_files=None):
     """[H1] 어느 단계를 돌려야 하는지 단계별로 판정한다.
 
     학습은 체크포인트와 완주 표식(loss_history CSV)이 **둘 다** 있어야 끝난 것으로 본다.
@@ -273,7 +274,12 @@ def _needs(mark_version, tag, force, skip_test):
     (파일 머리말의 재검수 반영 항목 참조).
     """
     a = _artifacts(mark_version, tag)
-    trained = os.path.exists(a["ckpt"]) and os.path.exists(a["loss"])
+    current_id, _ = current_experiment_identity(tag, extra_files=identity_extra_files)
+    trained = (
+        os.path.exists(a["ckpt"])
+        and os.path.exists(a["loss"])
+        and checkpoint_experiment_id(a["ckpt"]) == current_id
+    )
     need_train = force or not trained
     need_val = need_train or not (_summary_is_complete(a["val"]) and
                 matches_plain_policy(a["val_policy"], a["ckpt"], tag, "val"))
@@ -531,7 +537,12 @@ def main():
         for l, n, s, sp, ps in combos:
             tag = _run_tag(args.mark_version, s, None if n == "ceil" else n, ceiling=(n == "ceil"), labeled_n=l, spill=sp, ps=ps,
                            lr=sel_lr, encoder_lr=sel_elr, ablation_kw=_ab_kw)
-            need = _needs(args.mark_version, tag, args.force, args.skip_test)
+            identity_extras = (
+                [args.ceiling_csv] if n == "ceil"
+                else [PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s)] if ps
+                else []
+            )
+            need = _needs(args.mark_version, tag, args.force, args.skip_test, identity_extras)
             (todo if any(need) else done).append((l, n, s, sp, ps, tag, need))
 
         for l, n, s, sp, ps, tag, _ in done:
@@ -622,6 +633,8 @@ def main():
             print(f"\n 이 실행의 전체 로그: {master_path}")
             print(f" 단계별 로그       : {LOG_DIR}/<run_tag>__train.log 등")
         print("=" * 78)
+        if fail_list:
+            raise SystemExit(1)
 
     except KeyboardInterrupt:
         # [M7] 인터럽트로 끝나도 어디까지 했는지는 남긴다.

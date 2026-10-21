@@ -143,13 +143,13 @@ def main():
     ap.add_argument("--min_gap", type=float, default=None,
                     help="[2026-09-22 / B] 세그먼트 채택 추가 조건: 1등−2등 전문가 확신도 차이 >= 이 값(기본: config.pseudo_label_min_gap=0.4, 0 이면 옛 동작)")
     ap.add_argument("--min_segments", type=int, default=3, help="클립 채택에 필요한 채택 세그먼트 수(5개 중, 기본 3=과반). 전문가가 클립 단위(K=1)면 1 로 강제")
-    ap.add_argument("--clip_rule", type=str, default="vote", choices=["vote", "mean"],
-                    help="[2026-09-30 밤 / 가짜 정답 재료] 조각 → 클립 합치기 규칙. vote(기본·옛 동작) = 조각 채택 → --min_segments 개 이상 → 다수결. "
+    ap.add_argument("--clip_rule", type=str, default="mean", choices=["vote", "mean"],
+                    help="[teacher release 계약] 조각 → 클립 합치기 규칙. mean(기본) = Mark5.3 온라인 학습과 같은 전문가별 조각 확률 평균. vote는 옛 동작. "
                          "mean = 전문가별로 조각 확신도를 평균한 뒤 클립 단위로 채택(최대 >= min_conf & 1등−2등 >= min_gap, 라벨 = 평균 1등 전문가). "
                          "Mark5.2 학습의 --teacher_seg_mean 과 같은 규칙. 조각 teacher 에서만")
-    ap.add_argument("--others_from_reject", type=float, default=0.0,
+    ap.add_argument("--others_from_reject", type=float, default=0.2,
                     help="[2026-10-01 / 전원 거절(OR)] 위 규칙에서 탈락한 클립 중 전문가 8명의 확신도(조각 평균) 최댓값이 이 값 미만이면 others 로 채택 "
-                         "(confidence = 1 − 최댓값, origin = reject_others). Mark5.2 학습의 --others_from_reject 와 같은 규칙. 0 = 끔(옛 동작). 예 0.2")
+                         "(confidence = 1 − 최댓값, origin = reject_others). Mark5.3 기본 0.2, 0 = 옛 동작.")
     ap.add_argument("--clips_per_batch", type=int, default=8, help="teacher 한 번 호출에 묶는 클립 수(세그먼트 5개씩)")
     ap.add_argument("--limit", type=int, default=0, help="동작 확인용: 앞에서 N 개만. 산출물 이름에 _limitN 이 붙는다")
     ap.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "consensus_labels.csv"))
@@ -346,9 +346,9 @@ def main():
             print(f"[INFO] {i + 1}/{len(rows)}  채택 {len(kept_rows)}  ({time.time() - t0:.0f}s)", flush=True)
     flush(pending)
 
-    # ---- 실패 방어: 절반 이상 못 읽었거나 채택이 0이면 산출물을 쓰지 않고 멈춘다 ----
+    # ---- 실패 방어: 하나라도 못 읽으면 불완전한 release를 쓰지 않는다 ----
     n_bad = n_missing + n_parse_fail
-    if n_bad and n_bad * 2 >= len(rows):      # 절반 이상(정수 나눗셈 함정 피함)
+    if n_bad:
         raise SystemExit(f"[ERROR] {len(rows)}개 중 {n_bad}개를 못 읽었습니다(파일 없음 {n_missing}, 파싱 실패 {n_parse_fail}). "
                          "드라이브 마운트·데이터 폴더를 확인하십시오. 산출물을 쓰지 않습니다.")
     if not any(r["origin"] == "consensus" for r in kept_rows):
@@ -392,6 +392,7 @@ def main():
         "confidence_mean_reject_others": round(float(np.mean([r["confidence"] for r in rej_rows])), 4) if rej_rows else None,
         "segment_confidence_histogram_0.1bins": {f"{edges[k]:.1f}-{edges[k + 1]:.1f}": int(seg_hist[k]) for k in range(10)},
         "teacher_checkpoints": teacher_files,
+        "teacher_release_sha256": teacher.release_identity["teacher_release_sha256"],
         "limit": args.limit, "clips_per_batch": args.clips_per_batch,
         "elapsed_sec_excluding_teacher_load": round(time.time() - t0, 1),
     }

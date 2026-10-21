@@ -54,6 +54,8 @@ _CONFIG_KEYS = [
     "spec_augment_teacher_view",   #   teacher 가 본 입력("augmented"/"clean"). run_tag _CT 와 같은 정보.
     "background_embedding_weight", # [2026-10-01 / 지도만 격차 진단] provenance 용 — BG 보조 손실 가중치(run_tag _BG<값> 과 같은 정보).
     "student_wave_normalize",      #   student 클립 파형을 최대 진폭 1 로 정규화했나(False = 원본 진폭, run_tag _RW 와 같은 정보).
+    "experiment_id",               # 코드·설정·train/val·teacher release의 결합 신원.
+    "teacher_release_sha256",
 ]
 
 # [LR 2026-09-25] 기록만 하고 되돌려 적용하지 않는 키. 학습률은 "이 파일을 만들 때 쓴 값"이지 "이 파일을 읽는 쪽이 써야 할 값"이

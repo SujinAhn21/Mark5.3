@@ -163,13 +163,19 @@ if __name__ == "__main__":
         run_step6b_evaluate_model                   # test (json 의 운영점 사용)
     ]
 
+    success = True
     for step in steps:
         return_code = step()
         if return_code != 0:
             logging.error(f"\n[CRITICAL ERROR] 파이프라인 실패: '{step.__name__}' 단계에서 오류 발생 (종료 코드: {return_code}).")
             logging.error("이후 단계를 생략하고 파이프라인을 중단합니다.")
+            success = False
             break
     
     logging.info("="*50)
-    logging.info(f"[종료] 전체 파이프라인 완료. 로그 파일: {log_file_path}")
+    if success:
+        logging.info(f"[완료] 전체 파이프라인 성공. 로그 파일: {log_file_path}")
+    else:
+        logging.error(f"[실패] 전체 파이프라인 미완료. 로그 파일: {log_file_path}")
     logging.info("="*50)
+    raise SystemExit(0 if success else 1)

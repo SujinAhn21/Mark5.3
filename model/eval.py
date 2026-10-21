@@ -36,6 +36,7 @@ SHARED_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "shared_vild"))
 if SHARED_DIR not in sys.path:
     sys.path.append(SHARED_DIR)
 from checkpoint_utils import load_checkpoint, resolve_state_dict
+from experiment_identity import dataset_identity
 
 
 def _resolve_dataset_csv_path(split: str):
@@ -272,7 +273,8 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                 "distill_eval_weight": 0.0, "class_bias": {}, "checkpoint": ckpt_fingerprint,
                 "classification_policy": "supervised_argmax_v1",
                 "training_classification_policy": (checkpoint.get("config_metadata") or {}).get("classification_policy"),
-                "run_tag": config.run_tag, "split": split}
+                "run_tag": config.run_tag, "split": split,
+                "dataset_identity": dataset_identity(csv_path)}
     if plain_output:
         with open(os.path.join(plot_dir, f"output_policy_{out_tag}.json"), "w", encoding="utf-8") as f:
             json.dump(thr_info, f, ensure_ascii=False, indent=2)
