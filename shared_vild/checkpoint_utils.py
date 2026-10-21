@@ -35,7 +35,8 @@ _CONFIG_KEYS = [
     "learnable_logit_scale",
     "learning_rate",           # [LR 2026-09-25] provenance 용 — 학습률 선정 뒤 "이 파일은 어느 학습률로 만들었나" 를 파일 안에 남긴다.
     "encoder_learning_rate",   #   apply_config_metadata 는 이 둘을 건너뛴다(아래 _PROVENANCE_ONLY_KEYS).
-    "use_feature_kd",          # [ablation 2026-09-28] provenance 용 — 이 student 파일이 어느 부품을 끄고 만들어졌나(A1·A2·A4).
+    "optimizer_name",          # [Prodigy 2026-10-22] provenance 용 — "prodigy"(learning_rate 는 lr 배수 1.0) / 키 없음 = Adam 시절 파일. run_tag _PD 와 같은 정보.
+    "use_feature_kd",         # [ablation 2026-09-28] provenance 용 — 이 student 파일이 어느 부품을 끄고 만들어졌나(A1·A2·A4).
     "pseudo_label_min_gap",    #   run_tag(_noFKD/_noGAP/_noDB)와 같은 정보를 파일 안에도 남긴다. 되돌려 적용하지는 않는다.
     "distill_branch_classify",
     "classification_policy",
@@ -68,7 +69,8 @@ _PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate", "use_feature_
                          "others_from_reject_tau", "neg_pl_tau", "neg_pl_beta", "teacher_clip_input", "clip_input", "clip_frames",
                          "clip_merge_rule", "spec_augment_teacher_view",   # [2026-09-30 밤 / 가짜 정답 재료] 기록만(teacher 파일에 있어도 student 설정을 안 바꾼다)
                          "background_embedding_weight", "student_wave_normalize",   # [2026-10-01 / 지도만 격차 진단] 기록만
-                         "joint_forward"}
+                         "joint_forward",
+                         "optimizer_name"}   # [Prodigy 2026-10-22] 기록만(teacher 파일에 있어도 student 의 옵티마이저·run_tag 를 안 바꾼다)
 
 
 def extract_config_metadata(config) -> dict:

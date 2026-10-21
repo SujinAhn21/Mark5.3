@@ -395,6 +395,12 @@ def main():
     args = ap.parse_args()
 
     mv = args.mark_version
+    # [신설 2026-10-22 / Prodigy] 옵티마이저가 자동 학습률(Prodigy)이면 학습률 선정은 하지 않는다. 이 파일의 _parse_extra·_ABLATION_KW 는
+    # run_experiments.py 가 계속 쓰므로 파일은 남기고, 선정 실행(main)만 막는다.
+    from vild_config import AudioViLDConfig
+    if getattr(AudioViLDConfig(mark_version=mv), "optimizer_name", "adam") == "prodigy":
+        raise SystemExit("[ERROR] 옵티마이저가 Prodigy(자동 학습률)라 학습률 선정을 하지 않습니다(2026-10-22 결정). "
+                         "본실험은 run_experiments.py 를 --lr 없이 돌리십시오(run_tag _PD).")
     kind = _repo_kind(mv)
     extra, cfg = _parse_extra(shlex.split(args.extra) if args.extra else [], kind)
     d_lr, d_elr = _defaults(mv)

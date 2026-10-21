@@ -275,6 +275,15 @@ class AudioViLDConfig:
         self.batch_size = 16
         self.num_epochs = 80
         self.learning_rate = 1e-4
+        # [신설 2026-10-22 / Prodigy] 옵티마이저를 Adam 에서 자동 학습률 Prodigy(utils/prodigy_optim.py, third_party/prodigy)로 바꿨다.
+        # 학습률 선정 실험(select_lr.py)을 없애고 비교모델과 같은 절차를 쓰기 위해서다. Prodigy 의 lr 은 학습률이 아니라 보폭 d 에
+        # 곱하는 배수(1.0 고정 = prodigy_optim.PRODIGY_LR)이고 그룹마다 다르게 줄 수 없으므로, 아래 _default_lrs 스냅샷 전에
+        # learning_rate 를 그 배수로 바꾸고 백본 학습률 분리(encoder_learning_rate)는 없앤다 — 체크포인트에 남는 학습률 기록이
+        # 실제로 쓴 값과 맞게. 위의 1e-4·위쪽 encoder_learning_rate 5e-5 는 Adam 시절(2026-10-21까지) 값이다.
+        # run_tag 에는 _lr/_elr 대신 _PD 가 붙고, 명령줄 --lr/--encoder_lr 은 apply_cli_learning_rates 가 막는다.
+        self.optimizer_name = "prodigy"
+        self.learning_rate = 1.0
+        self.encoder_learning_rate = None
         # [추가 2026-08-17] mark4.x 와 학습 절차를 같게 맞추기 위한 값들.
         # mark4.x 는 weight_decay 가 없어 val best 를 이른 에폭에 찍고 곧장 과적합하던 것을
         # 실측하고 1e-4 를 넣었다. early stopping patience 10 도 mark4.x 와 같은 값이다.
@@ -561,7 +570,8 @@ class AudioViLDConfig:
             _SM / _CT : [2026-09-30 밤 / 가짜 정답 재료] 조각 평균 합의(clip_merge_rule="mean") / teacher 원본 입력(spec_augment_teacher_view="clean") — ablation_tag 의 _NEG 뒤
             _PH / _LP<N> / _HW<g> / _OR<τ> / _NEG : 격차 분석 대응 묶음(2026-09-29 밤: 헤드 단순화 / LP-FT N에폭 / 정답 CE 가중 / 전원 거절→others / 부정 라벨) — ablation_tag
             _BG<g> / _RW : [2026-10-01 / 지도만 격차 진단] BG 보조 손실 가중치가 기본값(0.1)과 다를 때 / student 원본 진폭 파형 — ablation_tag 의 _CT 뒤
-            _lr<g>_elr<g> : 학습률이 기본값과 다를 때 (lr_tag)
+            _lr<g>_elr<g> : 학습률이 기본값과 다를 때 (lr_tag, Adam 시절)
+            _PD    : 옵티마이저가 Prodigy(자동 학습률)일 때 — lr_tag 자리 (2026-10-22~ 기본)
             그 뒤에 실험 조건 태그 _l<n> / _u<n>|_ceil / _sp / _ps<이름> / _s<k> (Mark5_EXP2 전용, 아래 코드 순서)
 
         태그가 갈리는 산출물: student 체크포인트 · 손실곡선 PNG · loss_history CSV ·
@@ -603,7 +613,9 @@ class AudioViLDConfig:
         # _lr<새 층>·_elr<백본> 이 붙는다(기본값이면 옛 태그 그대로 — 지금까지의 산출물과 재개 판정이 안 깨진다).
         # 표기는 비교모델 common/naming.py 와 같은 f"{lr:g}"(예: 5e-05 · 0.0002). 자리는 설정 태그의 맨 끝, 실험 조건 태그
         # (_l/_u/_ceil/_sp/_ps/_s) 앞 — aggregate_results._TAG_RE 는 이 앞부분을 통째로 '설정(base)' 으로 읽는다.
-        tag += self.lr_tag
+        # [변경 2026-10-22 / Prodigy] Prodigy 회차는 학습률 대신 _PD 를 같은 자리에 붙인다. Adam 시절 산출물(_elr0.0001 등)과
+        # 이름이 겹치지 않아 재개 판정이 옛 결과를 완료로 보지 않는다.
+        tag += "_PD" if getattr(self, "optimizer_name", "adam") == "prodigy" else self.lr_tag
         # [추가 2026-08-30 / Mark5_EXP] 실험 조건 태그. None 이면 안 붙는다(0 도 유효 조건이라 "is not None").
         # [추가 2026-09-06] 천장 조건은 _u<n> 자리에 _ceil. [추가 2026-09-17] labeled_n 은 _l<n> 으로 그 앞에.
         #   예: mark5.2_PL_SA_l200_u2000_s1 · mark5.2_PL_SA_l200_ceil_s3 · mark5.2_PL_SA_u0_s2
@@ -632,6 +644,10 @@ class AudioViLDConfig:
         """[신설 2026-09-25 / LR] 명령줄 --lr(새로 만드는 층)·--encoder_lr(사전학습 백본) 을 config 에 넣는다. None 은 그대로(기본값).
         run_tag 가 만들어지기 전(학습·평가 모두 config 생성 직후)에 불러야 산출물 이름이 맞는다. 기본값과 같은 값을 줘도 태그는
         안 바뀐다(lr_tag 는 값으로 비교). 돌려주는 값: 바뀐 것이 있으면 로그용 한 줄, 없으면 ''."""
+        if getattr(self, "optimizer_name", "adam") == "prodigy" and (lr is not None or encoder_lr is not None):
+            # [신설 2026-10-22 / Prodigy] 자동 학습률이라 학습률을 받지 않는다. 조용히 무시하면 "그 값으로 돌렸다" 고 착각한다.
+            raise ValueError(f"[ERROR] 옵티마이저가 Prodigy(자동 학습률)라 --lr/--encoder_lr 을 받지 않습니다(받은 값 lr={lr}, "
+                             f"encoder_lr={encoder_lr}). 학습률 선정(select_lr.py)도 쓰지 않습니다 — 인자를 빼고 다시 실행하십시오.")
         changed = []
         if lr is not None:
             if float(lr) <= 0:

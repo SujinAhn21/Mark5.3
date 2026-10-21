@@ -42,6 +42,7 @@ SHARED_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "shared_vild"))
 if SHARED_DIR not in sys.path:
     sys.path.append(SHARED_DIR)
 from checkpoint_utils import apply_config_metadata, load_checkpoint, resolve_state_dict, save_checkpoint
+from prodigy_optim import PRODIGY_LR, make_prodigy, prodigy_d   # [2026-10-22 / Prodigy] utils/ (UTILS_DIR 는 위에서 sys.path 에 넣었다)
 from experiment_identity import current_experiment_identity
 
 
@@ -1185,7 +1186,16 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     # [2026-09-29 밤 / LP-FT] 백본 = 인코더 파라미터 중 투영층(proj)을 뺀 것. 학습률 분리와 LP 고정이 같은 집합을 쓴다.
     _proj_ids = {id(p) for p in getattr(student_encoder, "proj", nn.Identity()).parameters()}
     _backbone_params = [p for p in _enc_trainable if id(p) not in _proj_ids]
-    if _enc_lr is not None:
+    if getattr(config, "optimizer_name", "adam") == "prodigy":
+        # [신설 2026-10-22 / Prodigy] 그룹 하나 — Prodigy 는 보폭 d 를 모든 파라미터가 공유하고 그룹마다 다른 lr 배수를 받지 않는다
+        # (prodigy.py:151). 파라미터 집합은 아래 두 그룹 갈래(백본 + 투영 + 헤드)와 같다.
+        if _enc_lr is not None:
+            raise ValueError(f"[ERROR] Prodigy 인데 encoder_learning_rate={_enc_lr} 가 있습니다(vild_config 가 None 으로 둔다).")
+        optimizer_params = _enc_trainable + _head_params
+        print(f"[INFO] 학습 파라미터: 백본 {sum(p.numel() for p in _backbone_params):,}개 + "
+              f"새 층(투영·branch·background) {sum(p.numel() for p in optimizer_params) - sum(p.numel() for p in _backbone_params):,}개 "
+              f"— Prodigy 한 그룹(보폭 d 공유)")
+    elif _enc_lr is not None:
         _new_layer_params = [p for p in _enc_trainable if id(p) in _proj_ids] + _head_params
         optimizer_params = [{"params": _backbone_params, "lr": float(_enc_lr)},
                             {"params": _new_layer_params, "lr": config.learning_rate}]
@@ -1212,10 +1222,21 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     # [변경 2026-08-18] 기본값을 config 값(1e-4)과 같게 둔다. 0.0 이면 드라이브에 옛 config 가
     # 올라갔을 때 정규화 없이 조용히 학습된다.
     _weight_decay = getattr(config, "weight_decay", 1e-4)
-    optimizer = optim.Adam(optimizer_params, lr=config.learning_rate, weight_decay=_weight_decay)
+    # [변경 2026-10-22 / Prodigy] Adam(lr 1e-4) -> Prodigy(자동 학습률, utils/prodigy_optim.py). weight decay 는 Adam 때와 같은 결합형 L2,
+    # ReduceLROnPlateau 는 그대로(이제 lr 배수 1.0 을 절반씩 줄인다). 학습률 선정 실험(select_lr.py)은 쓰지 않는다.
+    _use_prodigy = getattr(config, "optimizer_name", "adam") == "prodigy"
+    if _use_prodigy:
+        if float(config.learning_rate) != PRODIGY_LR:
+            raise ValueError(f"[ERROR] Prodigy 의 lr 배수는 {PRODIGY_LR:g} 고정입니다(config.learning_rate={config.learning_rate}).")
+        optimizer = make_prodigy(optimizer_params, weight_decay=_weight_decay)
+    else:
+        optimizer = optim.Adam(optimizer_params, lr=config.learning_rate, weight_decay=_weight_decay)
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
     _patience = getattr(config, "early_stopping_patience", 10)
-    print(f"[INFO] 학습 절차: weight_decay={_weight_decay}, ReduceLROnPlateau(factor=0.5, patience=3), "
+    print(f"[INFO] 학습 절차: "
+          + (f"Prodigy(lr 배수 {PRODIGY_LR:g}, d0 1e-6, decouple=False · third_party/prodigy 1.1.2), " if _use_prodigy
+             else f"Adam(lr {config.learning_rate:g}), ")
+          + f"weight_decay={_weight_decay}, ReduceLROnPlateau(factor=0.5, patience=3), "
           f"early stopping patience={_patience}, best val 체크포인트 저장")
     # [추가 2026-08-30 / Mark5_EXP] 실험 조건을 시작 로그에 못박는다.
     # 25회를 돌리다 보면 "이 산출물이 어느 조건이었지"가 헷갈리므로, 로그만 봐도
@@ -1562,18 +1583,22 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
             _extra += " | LP" if _in_lp else " | FT"
         if getattr(student_classifier, "learnable", False):
             _extra += f" | T={student_classifier.temperature:.4f}"   # [LT] 학습형 스케일이 움직이는지 본다
+        if _use_prodigy:
+            _extra += f" | d={prodigy_d(optimizer):.3g}"   # [2026-10-22 / Prodigy] 보폭 추정값(실제 보폭 = d x lr 배수). 1e-6 에서 커져야 정상
         print(f"[Epoch {epoch+1}] Total {avg_loss:.4f} | Hard {avg_hard:.4f} | Soft {avg_soft:.4f} | Feat {avg_feat:.4f} | BG {avg_bg:.4f} | Val(hard*) {avg_val_hard:.4f}"
               + _extra + f" | {_elapsed:.1f}s")
 
         # [추가 2026-08-17] LR 스케줄 · best 저장 · early stopping (mark4.x 와 같은 절차)
         # [추가 2026-10-22] mark4.x 처럼 학습률이 줄어든 에폭에 [LR] 한 줄을 남긴다. 출력만 추가해 학습 결과는 바뀌지 않는다.
-        # 학습률을 분리했으면 그룹이 [백본, 새 층] 순서로 2개다(위 optimizer_params).
+        # 학습률을 분리했으면 그룹이 [백본, 새 층] 순서로 2개다(위 optimizer_params, Adam 시절). Prodigy 는 1개.
         _prev_lrs = [g["lr"] for g in optimizer.param_groups]
         scheduler.step(avg_val)
         _new_lrs = [g["lr"] for g in optimizer.param_groups]
         if _new_lrs != _prev_lrs:
             _lr_names = ["백본 ", "새 층 "] if len(_new_lrs) == 2 else [""] * len(_new_lrs)
             _lr_change = " · ".join(f"{n}{a:g} -> {b:g}" for n, a, b in zip(_lr_names, _prev_lrs, _new_lrs))
+            if _use_prodigy:   # [2026-10-22 / Prodigy] 줄어드는 것은 학습률이 아니라 d 에 곱하는 배수다
+                _lr_change = f"배수 {_lr_change} (d={prodigy_d(optimizer):.3g})"
             print(f"[LR] {_lr_change} (val={avg_val:.6f})")
         if avg_val < best_val:
             print(f"[EarlyStopping] Val loss {best_val:.6f} -> {avg_val:.6f}. Saving...")

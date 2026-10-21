@@ -81,7 +81,9 @@ def current_experiment_identity(run_tag, extra_files=None):
         if path and os.path.isfile(path):
             data[os.path.basename(path)] = dataset_identity(path)
     code = {}
-    for rel in ("model/train_mark5.py", "vild/vild_config.py", "vild/teacher_fusion.py"):
+    # [2026-10-22 / Prodigy] 옵티마이저 코드(utils/prodigy_optim.py · third_party/prodigy)도 학습 결과를 바꾸므로 신원에 넣는다.
+    for rel in ("model/train_mark5.py", "vild/vild_config.py", "vild/teacher_fusion.py",
+                "utils/prodigy_optim.py", "third_party/prodigy/prodigyopt/prodigy.py"):
         path = os.path.join(PROJECT_ROOT, rel)
         code[rel] = sha256_file(path)
     payload = {

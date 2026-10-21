@@ -212,6 +212,12 @@ def _resolve_learning_rates(args):
     """(새 층 lr, 백본 lr, 출처 설명). 우선순위: 명령줄 --lr/--encoder_lr(하나라도 주면 json 은 안 읽는다) > plots/lr_selected.json
     (--ignore_selected_lr 이 아니면) > None(config 기본값 = 옛 동작). 선정값이 기본값과 같으면 태그가 안 바뀌어 끝난 회차는 [건너뜀] 이 되고,
     다르면 태그에 _lr/_elr 이 붙어 전 회차를 새로 돈다(옛 산출물은 안 덮인다)."""
+    # [신설 2026-10-22 / Prodigy] 자동 학습률이면 학습률을 넘기지 않는다(lr_selected.json 도 안 읽는다). 태그는 _PD.
+    from vild_config import AudioViLDConfig
+    if getattr(AudioViLDConfig(mark_version=args.mark_version), "optimizer_name", "adam") == "prodigy":
+        if args.lr is not None or args.encoder_lr is not None:
+            raise SystemExit("[ERROR] 옵티마이저가 Prodigy(자동 학습률)라 --lr/--encoder_lr 을 받지 않습니다. 인자를 빼고 다시 실행하십시오.")
+        return None, None, "Prodigy 자동 학습률 (학습률 선정·plots/lr_selected.json 을 쓰지 않음, run_tag _PD)"
     if args.lr is not None or args.encoder_lr is not None:
         return args.lr, args.encoder_lr, "명령줄 --lr/--encoder_lr"
     if args.ignore_selected_lr or not os.path.isfile(SELECTED_LR_JSON):
@@ -518,7 +524,8 @@ def main():
             print(f" labeled  : {args.labeled_ns} (0=전량)")
             print(f" unlabeled: {args.unlabeled_ns}")
         print(f" seeds    : {args.seeds}")
-        print(" 학습률   : " + (f"새 층 {sel_lr:g} · 백본 {sel_elr:g}" if sel_lr is not None and sel_elr is not None
+        print(" 학습률   : " + ("자동(Prodigy)" if lr_src.startswith("Prodigy") else   # [2026-10-22 / Prodigy]
+                             f"새 층 {sel_lr:g} · 백본 {sel_elr:g}" if sel_lr is not None and sel_elr is not None
                              else f"새 층 {'기본' if sel_lr is None else f'{sel_lr:g}'} · 백본 {'기본' if sel_elr is None else f'{sel_elr:g}'}")
               + f"  ← {lr_src}")
         if _extra_tokens:
