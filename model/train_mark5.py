@@ -3,6 +3,7 @@ import sys
 import csv
 import argparse
 import hashlib
+import json
 import random          # [추가 2026-08-30 / Mark5_EXP] unlabeled 누적 서브샘플링용 별도 난수기
 import time
 
@@ -41,6 +42,7 @@ SHARED_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "shared_vild"))
 if SHARED_DIR not in sys.path:
     sys.path.append(SHARED_DIR)
 from checkpoint_utils import apply_config_metadata, load_checkpoint, resolve_state_dict, save_checkpoint
+from experiment_identity import current_experiment_identity
 
 
 def _resolve_csv_path(filename, required=True):
@@ -180,11 +182,75 @@ def specialist_config_for(config):
     }
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_teacher_release(specialist_config):
+    """16개 teacher 파일이 한 쌍씩 같은 run이고 공통 전처리 계약을 쓰는지 검증한다."""
+    required = {"run_id", "classes", "target_class", "clip_aggregation",
+                "dataset_index_sha256", "audio_manifest_sha256", "text_anchor_sha256",
+                "teacher_train_sha256", "seed", "best_epoch"}
+    preprocessing_keys = (
+        "visual_view_type", "num_input_channels", "embedding_dim", "segment_length",
+        "segment_hop", "max_segments", "n_mels", "sample_rate", "fft_size", "hop_length",
+        "logit_temperature", "segment_selection_mode",
+    )
+    common_preprocessing = None
+    release_files = []
+    for class_name, paths in specialist_config.items():
+        encoder_path = _resolve_resource_path(paths["encoder_path"])
+        classifier_path = _resolve_resource_path(paths["classifier_path"])
+        encoder_ckpt = load_checkpoint(encoder_path, map_location="cpu")
+        classifier_ckpt = load_checkpoint(classifier_path, map_location="cpu")
+        if int(encoder_ckpt.get("schema_version", 0)) < 2 or int(classifier_ckpt.get("schema_version", 0)) < 2:
+            raise RuntimeError(f"[ERROR] {class_name} teacher는 provenance schema v2로 재학습·반입해야 합니다.")
+        ep = encoder_ckpt.get("provenance") or {}
+        cp = classifier_ckpt.get("provenance") or {}
+        missing = sorted(required - set(ep)) + sorted(required - set(cp))
+        if missing:
+            raise RuntimeError(f"[ERROR] {class_name} teacher provenance 누락: {missing}")
+        if ep != cp or ep["run_id"] != cp["run_id"]:
+            raise RuntimeError(f"[ERROR] {class_name} encoder/classifier가 같은 학습 회차가 아닙니다.")
+        expected_classes = [class_name, "others"]
+        if ep["classes"] != expected_classes or ep["target_class"] != class_name:
+            raise RuntimeError(f"[ERROR] {class_name} 클래스 순서 불일치: {ep['classes']}")
+        if ep["clip_aggregation"] != "mean_probability":
+            raise RuntimeError(f"[ERROR] {class_name} clip aggregation 불일치: {ep['clip_aggregation']}")
+        em = encoder_ckpt.get("config_metadata") or {}
+        cm = classifier_ckpt.get("config_metadata") or {}
+        current = {key: em.get(key) for key in preprocessing_keys}
+        if any(em.get(key) != cm.get(key) for key in preprocessing_keys):
+            raise RuntimeError(f"[ERROR] {class_name} encoder/classifier 전처리 metadata가 다릅니다.")
+        if common_preprocessing is None:
+            common_preprocessing = current
+        elif current != common_preprocessing:
+            raise RuntimeError(f"[ERROR] teacher 8개의 전처리 계약이 다릅니다: {class_name}")
+        ee, ce = encoder_ckpt.get("text_embeddings"), classifier_ckpt.get("text_embeddings")
+        if ee is None or ce is None or not torch.equal(ee, ce):
+            raise RuntimeError(f"[ERROR] {class_name} text anchor 쌍이 다릅니다.")
+        anchor_sha = hashlib.sha256(ce.detach().cpu().contiguous().numpy().tobytes()).hexdigest()
+        if anchor_sha != ep["text_anchor_sha256"]:
+            raise RuntimeError(f"[ERROR] {class_name} text anchor SHA256 불일치")
+        release_files.extend([
+            {"class": class_name, "kind": "encoder", "sha256": _sha256_file(encoder_path), "run_id": ep["run_id"]},
+            {"class": class_name, "kind": "classifier", "sha256": _sha256_file(classifier_path), "run_id": ep["run_id"]},
+        ])
+    payload = json.dumps(release_files, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {"teacher_release_sha256": hashlib.sha256(payload).hexdigest(),
+            "files": release_files, "preprocessing": common_preprocessing}
+
+
 def detect_teacher_clip_input(specialist_config):
     """[신설 2026-09-29 밤 / 클립 전문가] teacher .pth 8개의 provenance(config_metadata.clip_input · clip_frames)를 읽어
     "이 전문가들은 클립 전체(64×301)를 보고 학습됐나" 를 판정한다. Mark4.x 가 2026-09-29 부터 clip_input=True 로 저장한다.
     8개가 섞여 있으면(일부만 클립) 학습을 멈춘다 — 조각 teacher 와 클립 teacher 를 한 앙상블에 섞으면 입력 모양이 다르다.
     돌려주는 값: (clip_input: bool, clip_frames: int). 옛 파일(키 없음)은 조각 단위(False, 301)."""
+    validate_teacher_release(specialist_config)
     flags, frames = {}, set()
     for name, paths in specialist_config.items():
         meta = load_checkpoint(_resolve_resource_path(paths["encoder_path"]), map_location="cpu").get("config_metadata") or {}
@@ -206,6 +272,7 @@ class EnsembleTeacher:
         self.device = device
         self.specialists = {}
         self.embedding_dim = None
+        self.release_identity = validate_teacher_release(specialist_config)
         # [2026-09-29 밤] teacher 입력 단위(클립/조각)는 .pth provenance 로 판정 — train_mark5 가 dataset 을 만들기 전에 같은 함수를 부른다.
         self.clip_input, self.clip_frames = detect_teacher_clip_input(specialist_config)
         self.fusion = None  # WeightedTeacherFusion은 배치마다 재생성하지 않고 1회 생성 후 재사용
@@ -287,18 +354,19 @@ class SemiSupervisedDataset(Dataset):
         self.teacher_frames = int(getattr(config, "teacher_clip_frames", 301) or 301)
         valid_labels = set(config.get_classes_for_evaluation()) if is_labeled else None
 
-        skipped_label_counter = {}
+        errors = []
         for item in file_path_list:
             path = item["path"]
             label = item.get("label")
             if is_labeled and label not in valid_labels:
-                # [추가] 9-class 밖 라벨은 조용히 넘기지 않고 집계
-                skipped_label_counter[label] = skipped_label_counter.get(label, 0) + 1
+                errors.append(f"등록되지 않은 라벨 {label!r}: {path}")
                 continue
+            before = len(self.samples)
             try:
                 if self.clip_mode:
                     out = parser.load_clip_with_segments(path)
                     if out is None:
+                        errors.append(f"클립 파싱 실패: {path}")
                         continue
                     segs = out["segments"]
                     if self.teacher_clip:
@@ -306,7 +374,7 @@ class SemiSupervisedDataset(Dataset):
                         clip_t = _normalize_visual_tensor(out["clip_record"]["tensor"],
                                                           (config.num_input_channels, config.n_mels, self.teacher_frames))
                         if clip_t is None:
-                            print(f"[ERROR] 클립 텐서 모양 불일치: {path}")
+                            errors.append(f"클립 텐서 모양 불일치: {path}")
                             continue
                         teacher_t = clip_t.unsqueeze(0)                                       # [1, C, n_mels, 301]
                         sal, starts = [out["clip_record"]["saliency"]], [0]
@@ -342,21 +410,16 @@ class SemiSupervisedDataset(Dataset):
                         # student 가 mn10(파형 입력)이면 이것을 쓰고 teacher 는 계속 mel 을 쓴다(config.student_input).
                         self.samples.append((seg, record["wave"], label if is_labeled else -1, metadata))
             except Exception as e:
-                print(f"[ERROR] Failed to parse {path}: {e}")
+                errors.append(f"파싱 예외 {path}: {type(e).__name__}: {e}")
+            if len(self.samples) == before:
+                errors.append(f"유효한 입력 텐서 0개: {path}")
 
-        # [추가] 조용한 탈락 방지: 9-class 밖 라벨이 있으면 개수와 함께 보고하고,
-        # labeled인데 유효 샘플이 0개면 즉시 중단(옛 6-class 데이터로 돌리는 사고 방지).
-        if skipped_label_counter:
-            print(
-                f"[WARN] 9-class 밖 라벨로 건너뛴 labeled 파일: {skipped_label_counter} "
-                f"(허용 클래스: {sorted(valid_labels)})"
-            )
-        if is_labeled and len(self.samples) == 0:
-            raise ValueError(
-                f"[ERROR] 유효한 labeled 세그먼트가 0개입니다. 입력 {len(file_path_list)}개가 모두 탈락했습니다. "
-                f"건너뛴 라벨: {skipped_label_counter}. "
-                "데이터 폴더/CSV 라벨이 9-class와 일치하는지 확인하세요."
-            )
+        if errors:
+            preview = "\n".join(errors[:20])
+            more = f"\n... 외 {len(errors) - 20}건" if len(errors) > 20 else ""
+            raise ValueError(f"[ERROR] 데이터 검증 실패 {len(errors)}건:\n{preview}{more}")
+        if len(self.samples) == 0:
+            raise ValueError(f"[ERROR] 유효한 {'labeled' if is_labeled else 'unlabeled'} 샘플이 0개입니다.")
 
     def __len__(self):
         return len(self.samples)
@@ -748,6 +811,11 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     _teacher_clip, _teacher_frames = detect_teacher_clip_input(specialist_config)
     config.teacher_clip_input = bool(_teacher_clip)
     config.teacher_clip_frames = int(_teacher_frames)
+    _identity_extras = [path for path in (pseudo_csv, ceiling_csv) if path]
+    config.experiment_id, _experiment_payload = current_experiment_identity(
+        config.run_tag, extra_files=_identity_extras)
+    config.teacher_release_sha256 = _experiment_payload["teacher_release_sha256"]
+    print(f"[IDENTITY] experiment={config.experiment_id} teacher={config.teacher_release_sha256}")
     if _teacher_clip:
         if not _clip_mode:
             raise ValueError("[ERROR] teacher 8개가 클립 단위(Mark4.x clip_input)로 학습됐는데 student 가 조각 입력(--segment_input)입니다. "
@@ -962,6 +1030,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
 
     train_dataset = SampleListDataset(train_samples)
     val_dataset = SampleListDataset(val_samples)
+    if len(train_dataset) == 0 or len(val_dataset) == 0:
+        raise RuntimeError(f"[ERROR] 빈 train/val dataset: train={len(train_dataset)}, val={len(val_dataset)}")
 
     final_train_dataset = ConcatDataset([train_dataset, unlabeled_dataset])
 
@@ -1467,6 +1537,10 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 val_hard_total += val_hard.item()
         avg_val = val_total / max(1, len(val_loader))
         avg_val_hard = val_hard_total / max(1, len(val_loader))
+        if len(val_loader) == 0 or not torch.isfinite(torch.tensor([avg_val, avg_val_hard])).all():
+            raise FloatingPointError(
+                f"[ERROR] val loader가 비었거나 loss가 NaN/Inf입니다: batches={len(val_loader)}, "
+                f"val={avg_val}, hard={avg_val_hard}")
         val_hist.append(avg_val)
         val_hard_hist.append(avg_val_hard)
 

@@ -154,7 +154,9 @@ class WeightedTeacherFusion:
 
         for class_name, output in specialist_outputs.items():
             logits = output["logits"]
-            features = output["features"]
+            # 분류기는 정규화된 특징으로 로짓을 계산한다. 융합도 같은 단위 벡터를
+            # 사용해야 임의의 feature norm이 확신도 외의 숨은 가중치가 되지 않는다.
+            features = torch.nn.functional.normalize(output["features"], dim=-1)
             probs = torch.softmax(logits, dim=1)
             positive_weight = probs[:, 0:1]
             specialist_weights[class_name] = positive_weight.detach().cpu()

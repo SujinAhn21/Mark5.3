@@ -16,6 +16,7 @@ import profile_efficiency as profile
 import run_experiments as runner
 import select_lr
 import aggregate_results as aggregate
+import output_policy
 from verify_release import verify
 
 
@@ -93,14 +94,15 @@ def main():
     displayed = []
     fixture_scope = dict(scope, ROOT=fixture, LABELED=[0], UNLABELED=[7], SEEDS=[1], display=displayed.append)
     with patch.object(aggregate, 'PROJECT_ROOT', str(fixture)), patch.object(aggregate, 'PLOT_DIR', str(fixture / 'plots')), \
-            patch.object(aggregate, '_FULL_LABELED', None):
+            patch.object(aggregate, '_FULL_LABELED', None), patch.object(output_policy, 'dataset_identity', return_value=None):
         exec(compile(''.join(notebook['cells'][6]['source']), 'notebook-results-fixture', 'exec'), fixture_scope)
     assert len(displayed) == 1 and len(displayed[0]) == 1
     # Ensure retained LR tooling can find the new val outputs if explicitly invoked.
     reports = json.loads((ROOT / 'verification/verification.json').read_text())
     for run in reports['runs']:
         run_root = ROOT / 'verification' / run['path']
-        with patch.object(select_lr, 'PROJECT_ROOT', str(run_root)), patch.object(select_lr, 'PLOT_DIR', str(run_root / 'plots')):
+        with patch.object(select_lr, 'PROJECT_ROOT', str(run_root)), patch.object(select_lr, 'PLOT_DIR', str(run_root / 'plots')), \
+                patch.object(output_policy, 'dataset_identity', return_value=None):
             assert select_lr._needs(run['run_tag'], False) == (False, False)
     report = {'status': 'passed', 'release_files_checked': checked,
               'six_component_code_absent': True, 'removed_cli_rejected': True,
