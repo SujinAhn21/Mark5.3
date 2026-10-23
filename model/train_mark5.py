@@ -44,6 +44,7 @@ if SHARED_DIR not in sys.path:
 from checkpoint_utils import apply_config_metadata, load_checkpoint, resolve_state_dict, save_checkpoint
 from prodigy_optim import PRODIGY_LR, make_prodigy, prodigy_d   # [2026-10-22 / Prodigy] utils/ (UTILS_DIR 는 위에서 sys.path 에 넣었다)
 from experiment_identity import current_experiment_identity
+import label_freshness   # [2026-10-22] 가짜 정답 CSV·교사 캐시가 지금 교사의 최신 판인지 해시로 대조
 
 
 def _resolve_csv_path(filename, required=True):
@@ -140,19 +141,29 @@ def select_labeled_subset(labeled_files, labeled_n, seed, classes):
     return picked, rest
 
 
-def load_pseudo_csv(path, classes):
-    """[신설 2026-09-17 / 8절] CSV(path,label,confidence,…) -> {basename: (label_idx, confidence)}. 라벨은 classes 안이어야 한다."""
+def load_pseudo_csv(path, classes, use_two=True):
+    """[신설 2026-09-17 / 8절] CSV(path,label,confidence,…) -> {basename: (label_idx, confidence, label2_idx)}. 라벨은 classes 안이어야 한다.
+    [2026-10-22 / 두 후보 라벨] 검증 결합기 CSV(make_combiner_labels.py)는 label2·mode 열이 있다. mode=two 행은 label2 에 2등 후보가
+    있고 학생은 '둘 중 하나'만 배운다(학습 루프의 두 후보 손실). use_two=False(--no_two_candidate)면 그 행을 버린다(침묵과 같다).
+    label2 열이 없거나 빈 행은 label2_idx = -1(한 라벨)."""
     lookup = {}
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     if not rows or any(c not in rows[0] for c in ("path", "label")):
         raise ValueError(f"[ERROR] pseudo-label CSV 형식이 아닙니다(path,label 열 필요): {path}")
-    bad = sorted({r["label"] for r in rows if r["label"] not in classes})
+    bad = sorted({r["label"] for r in rows if r["label"] not in classes} |
+                 {r["label2"] for r in rows if (r.get("label2") or "") and r["label2"] not in classes})
     if bad:
         raise ValueError(f"[ERROR] pseudo-label CSV 에 클래스 밖 라벨 {bad}: {path}")
     for r in rows:
         conf = float(r.get("confidence", 1.0) or 1.0)
-        lookup[os.path.basename(r["path"])] = (classes.index(r["label"]), conf)
+        lab2 = r.get("label2") or ""
+        if lab2:
+            if lab2 == r["label"]:
+                raise ValueError(f"[ERROR] 두 후보 행의 label 과 label2 가 같습니다: {r['path']}")
+            if not use_two:
+                continue
+        lookup[os.path.basename(r["path"])] = (classes.index(r["label"]), conf, classes.index(lab2) if lab2 else -1)
     return lookup
 
 
@@ -165,6 +176,45 @@ class _CsvFusion:
         self.uncertainty = 1.0 - confidence
         self.disagreement = torch.zeros_like(confidence)
         self.specialist_weights = {}
+
+
+class _CacheFusion:
+    """[신설 2026-10-22 / 옛 교사 경로 복원] 교사 점수·특징 캐시(클립 단위, K=1)를 EnsembleTeacher 출력과 같은 모양으로 감싼다.
+    p [n, E] 는 전문가 E명의 자기 클래스 확률(make_teacher_scores.py), feats [n, D] 는 융합 특징(같은 실행의 특징 캐시).
+    logits 는 teacher_fusion 의 margin 눈금(담당 칸 = logit(p), others 칸 = −max) — 참고용이고, 라벨·채택은 merge_segments_to_clip(rule='mean')이 p 로 정한다."""
+    def __init__(self, p, feats, spec_names, spec_cls_idx, num_classes, others_idx):
+        pc = p.clamp(1e-6, 1.0 - 1e-6)
+        margin = torch.log(pc) - torch.log1p(-pc)
+        self.logits = torch.zeros(p.shape[0], num_classes, dtype=p.dtype, device=p.device)
+        self.logits[:, spec_cls_idx] = margin
+        self.logits[:, others_idx] = -margin.max(dim=1).values
+        self.features = feats
+        top2 = torch.topk(p, k=2, dim=1).values
+        self.uncertainty = 1.0 - top2[:, 0]
+        self.disagreement = top2[:, 0] - top2[:, 1]
+        self.specialist_weights = {n: p[:, i:i + 1] for i, n in enumerate(spec_names)}
+
+
+def load_teacher_cache(scores_csv, spec_names):
+    """[신설 2026-10-22 / 옛 교사 경로 복원] 점수 캐시(unlabeled 행) + 같은 실행의 특징 캐시 → {basename: (p [E], feat [D])}.
+    둘 다 지금 resources/ 교사의 최신 판인지 먼저 대조한다(label_freshness). 열 순서가 전문가 순서와 다르면 멈춘다."""
+    label_freshness.check_scores(scores_csv)
+    feats_path = os.path.join(os.path.dirname(scores_csv),
+                              os.path.basename(scores_csv).replace("teacher_scores_", "teacher_feats_").replace(".csv", ".pt"))
+    blob = label_freshness.check_features(feats_path, scores_csv)
+    with open(scores_csv, newline="", encoding="utf-8") as f:
+        rows = [r for r in csv.DictReader(f) if r["split"] == "unlabeled"]
+    cols = [k[2:] for k in rows[0] if k.startswith("p_")]
+    if cols != list(spec_names):
+        raise ValueError(f"[ERROR] 점수 캐시의 전문가 순서 {cols} 가 학습 전문가 순서 {list(spec_names)} 와 다릅니다.")
+    feat_idx = {os.path.basename(p): i for i, p in enumerate(blob["paths"])}
+    lookup = {}
+    for r in rows:
+        b = os.path.basename(r["path"])
+        if b not in feat_idx:
+            raise ValueError(f"[ERROR] 특징 캐시에 없는 클립: {r['path']}")
+        lookup[b] = (torch.tensor([float(r["p_" + c]) for c in cols]), blob["features"][feat_idx[b]].float())
+    return lookup, feats_path, int(blob["dim"])
 
 
 def specialist_config_for(config):
@@ -735,7 +785,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
                 segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
                 others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False,
-                bg_weight=None, student_raw_wave=False, joint_forward=False):
+                bg_weight=None, student_raw_wave=False, joint_forward=False, no_two_candidate=False, teacher_cache=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 실험 조건으로 받는다.
     [이식 2026-09-29 / Mark5.2] ablation A1~A4·H 와 격차 분석 대응 묶음(PH·LP-FT·HW·OR·NEG) 플래그를 받는다(vild_config.apply_cli_ablation).
     아무 플래그도 안 주면 mark5.2 기본(클립 입력·조각 teacher 또는 클립 teacher 자동 판정) 그대로다.
@@ -779,7 +829,12 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                                         others_from_reject=others_from_reject, neg_pl=neg_pl,
                                         teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view,
                                         bg_weight=bg_weight, student_raw_wave=student_raw_wave,
-                                        joint_forward=joint_forward)
+                                        joint_forward=joint_forward, no_two_candidate=no_two_candidate,
+                                        teacher_cache=teacher_cache)
+    if teacher_cache and pseudo_csv is not None:
+        raise ValueError("[ERROR] --teacher_cache(옛 교사 경로를 캐시로)와 --pseudo_csv 는 함께 쓸 수 없습니다.")
+    if no_two_candidate and pseudo_csv is None:
+        raise ValueError("[ERROR] --no_two_candidate 는 --pseudo_csv(검증 결합기 가짜 정답)와 함께만 뜻이 있습니다.")
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} · run_tag {config.run_tag}")
     if _ab_txt:
@@ -809,12 +864,23 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     _clip_min_segments = int(getattr(config, "clip_min_segments", 3))
     # [2026-09-29 밤 / 클립 전문가] teacher .pth 8개의 provenance 로 입력 단위를 판정해 config 에 적는다(dataset 이 이 값으로 teacher 텐서를 만든다).
     specialist_config = specialist_config_for(config)
-    _teacher_clip, _teacher_frames = detect_teacher_clip_input(specialist_config)
+    if teacher_cache:
+        # [2026-10-22 / 옛 교사 경로 복원] 교사 캐시 회차: 클립 단위 교사 출력(K=1)을 캐시에서 읽는다. resources/ 의 교사 파일은
+        # 캐시를 만든 판인지 해시로만 대조한다(load_teacher_cache). 데이터셋의 교사 mel 텐서는 클립 1개로 만들어지고 쓰이지 않는다.
+        _teacher_clip, _teacher_frames = True, int(getattr(config, "teacher_clip_frames", 301))
+    elif pseudo_csv is not None:
+        # [2026-10-22 / 검증 결합기] CSV 가짜 정답 회차는 학습 중에 교사를 부르지 않는다. resources/ 에 mn10 교사만 있어도 돌도록
+        # 교사 파일 검사를 건너뛰고 조각 단위로 둔다(데이터셋의 교사 조각 텐서는 만들어지지만 쓰이지 않는다 — 위 [INFO] 참조).
+        _teacher_clip, _teacher_frames = False, int(getattr(config, "teacher_clip_frames", 301))
+    else:
+        _teacher_clip, _teacher_frames = detect_teacher_clip_input(specialist_config)
     config.teacher_clip_input = bool(_teacher_clip)
     config.teacher_clip_frames = int(_teacher_frames)
     _identity_extras = [path for path in (pseudo_csv, ceiling_csv) if path]
+    if teacher_cache:
+        _identity_extras += [teacher_cache, teacher_cache.replace("teacher_scores_", "teacher_feats_").replace(".csv", ".pt")]
     config.experiment_id, _experiment_payload = current_experiment_identity(
-        config.run_tag, extra_files=_identity_extras)
+        config.run_tag, extra_files=_identity_extras, teacher_free=(pseudo_csv is not None or bool(teacher_cache)))
     config.teacher_release_sha256 = _experiment_payload["teacher_release_sha256"]
     print(f"[IDENTITY] experiment={config.experiment_id} teacher={config.teacher_release_sha256}")
     if _teacher_clip:
@@ -822,8 +888,12 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
             raise ValueError("[ERROR] teacher 8개가 클립 단위(Mark4.x clip_input)로 학습됐는데 student 가 조각 입력(--segment_input)입니다. "
                              "클립 teacher 는 클립 student 와만 짝이 됩니다(조각마다 teacher 라벨을 매길 수 없음).")
         _clip_min_segments = 1
+        if teacher_cache:
+            print(f"[TEACHER] 교사 캐시 경로 — 전문가 8개의 클립 점수·융합 특징을 {teacher_cache} 에서 읽음(학습 중 교사 미호출)")
         print(f"[TEACHER] 전문가 8개 = 클립 단위(mel {config.n_mels}×{_teacher_frames}) → 클립당 teacher 출력 1개(K=1), "
               f"채택 = 확신도 ≥ {getattr(config, 'pseudo_label_min_confidence', 0.5)} & 1등−2등 차이 ≥ {getattr(config, 'pseudo_label_min_gap', 0.0):g}")
+    elif pseudo_csv is not None:
+        print("[TEACHER] CSV 가짜 정답 회차 — 학습 중 교사 미사용(resources/ 교사 파일을 검사하지 않음)")
     else:
         print(f"[TEACHER] 전문가 8개 = 조각 단위(mel {config.n_mels}×{config.segment_length} × {config.max_segments})")
     # [신설 2026-09-30 밤 / 가짜 정답 재료] 조각 → 클립 합치기 규칙. "mean"(--teacher_seg_mean)은 조각 teacher 에서만 뜻이 있다(K=1 이면 vote 와 같다).
@@ -831,7 +901,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     _merge_rule = str(getattr(config, "clip_merge_rule", "vote"))
     if _merge_rule not in ("vote", "mean"):
         raise ValueError(f"[ERROR] clip_merge_rule 은 'vote' 또는 'mean' 이어야 합니다: {_merge_rule!r}")
-    if _merge_rule == "mean" and _teacher_clip:
+    if _merge_rule == "mean" and _teacher_clip and not teacher_cache:   # [2026-10-22] 캐시는 클립 점수라 mean(K=1) 그대로
         raise ValueError("[ERROR] --teacher_seg_mean(조각 평균 합의)은 조각 단위 teacher 에서만 씁니다. 지금 resources/ 의 teacher 8개는 "
                          "클립 단위(Mark4.x clip_input)입니다 — Mark5.2 의 preprocessing/import_teachers.py --run_subdir <조각 판 보관 폴더> 로 "
                          "조각 teacher 16개를 넣은 뒤 다시 돌리십시오.")
@@ -1061,6 +1131,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         config.embedding_dim,
         distill_final_relu=getattr(config, "distill_branch_final_relu", False),
         supervised_identity=bool(getattr(config, "head_pretrained_hidden", False)),   # [PH 2026-09-29 밤] 지도 갈래 항등
+        distill_dim=getattr(config, "distill_dim", None),                            # [2026-10-22 / _TC] mn10 교사 특징 길이
     ).to(device)
     student_classifier = build_student_head(config).to(device)   # [H 2026-09-29] config.student_head 로 텍스트 앵커/선형 선택(eval 과 같은 함수)
     student_text_emb = (None if config.student_head == "linear"
@@ -1095,19 +1166,37 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
     if pseudo_csv is not None:
         # [신설 2026-09-17 / 8절] CSV 모드: teacher 8개를 아예 만들지 않는다. 라벨·확신도는 CSV 에서.
         _cpath = pseudo_csv if os.path.isabs(pseudo_csv) else os.path.join(PROJECT_ROOT, pseudo_csv)
-        pseudo_lookup = load_pseudo_csv(_cpath, list(config.get_classes_for_evaluation()))
+        _fresh = label_freshness.check_pseudo_csv(_cpath)   # [2026-10-22] 결합기·고정 규칙 CSV 면 최신 판인지 대조(아니면 멈춤)
+        if _fresh is not None:
+            print(f"[FRESH] {os.path.basename(_cpath)} — 결합기 json·점수 캐시({_fresh['scores_sha256'][:12]})·resources/ 교사와 일치")
+        pseudo_lookup = load_pseudo_csv(_cpath, list(config.get_classes_for_evaluation()), use_two=not no_two_candidate)
         _hit = sum(1 for r in unlabeled_files if os.path.basename(r["path"]) in pseudo_lookup)
+        # [2026-10-22 / 두 후보 라벨] 두 후보 행은 '둘 중 하나' 손실(아래 학습 루프)을 받는다. 그 손실은 가짜 정답 CE 모드에서만 정의된다.
+        _n_two = sum(1 for r in unlabeled_files if pseudo_lookup.get(os.path.basename(r["path"]), (0, 0.0, -1))[2] >= 0)
+        print(f"[INFO] 결합기 가짜 정답: 한 라벨 {_hit - _n_two} · 두 후보 {_n_two}" + (" (--no_two_candidate: 두 후보 행 버림)" if no_two_candidate else ""))
+        if _n_two and not getattr(config, "use_pseudo_label_ce", False):
+            raise ValueError("[ERROR] 두 후보 라벨은 가짜 정답 CE 모드(use_pseudo_label_ce=True)에서만 쓸 수 있습니다.")
         print(f"[INFO] pseudo-label 출처 = {pseudo_source} (CSV {_cpath}) — unlabeled {len(unlabeled_files)}개 중 {_hit}개에 라벨 있음, "
               f"teacher 8개 미사용, feature KD 없음")
         if _hit < len(unlabeled_files):
             print(f"[WARN] CSV 에 없는 unlabeled 클립 {len(unlabeled_files) - _hit}개는 확신도 0 으로 취급돼 학습에서 빠집니다.")
+        ensemble_teacher = None
+    elif teacher_cache:
+        _tcpath = teacher_cache if os.path.isabs(teacher_cache) else os.path.join(PROJECT_ROOT, teacher_cache)
+        teacher_cache_lookup, _tfpath, _tdim = load_teacher_cache(_tcpath, list(specialist_config.keys()))
+        if _tdim != int(getattr(config, "distill_dim", 0) or 0):
+            raise ValueError(f"[ERROR] 특징 캐시 길이 {_tdim} 와 학생 증류 갈래 출력 {config.distill_dim} 이 다릅니다.")
+        _miss = [r["path"] for r in unlabeled_files if os.path.basename(r["path"]) not in teacher_cache_lookup]
+        if _miss:
+            raise ValueError(f"[ERROR] 교사 캐시에 없는 라벨 없는 클립 {len(_miss)}개(예: {_miss[0]}) — make_teacher_scores.py 를 다시 돌리십시오.")
+        print(f"[INFO] 교사 캐시 {_tcpath} · 특징 {_tfpath}({_tdim}) — 최신 판 확인 완료, 라벨 없는 클립 {len(unlabeled_files)}개 모두 있음")
         ensemble_teacher = None
     else:
         ensemble_teacher = EnsembleTeacher(specialist_config, device,
                                            others_rule=_others_rule, score_mode=_score_mode,
                                            use_distribution_alignment=_use_da,
                                            dist_align_tau=_da_tau, dist_align_momentum=_da_mom)
-    if pseudo_lookup is not None:
+    if pseudo_lookup is not None or teacher_cache:
         pass
     elif _score_mode == "margin":
         print("[INFO] teacher fusion: 담당 칸 = margin(target-others), others 칸 = -max(margin)")
@@ -1305,6 +1394,7 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
         epoch_pseudo_kept = 0
         epoch_pseudo_conf_sum = 0.0
         epoch_or_kept = 0          # [OR] 전원 거절로 others 가짜 정답이 된 샘플 수
+        epoch_two_kept = 0         # [2026-10-22 / 두 후보] '둘 중 하나' 손실을 받은 샘플 수
         epoch_neg_samples = 0      # [NEG] 부정 라벨을 받은 샘플 수
         epoch_neg_labels = 0       # [NEG] 그 샘플들의 부정 라벨(클래스) 총수
         epoch_started_at = time.time()
@@ -1387,13 +1477,19 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                 unlabeled_wave = wave[unlabeled_indices] if wave is not None else None
                 if pseudo_lookup is not None:
                     # CSV 모드: one-hot 로짓(argmax 만 쓰이므로 충분)·확신도. 특징은 없다(feature KD 0).
-                    _lab, _conf = [], []
+                    _lab, _conf, _lab2 = [], [], []
                     for bi in unlabeled_indices:
                         _e = pseudo_lookup.get(os.path.basename(metadata_batch[bi]["path"]))
-                        _lab.append(_e[0] if _e else 0); _conf.append(_e[1] if _e else 0.0)
+                        _lab.append(_e[0] if _e else 0); _conf.append(_e[1] if _e else 0.0); _lab2.append(_e[2] if _e else -1)
                     _oh = F.one_hot(torch.tensor(_lab, device=device), num_classes=len(student_label_map)).float()
                     _cf = torch.tensor(_conf, device=device, dtype=torch.float32)
+                    _csv_lab2 = torch.tensor(_lab2, device=device, dtype=torch.long)   # [n] 두 후보의 2등(없으면 −1)
                     fusion_output = _CsvFusion(_oh, None, _cf)
+                elif teacher_cache:
+                    # [2026-10-22 / 옛 교사 경로 복원] 캐시의 클립 점수·융합 특징(K=1). 아래 merge(rule mean)·OR·NEG·특징 정렬은 옛 경로 그대로다.
+                    _ents = [teacher_cache_lookup[os.path.basename(metadata_batch[bi]["path"])] for bi in unlabeled_indices]
+                    fusion_output = _CacheFusion(torch.stack([e[0] for e in _ents]).to(device), torch.stack([e[1] for e in _ents]).to(device),
+                                                 _spec_names, _spec_cls_idx.to(device), len(student_label_map), _others_idx_student)
                 else:
                     fusion_output = ensemble_teacher(teacher_input, student_label_map)
 
@@ -1481,7 +1577,26 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
                         total_neg_loss += _neg_loss.item()
                         epoch_neg_samples += int(_neg_cls.any(dim=1).sum().item())
                         epoch_neg_labels += int(_neg_cls.sum().item())
-                if keep_mask.any():
+                _two_k = None
+                if keep_mask.any() and pseudo_lookup is not None:
+                    _two_k = _csv_lab2[keep_mask] >= 0
+                    if not _two_k.any():
+                        _two_k = None
+                if _two_k is not None:
+                    # [신설 2026-10-22 / 두 후보 라벨] 결합기가 1등·2등 중 하나라고만 확인한 클립(mode=two)은 '둘 중 하나' 손실
+                    # −log(p_1등 + p_2등) 을 받는다(부분 라벨 학습). 한 라벨 클립은 지금과 같은 CE. 두 종류를 확신도 가중 평균 하나로
+                    # 묶어 α 를 곱한다 — 두 후보 행이 없으면 아래 criterion 경로와 같은 값이다. CSV 경로라 특징 KD 는 없다.
+                    _kt = _t_logits[keep_mask].argmax(dim=1)
+                    _lp = F.log_softmax(_u_logits[keep_mask], dim=1)
+                    _lp1 = _lp.gather(1, _kt[:, None]).squeeze(1)
+                    _lp2 = _lp.gather(1, _csv_lab2[keep_mask].clamp_min(0)[:, None]).squeeze(1)
+                    _per = torch.where(_two_k, -torch.logaddexp(_lp1, _lp2), -_lp1)
+                    _w = pseudo_conf[keep_mask] if (_use_pl and _pl_weighting) else torch.ones_like(_per)
+                    soft_loss = (_per * _w).sum() / _w.sum().clamp_min(1e-6)
+                    loss = loss + criterion.alpha * soft_loss
+                    total_soft_loss += soft_loss.item()
+                    epoch_two_kept += int(_two_k.sum().item())
+                elif keep_mask.any():
                     kept_teacher_logits = _t_logits[keep_mask]
                     kept_teacher_feats = _t_feats[keep_mask] if _t_feats is not None else None
                     kept_targets = _t_labels[keep_mask] if _t_labels is not None else kept_teacher_logits.argmax(dim=1)
@@ -1577,6 +1692,8 @@ def train_mark5(seed_value=None, mark_version="mark5.2", unlabeled_n=None, ceili
             _extra = f" | PL채택 {_keep_ratio:.3f}({epoch_pseudo_kept}/{epoch_pseudo_total}) conf {_mean_conf:.3f}"
         if _or_tau > 0:
             _extra += f" | OR→others {epoch_or_kept}"
+        if pseudo_lookup is not None and not no_two_candidate:
+            _extra += f" | 두후보 {epoch_two_kept}"
         if _use_neg:
             _extra += f" | NEG {total_neg_loss / max(1, len(train_loader)):.4f}({epoch_neg_samples}샘플·{epoch_neg_labels}라벨)"
         if _lp_epochs > 0:
@@ -1772,6 +1889,11 @@ if __name__ == "__main__":
     # [신설 2026-10-08 / Mark5.3 JF] eval 에도 같이 줄 것(run_tag _JF).
     parser.add_argument("--joint_forward", action="store_true",
                         help="[Mark5.3 JF] 정답·라벨 없는 클립을 학생에 한 번에 통과(BN = 배치 전체). run_tag _JF")
+    parser.add_argument("--no_two_candidate", action="store_true",
+                        help="[2026-10-22 / 아블레이션] 검증 결합기 가짜 정답의 두 후보 행을 버린다(한 라벨만). --pseudo_csv 와 함께. run_tag _noTWO")
+    parser.add_argument("--teacher_cache", type=str, default=None,
+                        help="[2026-10-22 / 아블레이션 '옛 교사 경로 복원'] 교사 점수 캐시 CSV(plots/teacher_scores_mn10.csv). 같은 실행의 특징 캐시를 "
+                             "함께 읽고, 증류 갈래를 mn10 특징 길이로 바꾼다. run_tag _TC")
     args = parser.parse_args()
     # [신설 2026-09-26] 화면에 찍히는 것을 logFiles/<run_tag>__train.log 에도 그대로 남긴다.
     # run_tag 를 알아야 파일 이름이 정해지므로 config 를 먼저 한 번 만든다(텍스트 임베딩은 이때 안 만들어진다).
@@ -1789,7 +1911,8 @@ if __name__ == "__main__":
                    hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
                    teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view,
                    bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave,
-                   joint_forward=args.joint_forward)
+                   joint_forward=args.joint_forward, no_two_candidate=args.no_two_candidate,
+                   teacher_cache=args.teacher_cache)
     _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
                           clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
     with RunLogger(PROJECT_ROOT, _c.run_tag, "train"):

@@ -103,7 +103,8 @@ def load_student(config, device):
     encoder.load_state_dict(resolve_state_dict(ckpt, "model_state_dict", "encoder_state_dict", "model"))
     # [이식 2026-09-29 / PH] 학습과 같은 구조여야 branch state_dict 가 맞는다(head_pretrained_hidden 이면 supervised branch = Identity).
     branch = DualBranchStudentHead(config.embedding_dim, distill_final_relu=getattr(config, "distill_branch_final_relu", False),
-                                   supervised_identity=bool(getattr(config, "head_pretrained_hidden", False))).to(device)
+                                   supervised_identity=bool(getattr(config, "head_pretrained_hidden", False)),
+                                   distill_dim=getattr(config, "distill_dim", None)).to(device)   # [2026-10-22 / _TC] 학습과 같은 구조
     bs = ckpt.get("branch_state_dict") or ckpt.get("head_state_dict") or ckpt.get("head")
     if bs is not None:
         branch.load_state_dict(bs, strict=False)

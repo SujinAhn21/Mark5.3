@@ -4,6 +4,29 @@
 `--m53`은 더 이상 받지 않는다. 기존 Mark4.x 전문가 8명의 인코더·분류기 체크포인트
 16개는 그대로 teacher로 사용한다.
 
+## 2026-10-23 판: 검증 결합기 설계 (`--preset cmb`, 70회)
+
+설계 문서 "Mark5.3 개선 설계: 검증된 교사 신호와 mn10 교사"를 따른다. 학습 중에 교사를 부르지 않고, 교사 점수 캐시 →
+검증 결합기 → 가짜 정답 CSV 를 미리 만든 뒤 학생이 그 CSV 를 읽는다. 학생 헤드는 선형 헤드(`--linear_head`)라 제로샷은 없다.
+
+| 순서 | 명령 | 하는 일 |
+| --- | --- | --- |
+| 1 | `python model/import_teachers.py --kind mn10 --source_root ../Mark4_series` | mn10 교사 8개 반입(schema·클래스·학습 후 판정 '통과' 확인) → `resources/teacher_manifest_mn10.json` |
+| 1' | `python model/import_teachers.py --source_root ../Mark4_series` | B0 조각 교사 16파일 반입(기본 `--kind segment`) → `resources/teacher_manifest.json` |
+| 2 | `python model/make_teacher_scores.py --teacher_kind mn10` (B0 는 `segment`) | `plots/teacher_scores_<kind>.{csv,json}` (mn10 은 특징 캐시 `teacher_feats_mn10.pt` 도) |
+| 3 | `python model/teacher_gate_report.py --candidate plots/teacher_scores_mn10.csv --reference plots/teacher_scores_segment.csv` | 채택 관문(9클래스 4지표 · 결합기 5겹 교차검증 · 손들기 행렬) → `plots/teacher_gate_*.json` |
+| 4 | `python model/make_combiner_labels.py --scores plots/teacher_scores_<채택>.csv` | `pseudo_labels_{cmb,cmbone,fix}_l<n\|all>_s<seed>.csv` + `plots/combiner/*.json` |
+| 5 | `python model/label_freshness.py` | 교사 → 점수 캐시 → 결합기 CSV 해시 사슬 대조(어긋나면 멈춤) |
+| 6 | `python model/run_experiments.py --mark_version mark5.2 --preset cmb --seeds 1 2 3 4 5` | 14조합 × 5 = 70회(본실험 4 · 곡선 3 · 지도만 1 · 아블레이션 6) |
+| 7 | `python model/aggregate_results.py --split test --main_pseudo_source cmb --bases <본실험 설정>` | 본표·라벨 효율 표(지도만 u0 회차 포함). 비교모델 짝은 `plc` |
+| 8 | `python model/make_paper_tables.py --split test --main_pseudo_source cmb --baseline_raw ...` | 논문 표 |
+
+- 아블레이션 표식: `_noTWO`(두 후보 끔) · `_psfix`(고정 규칙) · `_TC` + `_OR02_NEG`(옛 교사 경로 복원: 교사 점수·특징 캐시로 합의 + 특징 증류 + 전원 거절 + 부정 라벨, 증류 갈래 384→960).
+- 공정한 관문 비교는 같은 새 데이터로 학습한 B0 다. 10-23 이전 3차 교사는 교사 train 이 Mark5.3 정답 라벨과 녹음을 공유해 정답 2,000 지표가 좋게 나온다.
+- 시험: `tests/verify_two_candidate.py` · `tests/verify_teacher_cache.py` · `tests/verify_teacher_gate.py` · `tests/verify_import_mn10.py` · `tests/verify_cmb_aggregation.py`.
+- 코드를 고친 뒤 커밋 전에 `python model/verify_release.py --refresh_source --source_only` 로 `source_manifest.json` 의 source 해시를 다시 계산한다(노트북의 release 검사가 이 해시를 대조한다).
+- 아래 "학습과 추론"·"실행" 절은 10-22 판(교사 합의 가짜 정답, 학습 중 교사 실행)이다. 10-23 판에서는 `_TC` 아블레이션이 이 경로를 캐시로 재현한다.
+
 ## 학습과 추론
 
 학생 mn10 인코더의 일반 특징 → 하나의 9클래스 분류기가 최종 출력을 만든다.
@@ -42,10 +65,22 @@ lr 배수 1.0, 결합형 L2 weight decay 1e-4, `ReduceLROnPlateau(0.5, 3)`과 ea
 비교모델(EfficientAT·PANNs·CED와 표준 반지도 4방법)도 같은 날 같은 Prodigy 설정으로 바꿨다(run_tag `_pd`).
 Mark4.1~4.8 교사는 Adam 1e-4 그대로다 — 교사는 비교 대상이 아니라 제안모델과 비교모델이 함께 쓰는 재료다.
 
-Colab은 [notebooks/Mark5.3 제안모델 실험.ipynb](notebooks/Mark5.3%20제안모델%20실험.ipynb)를 사용한다.
-`RUN_TRAINING=True`가 기본값이므로 **모두 실행**하면 선택 조건의 학습과 val 평가를 실행한다.
-학습률 탐색이나 여러 조건의 자동 확장은 없다.
-`EVALUATE_TEST=True`는 최종 test 평가를 실행한다. 이전 아블레이션 l200 결과를 새 결과로 복사하지 않는다.
+10-22 판의 한 조건 노트북(`Mark5.3 제안모델 실험.ipynb`)은 2026-10-23 에 아래 Colab 노트북으로 바뀌었다(git 이력에 남아 있다).
+
+## Colab 노트북 (2026-10-23 판)
+
+모두 **'모두 실행'** 한 번으로 끝나고, L4 로 돌린다(Blackwell 이면 첫 셀이 멈춘다 · CPU 런타임 허용 · 시간 제한 없음).
+앞 단계를 기다리는 셀은 해시로 최신 판을 확인하므로 동시에 시작해도 된다.
+
+| 노트북 | 하는 일 |
+| --- | --- |
+| `../Mark4.X/notebooks/Mark4.X 교사 학습(B+·B0).ipynb` × 8 | 교사마다 B+(mn10)·B0(조각, `--recipe run3`) 학습. 지금 데이터 인덱스로 끝난 판은 건너뜀 |
+| `notebooks/1 교사 점수·채택 관문.ipynb` | 교사 16개 대기 → 반입(`--kind mn10`·`segment`) → 점수 캐시 → 관문(후보 B+ · 기준 B0) |
+| `notebooks/2 Mark5.3 본실험 70회.ipynb` | 관문 '채택(B+)' 이면 결합기 가짜 정답 → 70회(학습·val·test) → 집계 → 비교모델 24회를 기다려 논문 표. 아니면 멈춤 |
+| `notebooks/3 비교모델 결합기 조건 24회.ipynb` | 비교모델 3개 × (지도만 4 · 결합기 한 라벨 4), seed 1. plc 는 Mark5.3 결합기 CSV 를 기다림 |
+
+- 비교모델은 seed 1 하나라 Mark5.3 과의 seed 짝 검정은 노트북에서 돌리지 않는다(검정 방식 미정).
+- `tests/verify_release_contract.py` 가 세 노트북의 셀 문법·L4 규칙·시간 제한 없음·70회 태그를 확인한다.
 
 ## 파일과 환경
 

@@ -101,7 +101,8 @@ def _label_with_self(config, ckpt_path, pool, device, allow_config_rule=False):
     # [이식 2026-09-29 / PH·H] 학습과 같은 구조여야 state_dict 가 맞는다(head_pretrained_hidden → supervised branch Identity, 헤드는 build_student_head).
     branch = DualBranchStudentHead(config.embedding_dim,
                                    distill_final_relu=getattr(config, "distill_branch_final_relu", False),
-                                   supervised_identity=bool(getattr(config, "head_pretrained_hidden", False))).to(device)
+                                   supervised_identity=bool(getattr(config, "head_pretrained_hidden", False)),
+                                   distill_dim=getattr(config, "distill_dim", None)).to(device)   # [2026-10-22 / _TC] 학습과 같은 구조
     bs = ckpt.get("branch_state_dict") or ckpt.get("head_state_dict") or ckpt.get("head")
     if bs is not None:
         branch.load_state_dict(bs, strict=False)

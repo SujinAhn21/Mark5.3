@@ -109,18 +109,21 @@ _ABLATION_FLAGS = {"--head_pretrained_hidden": 0, "--segment_input": 0, "--clip_
                    "--teacher_seg_mean": 0, "--teacher_clean_view": 0,   # [2026-09-30 밤 / 가짜 정답 재료] 조각 평균 합의(_SM) · teacher 원본 입력(_CT)
                    "--student_raw_wave": 0, "--bg_weight": 1,           # [2026-10-01 / 지도만 격차 진단] student 원본 진폭 파형(_RW) · BG 보조 손실 가중치(_BG<값>)
                    "--lp_epochs": 1, "--hard_weight": 1, "--others_from_reject": 1, "--pl_min_gap": 1, "--neg_pl": 2,
-                   "--joint_forward": 0}                                # [2026-10-08 / Mark5.3 JF] 정답·라벨 없는 클립 한 번에 통과(_JF)
+                   "--joint_forward": 0,                                # [2026-10-08 / Mark5.3 JF] 정답·라벨 없는 클립 한 번에 통과(_JF)
+                   "--no_two_candidate": 0,                             # [2026-10-22 / 두 후보 라벨 끔] 결합기 가짜 정답의 한 라벨만(_noTWO)
+                   "--teacher_cache": 1}                                # [2026-10-22 / 옛 교사 경로 복원] 교사 점수 캐시 CSV(_TC)
 _WHITELIST = {"mark52": dict(_ABLATION_FLAGS),
               "exp2": {**_ABLATION_FLAGS, "--unlabeled_n": 1, "--labeled_n": 1},
               "exp2_runner": dict(_ABLATION_FLAGS)}
 _INT_KEYS = {"--unlabeled_n", "--labeled_n", "--lp_epochs"}
-_STR_KEYS = set()
+_STR_KEYS = {"--teacher_cache"}   # [2026-10-22] 값이 파일 경로
 _ABLATION_KW = {"--head_pretrained_hidden": "head_pretrained_hidden", "--segment_input": "segment_input", "--clip_input": "clip_input",
                 "--no_feature_kd": "no_feature_kd", "--no_distill_branch": "no_distill_branch", "--linear_head": "linear_head",
                 "--teacher_seg_mean": "teacher_seg_mean", "--teacher_clean_view": "teacher_clean_view",
                 "--student_raw_wave": "student_raw_wave", "--bg_weight": "bg_weight",
                 "--lp_epochs": "lp_epochs", "--hard_weight": "hard_weight", "--others_from_reject": "others_from_reject",
-                "--pl_min_gap": "pl_min_gap", "--neg_pl": "neg_pl", "--joint_forward": "joint_forward"}
+                "--pl_min_gap": "pl_min_gap", "--neg_pl": "neg_pl", "--joint_forward": "joint_forward",
+                "--no_two_candidate": "no_two_candidate", "--teacher_cache": "teacher_cache"}
 
 
 def _parse_extra(extra, kind):

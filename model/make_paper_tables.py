@@ -99,7 +99,7 @@ def fmt_ms_tex(values, nd=4):
 
 
 def load_raw(mark_version, split):
-    p = os.path.join(PLOT_DIR, f"aggregate_raw_{mark_version}_{split}.csv")
+    p = os.path.join(PLOT_DIR, f"aggregate_raw_{mark_version}_{split}{AGG_SFX}.csv")
     if not os.path.exists(p):
         raise SystemExit(f"[ERROR] 원자료가 없습니다: {p}\n"
                          f"        먼저 aggregate_results.py 를 돌리십시오.")
@@ -157,7 +157,7 @@ def latency_caption(lat, latex=False):
 
 
 def load_tests(mark_version, split):
-    p = os.path.join(PLOT_DIR, f"aggregate_tests_{mark_version}_{split}.csv")
+    p = os.path.join(PLOT_DIR, f"aggregate_tests_{mark_version}_{split}{AGG_SFX}.csv")
     if not os.path.exists(p):
         return None
     return pd.read_csv(p, encoding="utf-8-sig")
@@ -165,7 +165,7 @@ def load_tests(mark_version, split):
 
 def load_gap(mark_version, split):
     """[2026-09-06] aggregate_results.py 가 낸 메운 비율 표. 없으면 None."""
-    p = os.path.join(PLOT_DIR, f"aggregate_gap_closed_{mark_version}_{split}.csv")
+    p = os.path.join(PLOT_DIR, f"aggregate_gap_closed_{mark_version}_{split}{AGG_SFX}.csv")
     if not os.path.exists(p):
         return None
     return pd.read_csv(p, encoding="utf-8-sig")
@@ -179,8 +179,16 @@ def split_conditions(raw_all):
             raw_all[raw_all["cond"] == "ceil"].reset_index(drop=True))
 
 
-def main_slice(raw_all):
-    """[2026-09-17] 표 1·2 용 "본 조건" 행만: labeled 전량(최댓값), spill 아님, pseudo_source consensus(또는 없음)."""
+# [2026-10-23] aggregate_results.py 는 10-22 단일 분류기 판부터 산출물 이름 끝에 _plain 을 붙인다(eval.py --plain_output 결과만 모은다는 표시).
+# 이 파일은 그 뒤로도 _plain 없는 이름을 읽어 표를 만들지 못했다 — 읽는 이름을 집계가 쓰는 이름에 맞춘다.
+AGG_SFX = "_plain"
+# [2026-10-23 / preset cmb] 본 조건의 가짜 정답 출처 → 비교모델 쪽 짝 조건(aggregate_results.PL_COUNTERPART 와 같은 표).
+PL_COUNTERPART = {"consensus": "pl", "cmb": "plc"}
+
+
+def main_slice(raw_all, main_ps="consensus"):
+    """[2026-09-17] 표 1·2 용 "본 조건" 행만: labeled 전량(최댓값), spill 아님, pseudo_source consensus(또는 없음).
+    [2026-10-23] 출처는 main_ps(preset cmb 결과는 cmb). 지도만(u0) 회차는 출처가 없으므로 늘 넣는다."""
     m = pd.Series(True, index=raw_all.index)
     if "labeled" in raw_all.columns and raw_all["labeled"].notna().any():
         full = raw_all["labeled"].max()
@@ -188,7 +196,8 @@ def main_slice(raw_all):
     if "spill" in raw_all.columns:
         m &= ~raw_all["spill"].astype(str).str.lower().eq("true")
     if "pseudo_source" in raw_all.columns:
-        m &= raw_all["pseudo_source"].fillna("consensus").astype(str).eq("consensus")
+        _u0 = raw_all["unlabeled"].astype(str).isin(["0", "0.0"]) if "unlabeled" in raw_all.columns else False
+        m &= raw_all["pseudo_source"].fillna("consensus").astype(str).eq(main_ps) | _u0
     return raw_all[m].reset_index(drop=True)
 
 
@@ -213,7 +222,8 @@ def load_baseline_raw(paths):
 
 
 _COND_ORDER = {"supervised": 0, "ours": 1, "upper": 2}
-_BASE_COND = {"sup": "supervised (labeled only)", "pl": "+ consensus pseudo-labels", "ceil": "upper (true labels)"}
+_BASE_COND = {"sup": "supervised (labeled only)", "pl": "+ consensus pseudo-labels", "ceil": "upper (true labels)",
+              "plc": "+ combiner pseudo-labels"}                                  # [2026-10-23] 검증 결합기 한 라벨
 _DISPLAY = {"efficientat_mn10": "EfficientAT mn10", "ced_tiny": "CED-Tiny", "panns_cnn6": "PANNs CNN6", "clap_htsat_tiny": "LAION-CLAP (HTSAT-tiny)"}   # [2026-09-17] CLAP 네 번째
 
 
@@ -228,7 +238,7 @@ def _ours_u(cond):
     return float(m.group(1)) if m else np.nan
 
 
-def label_eff_rows(le, base, full_labeled):
+def label_eff_rows(le, base, full_labeled, pl_cond="pl"):
     """표 4 행: [(labeled, 모델, 조건, {지표: 문자열}, n)]. le = paper_table_label_eff csv, base = 비교모델 원자료(없으면 None)."""
     rows = []
     if le is None or le.empty:
@@ -250,7 +260,7 @@ def label_eff_rows(le, base, full_labeled):
         if base is not None:
             bb = base[(base["labeled"].fillna(full_labeled).astype(int) == int(lab)) & (base["unlabeled"].isna())]
             for model in sorted(bb["model"].unique(), key=lambda m: list(_DISPLAY).index(m) if m in _DISPLAY else 9):
-                for cond in ("sup", "pl", "ceil"):
+                for cond in ("sup", pl_cond, "ceil"):            # [2026-10-23] pl_cond: preset cmb 는 plc
                     gg = bb[(bb["model"] == model) & (bb["cond"] == cond)]
                     if gg.empty:
                         continue
@@ -258,7 +268,7 @@ def label_eff_rows(le, base, full_labeled):
     return rows
 
 
-def curve_rows(le, base, lab=200):
+def curve_rows(le, base, lab=200, pl_cond="pl"):
     """표 5 행: labeled=lab 고정, unlabeled 개수별. [(모델, unlabeled 표기, {지표: 문자열|배열}, n)]
     Mark5.2 행은 paper_table_label_eff 의 labeled=lab 행(supervised = u0, ours (uN) = N)에서 온다
     (aggregate_raw_<mv>_<split>.csv 는 본 조건 15회만 담고, 라벨 효율 회차는 label_eff 표에만 있다)."""
@@ -279,7 +289,7 @@ def curve_rows(le, base, lab=200):
             g0 = bb[(bb["model"] == model) & (bb["cond"] == "sup") & bb["unlabeled"].isna()]
             if len(g0):
                 rows.append((_disp(model), "0", {c: g0[c].values for c, _, _ in METRICS}, len(g0)))
-            pl = bb[(bb["model"] == model) & (bb["cond"] == "pl")]
+            pl = bb[(bb["model"] == model) & (bb["cond"] == pl_cond)]
             for u in sorted(pl["unlabeled"].dropna().unique()):
                 g = pl[pl["unlabeled"] == u]
                 rows.append((_disp(model), str(int(u)), {c: g[c].values for c, _, _ in METRICS}, len(g)))
@@ -356,7 +366,7 @@ def load_zeroshot(mark_version, baseline_plot_dirs=(), baseline_cond="pl"):
             fine.setdefault(g, []).append(d)
     return ([(f"Proposed (Mark5.2) {g}", v) for g, v in ours.items()]
             + [(f"LAION-CLAP {g[len('clap_'):]} (zero-shot, no training)", v) for g, v in clap.items()]
-            + [(f"{_disp(g.split('_sup_')[0].split('_pl_')[0].split('_ceil_')[0])} fine-tuned {g}", v) for g, v in fine.items()])
+            + [(f"{_disp(g.split('_sup_')[0].split('_plc_')[0].split('_pl_')[0].split('_ceil_')[0])} fine-tuned {g}", v) for g, v in fine.items()])
 
 
 ZS_COLS = [("zeroshot6", "accuracy", "zero-shot 6 acc"), ("zeroshot6", "macro_precision_new6", "new-6 macro P"),
@@ -428,7 +438,7 @@ def _lat_label(key):
 
 def classwise_rows(mark_version, split):
     """paper_table_classwise_<mv>_<split>.csv (aggregate_results, 본 조건 seed 평균) -> [(class, P, R, F1, N)]"""
-    cw = _load_csv(f"paper_table_classwise_{mark_version}_{split}.csv")
+    cw = _load_csv(f"paper_table_classwise_{mark_version}_{split}{AGG_SFX}.csv")
     if cw is None or cw.empty:
         return []
     out = []
@@ -443,7 +453,7 @@ def classwise_rows(mark_version, split):
 
 def confusion_table(mark_version, split):
     """confusion_sum_<mv>_<split>.csv -> (클래스 목록, 행렬 DataFrame) 또는 (None, None)"""
-    p = os.path.join(PLOT_DIR, f"confusion_sum_{mark_version}_{split}.csv")
+    p = os.path.join(PLOT_DIR, f"confusion_sum_{mark_version}_{split}{AGG_SFX}.csv")
     if not os.path.exists(p):
         return None, None
     cm = pd.read_csv(p, encoding="utf-8-sig", index_col=0)
@@ -489,7 +499,7 @@ def _tests_rows(tests, short_map):
     return out
 
 
-def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=(), baseline_cond="pl"):
+def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=(), baseline_cond="pl", pl_cond="pl"):
     """[2026-09-17 / 11절] 표 4~8 + 추가 검정을 마크다운·LaTeX 두 벌로. 자료가 없는 표는 그 사실을 적고 건너뛴다."""
     md, tex = [], []
     full_labeled = int(raw_all["labeled"].max()) if "labeled" in raw_all.columns and raw_all["labeled"].notna().any() else 0
@@ -510,13 +520,13 @@ def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=(), 
         md += ["(비교모델 efficiency_profile_*.json 이 --baseline_raw 폴더에 없어 Mark5.2 만 표 3 에 있다)", ""]
 
     # 표 4 라벨 효율
-    le = _load_csv(f"paper_table_label_eff_{mark_version}_{split}.csv")
-    rows4 = label_eff_rows(le, base, full_labeled)
+    le = _load_csv(f"paper_table_label_eff_{mark_version}_{split}{AGG_SFX}.csv")
+    rows4 = label_eff_rows(le, base, full_labeled, pl_cond)
     md += ["## 표 4. 라벨 효율(본표) — labeled 개수별, 세 기준선(supervised / ours / upper) + 비교모델", ""]
     if rows4:
         md += _md_table(["Labeled", "Model", "Condition"] + metric_hdr + ["n"],
                         [(lab, mdl, cond, *[cell(vals[c]) for c, _, _ in METRICS], n) for lab, mdl, cond, vals, n in rows4])
-        md += ["", "캡션: mean ± SD over seeds. supervised = labeled 만(u0), ours = labeled + unlabeled 합의 pseudo-label, upper = unlabeled 에 진짜 라벨.",
+        md += ["", "캡션: mean ± SD over seeds. supervised = labeled 만(u0), ours = labeled + unlabeled " + ("검증 결합기 pseudo-label(한 라벨·두 후보)" if pl_cond == "plc" else "합의 pseudo-label") + ", upper = unlabeled 에 진짜 라벨.",
                "비교모델 행은 aggregate_baseline.py 원자료(--baseline_raw)에서 같은 labeled 수준·같은 역할끼리 붙였다.", ""]
         tex_rows, last = [], None
         for lab, mdl, cond, vals, n in rows4:
@@ -530,7 +540,7 @@ def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=(), 
         md += ["(자료 없음 — aggregate_results.py 가 만든 paper_table_label_eff_*.csv 가 없다)", ""]
 
     # 표 5 데이터 효율 곡선(labeled 200)
-    rows5 = curve_rows(le, base, lab=200)
+    rows5 = curve_rows(le, base, lab=200, pl_cond=pl_cond)
     md += ["## 표 5. 데이터 효율 곡선 — labeled 200 고정, unlabeled 개수별", ""]
     if rows5:
         md += _md_table(["Model", "Unlabeled"] + metric_hdr + ["n"],
@@ -545,7 +555,7 @@ def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=(), 
         md += ["(자료 없음 — labeled 200 회차가 원자료에 없다)", ""]
 
     # 표 6 pseudo-label 출처
-    ps = _load_csv(f"paper_table_plsource_{mark_version}_{split}.csv")
+    ps = _load_csv(f"paper_table_plsource_{mark_version}_{split}{AGG_SFX}.csv")
     rows6 = plsource_rows(ps)
     md += ["## 표 6. pseudo-label 출처 비교 — labeled 200 + unlabeled 3,800, 라벨을 붙이는 주체만 바꿈", ""]
     if rows6:
@@ -614,9 +624,9 @@ def build_extra(mark_version, split, raw_all, base, lat, baseline_plot_dirs=(), 
         md += ["(자료 없음 — aggregate_results.py 가 만든 paper_table_classwise_*.csv 가 없다)", ""]
 
     # 추가 검정
-    extra_tests = [("라벨 효율 (수준별 u0 vs u<max>, u<max> vs ceil)", _load_csv(f"aggregate_tests_label_eff_{mark_version}_{split}.csv")),
-                   ("pseudo-label 출처 (consensus 대비)", _load_csv(f"aggregate_tests_plsource_{mark_version}_{split}.csv")),
-                   ("비교모델 대비 (seed 짝지음)", _load_csv(f"aggregate_tests_vs_baseline_{mark_version}_{split}.csv"))]
+    extra_tests = [("라벨 효율 (수준별 u0 vs u<max>, u<max> vs ceil)", _load_csv(f"aggregate_tests_label_eff_{mark_version}_{split}{AGG_SFX}.csv")),
+                   ("pseudo-label 출처 (consensus 대비)", _load_csv(f"aggregate_tests_plsource_{mark_version}_{split}{AGG_SFX}.csv")),
+                   ("비교모델 대비 (seed 짝지음)", _load_csv(f"aggregate_tests_vs_baseline_{mark_version}_{split}{AGG_SFX}.csv"))]
     any_t = False
     for title, t in extra_tests:
         rows_t = _tests_rows(t, None)
@@ -907,12 +917,15 @@ def main():
                     help="비교모델 결과 CSV(열: model + 지표 5종). 표 1 에 행으로 붙는다.")
     ap.add_argument("--baseline_raw", type=str, nargs="*", default=[],
                     help="[2026-09-17 / 11절] 비교모델 원자료 aggregate_raw_<model>_<split>.csv 들 — 표 4·5 에 비교모델 행이 붙는다")
-    ap.add_argument("--baseline_cond", type=str, default="pl", choices=["pl", "sup", "ceil", "all"],
+    ap.add_argument("--baseline_cond", type=str, default="pl", choices=["pl", "plc", "sup", "ceil", "all"],
                     help="[2026-10-02] 표 8 의 '학습 뒤(파인튜닝한) 비교모델' 제로샷 행에 넣을 조건. 기본 pl(우리 모델 u2000 과 같은 조건)")
+    ap.add_argument("--main_pseudo_source", type=str, default="consensus",
+                    help="[2026-10-23] 본 조건의 가짜 정답 출처(aggregate_results 에 준 값과 같게). preset cmb 결과는 cmb — 비교모델 짝은 plc")
     args = ap.parse_args()
+    pl_cond = PL_COUNTERPART.get(args.main_pseudo_source, "pl")
 
     raw_all = load_raw(args.mark_version, args.split)
-    raw_main = main_slice(raw_all)                        # [2026-09-17] 표 1·2 는 본 조건(labeled 전량·spill 아님·consensus)만
+    raw_main = main_slice(raw_all, args.main_pseudo_source)                        # [2026-09-17] 표 1·2 는 본 조건(labeled 전량·spill 아님·consensus)만
     raw, raw_ceil = split_conditions(raw_main)            # [2026-09-06] 천장 행 분리
     if raw.empty:
         raise SystemExit("[ERROR] 반지도 조건(cond=ssl) 원자료가 없습니다.")
@@ -927,7 +940,7 @@ def main():
     tex = build_latex(raw, lat, tests, rows, top, args.split, n_seeds, raw_ceil=raw_ceil, gap=gap)
     base = load_baseline_raw(args.baseline_raw) if args.baseline_raw else None
     bdirs = sorted({os.path.dirname(os.path.abspath(p)) for p in args.baseline_raw if os.path.isfile(p)} - {os.path.abspath(PLOT_DIR)})   # 이 저장소 plots 는 제외
-    md_x, tex_x = build_extra(args.mark_version, args.split, raw_all, base, lat, bdirs, args.baseline_cond)   # [2026-09-17 / 11절] 표 4~8 + 추가 검정
+    md_x, tex_x = build_extra(args.mark_version, args.split, raw_all, base, lat, bdirs, args.baseline_cond, pl_cond)   # [2026-09-17 / 11절] 표 4~8 + 추가 검정
     md += "\n" + md_x
     tex += "\n" + tex_x
 

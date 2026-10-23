@@ -255,7 +255,43 @@ PAPER_PLAN = [
 PLSOURCE_PLAN = [(200, 2000, True, None), (200, 2000, True, "self"), (200, 2000, True, "gen")]
 # [신설 2026-10-07 / Mark5.3] 논문 본표의 pl 행만(정답 라벨 2,000·1,000·500·200 × 라벨 없는 2,000). 지도만·상한은 D0(Mark5_EXP2) 것을 쓴다.
 PL4_PLAN = [(None, 2000), (1000, 2000), (500, 2000), (200, 2000)]
-PSEUDO_CSV_FMT = "pseudo_labels_{ps}_l{l}_s{s}.csv"   # model/make_pseudo_labels.py 산출물(프로젝트 루트)
+PSEUDO_CSV_FMT = "pseudo_labels_{ps}_l{l}_s{s}.csv"   # 프로젝트 루트. self·gen = model/make_pseudo_labels.py, cmb·fix = model/make_combiner_labels.py 산출물
+# [신설 2026-10-22 / 검증 결합기] 설계 문서 '실험 계획' 의 Mark5.3 70회(조합 14개 × seed 5). 가짜 정답 CSV 는 model/make_combiner_labels.py 산출물
+# (cmb = 한 라벨 + 두 후보, fix = 고정 규칙). 원소 = (labeled_n, unlabeled_n, pseudo_source, 이 회차에만 더할 플래그).
+# 공통 플래그는 CMB_BASE_EXTRA(10-22 까지의 Mark5.3 묶음에서 OR·NEG 를 뺀 것 — CSV 경로는 교사 확신도가 없어 OR·NEG 를 받지 않는다).
+CMB_BASE_EXTRA = ("--linear_head --head_pretrained_hidden --hard_weight 1.0 --teacher_seg_mean --teacher_clean_view "
+                  "--bg_weight 0 --student_raw_wave --joint_forward")
+# 옛 교사 경로 복원: 고정 규칙(1등 ≥ 0.5 · 차이 ≥ 0.4) + 특징 정렬 + 전원 거절 + 부정 라벨. 교사는 본실험과 같은 mn10 교사의 점수·특징 캐시
+# (make_teacher_scores.py --teacher_kind mn10 산출물, 2026-10-22 수진님 결정 B안 — 학생 증류 갈래에 384→960 변환 층).
+CMB_TEACHER_CACHE = "plots/teacher_scores_mn10.csv"
+CMB_OLD_PATH_EXTRA = f"--others_from_reject 0.2 --neg_pl 0.1 0.3 --teacher_cache {CMB_TEACHER_CACHE}"
+CMB_PLAN = [
+    # 본실험(새 설계 전체) 20회
+    (None, 2000, "cmb", ""), (1000, 2000, "cmb", ""), (500, 2000, "cmb", ""), (200, 2000, "cmb", ""),
+    # 라벨 없는 양 곡선(정답 200) 15회 — u2000 은 본실험 회차와 같다
+    (200, 0, None, ""), (200, 500, "cmb", ""), (200, 1000, "cmb", ""),
+    # 지도만(정답 2,000) 5회
+    (None, 0, None, ""),
+    # 아블레이션 30회: 두 후보 끔 · 옛 교사 경로 복원 · 고정 규칙 가짜 정답
+    (200, 2000, "cmb", "--no_two_candidate"), (None, 2000, "cmb", "--no_two_candidate"),
+    (200, 2000, None, CMB_OLD_PATH_EXTRA), (None, 2000, None, CMB_OLD_PATH_EXTRA),
+    (200, 2000, "fix", ""), (None, 2000, "fix", ""),
+]
+
+
+def _teacher_cache_files(ex):
+    """[2026-10-22] 회차별 플래그에 --teacher_cache 가 있으면 (점수 캐시, 특징 캐시) 경로. 없으면 []."""
+    import shlex
+    t = shlex.split(ex or "")
+    if "--teacher_cache" not in t:
+        return []
+    sc = t[t.index("--teacher_cache") + 1]
+    return [sc, sc.replace("teacher_scores_", "teacher_feats_").replace(".csv", ".pt")]
+
+
+def _pseudo_csv_name(ps, l, s):
+    """[2026-10-22] 정답 전량(labeled_n None)은 파일 이름에서 'all'(make_combiner_labels.py 규칙)."""
+    return PSEUDO_CSV_FMT.format(ps=ps, l="all" if l is None else l, s=s)
 
 
 def _artifacts(mark_version, tag):
@@ -272,7 +308,7 @@ def _artifacts(mark_version, tag):
     }
 
 
-def _needs(mark_version, tag, force, skip_test, identity_extra_files=None):
+def _needs(mark_version, tag, force, skip_test, identity_extra_files=None, teacher_free=False):
     """[H1] 어느 단계를 돌려야 하는지 단계별로 판정한다.
 
     학습은 체크포인트와 완주 표식(loss_history CSV)이 **둘 다** 있어야 끝난 것으로 본다.
@@ -280,7 +316,7 @@ def _needs(mark_version, tag, force, skip_test, identity_extra_files=None):
     (파일 머리말의 재검수 반영 항목 참조).
     """
     a = _artifacts(mark_version, tag)
-    current_id, _ = current_experiment_identity(tag, extra_files=identity_extra_files)
+    current_id, _ = current_experiment_identity(tag, extra_files=identity_extra_files, teacher_free=teacher_free)
     trained = (
         os.path.exists(a["ckpt"])
         and os.path.exists(a["loss"])
@@ -416,7 +452,7 @@ def main():
     # [신설 2026-09-17 / 8절] labeled 축. 0 은 "전량(2,000, 태그 없음)" 을 뜻한다(argparse 로 None 을 받을 수 없어서).
     ap.add_argument("--labeled_ns", type=int, nargs="+", default=[0],
                     help="labeled 개수 목록(200 500 1000 …). 0 = 전량(태그 없음). unlabeled_ns 와 곱해 조합을 만든다.")
-    ap.add_argument("--preset", type=str, default=None, choices=["paper", "plsource", "pl4"],
+    ap.add_argument("--preset", type=str, default=None, choices=["paper", "plsource", "pl4", "cmb"],
                     help="paper: 체크리스트 8절 회차 계획(조합 11개 x seed). plsource: pseudo-label 출처 비교(3 x seed). "
                          "--labeled_ns/--unlabeled_ns/--ceiling 를 무시한다.")
     ap.add_argument("--dry_run", action="store_true", help="무엇을 돌릴지만 출력하고 끝낸다")
@@ -445,7 +481,9 @@ def main():
     sel_lr, sel_elr, lr_src = _resolve_learning_rates(args)
     _lr_args = ((["--lr", repr(float(sel_lr))] if sel_lr is not None else [])
                 + (["--encoder_lr", repr(float(sel_elr))] if sel_elr is not None else []))   # repr: round-trip 보장(:g 는 6자리)
-    _extra_tokens, _ab_kw = _parse_runner_extra(args.extra)
+    if args.preset == "cmb" and args.extra:
+        raise SystemExit("[ERROR] preset cmb 는 공통 플래그(CMB_BASE_EXTRA)와 회차별 플래그를 스스로 정합니다. --extra 를 빼고 실행하십시오.")
+    _extra_tokens, _ab_kw = _parse_runner_extra(CMB_BASE_EXTRA if args.preset == "cmb" else args.extra)
 
     if args.ceiling:
         _cp = args.ceiling_csv if os.path.isabs(args.ceiling_csv) else os.path.join(PROJECT_ROOT, args.ceiling_csv)
@@ -485,14 +523,23 @@ def main():
         # [변경 2026-09-17] 조합 원소가 (labeled_n, unlabeled_n|"ceil", seed) 세 칸이 됐다. labeled_n None = 전량.
         # 조합 원소 = (labeled_n, unlabeled_n|"ceil", seed, spill, pseudo_source)
         if args.preset == "paper":
-            combos = [(l, n, s, False, None) for (l, n) in PAPER_PLAN for s in args.seeds]
+            combos = [(l, n, s, False, None, "") for (l, n) in PAPER_PLAN for s in args.seeds]
             if not os.path.isfile(args.ceiling_csv if os.path.isabs(args.ceiling_csv) else os.path.join(PROJECT_ROOT, args.ceiling_csv)):
                 print(f"[ERROR] preset paper 에는 상한(ceil) 회차가 있어 천장용 라벨 CSV 가 필요합니다: {args.ceiling_csv}")
                 sys.exit(1)
         elif args.preset == "pl4":
-            combos = [(l, n, s, False, None) for (l, n) in PL4_PLAN for s in args.seeds]   # [Mark5.3] pl 4행 x seed
+            combos = [(l, n, s, False, None, "") for (l, n) in PL4_PLAN for s in args.seeds]   # [Mark5.3] pl 4행 x seed
+        elif args.preset == "cmb":
+            combos = [(l, n, s, False, ps, ex) for (l, n, ps, ex) in CMB_PLAN for s in args.seeds]
+            _missing = sorted({_pseudo_csv_name(ps, l, s) for (l, n, ps, ex) in CMB_PLAN if ps for s in args.seeds
+                               if not os.path.isfile(os.path.join(PROJECT_ROOT, _pseudo_csv_name(ps, l, s)))})
+            if _missing:
+                print("[ERROR] preset cmb 에 필요한 가짜 정답 CSV 가 없습니다(model/make_combiner_labels.py 로 먼저 만드십시오):")
+                for m in _missing:
+                    print("        " + m)
+                sys.exit(1)
         elif args.preset == "plsource":
-            combos = [(l, n, s, sp, ps) for (l, n, sp, ps) in PLSOURCE_PLAN for s in args.seeds]
+            combos = [(l, n, s, sp, ps, "") for (l, n, sp, ps) in PLSOURCE_PLAN for s in args.seeds]
             _missing = [PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s) for (l, n, sp, ps) in PLSOURCE_PLAN if ps for s in args.seeds
                         if not os.path.isfile(os.path.join(PROJECT_ROOT, PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s)))]
             if _missing:
@@ -504,9 +551,9 @@ def main():
         else:
             labeled_ns = [None if l == 0 else int(l) for l in args.labeled_ns]
             if args.ceiling:
-                combos = [(l, "ceil", s, False, None) for l in labeled_ns for s in args.seeds]
+                combos = [(l, "ceil", s, False, None, "") for l in labeled_ns for s in args.seeds]
             else:
-                combos = [(l, n, s, False, None) for l in labeled_ns for n in args.unlabeled_ns for s in args.seeds]
+                combos = [(l, n, s, False, None, "") for l in labeled_ns for n in args.unlabeled_ns for s in args.seeds]
 
         # ---- 계획 출력 ---------------------------------------------------
         print("=" * 78)
@@ -516,6 +563,8 @@ def main():
             print(f" 조건     : PAPER_PLAN {len(PAPER_PLAN)}개 (labeled 전량·200·500·1000 x u0/u2000/ceil/곡선) — 파일 머리 주석 참조")
         elif args.preset == "pl4":
             print(f" 조건     : PL4_PLAN {len(PL4_PLAN)}개 (labeled 전량·1000·500·200 x u2000) — Mark5.3 본표 pl 행")
+        elif args.preset == "cmb":
+            print(f" 조건     : CMB_PLAN {len(CMB_PLAN)}개 (본실험 4 · 곡선 3 · 지도만 1 · 아블레이션 6) — 검증 결합기 설계")
         elif args.preset == "plsource":
             print(f" 조건     : PLSOURCE_PLAN {len(PLSOURCE_PLAN)}개 (labeled 200 + unlabeled 3,800 · 합의/self/gen)")
         elif args.ceiling:
@@ -536,30 +585,62 @@ def main():
             print(f" 로그    : {master_path}")
         print("=" * 78)
 
-        def _cond_txt(l, n, sp=False, ps=None):
+        def _cond_txt(l, n, sp=False, ps=None, ex=""):
             return (("l" + (f"{l:<4}" if l is not None else "all ")) + " " + ("ceil " if n == "ceil" else f"u{n:<5}")
-                    + (" +sp" if sp else "    ") + (f" ps={ps}" if ps else ""))
+                    + (" +sp" if sp else "    ") + (f" ps={ps}" if ps else "") + (f" [{ex}]" if ex else ""))
+
+        # [2026-10-22 / preset cmb] 회차별 플래그(ex)는 공통 플래그 뒤에 붙인다. run_tag 도 둘을 합친 값으로 계산한다.
+        _combo_extra = {}
+        for ex in {c[5] for c in combos}:
+            _combo_extra[ex] = _parse_runner_extra(((CMB_BASE_EXTRA if args.preset == "cmb" else args.extra) + " " + ex).strip())
 
         todo, done = [], []
-        for l, n, s, sp, ps in combos:
+        for l, n, s, sp, ps, ex in combos:
             tag = _run_tag(args.mark_version, s, None if n == "ceil" else n, ceiling=(n == "ceil"), labeled_n=l, spill=sp, ps=ps,
-                           lr=sel_lr, encoder_lr=sel_elr, ablation_kw=_ab_kw)
+                           lr=sel_lr, encoder_lr=sel_elr, ablation_kw=_combo_extra[ex][1])
             identity_extras = (
                 [args.ceiling_csv] if n == "ceil"
-                else [PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s)] if ps
-                else []
+                else [_pseudo_csv_name(ps, l, s)] if ps
+                else _teacher_cache_files(ex)
             )
-            need = _needs(args.mark_version, tag, args.force, args.skip_test, identity_extras)
-            (todo if any(need) else done).append((l, n, s, sp, ps, tag, need))
+            need = _needs(args.mark_version, tag, args.force, args.skip_test, identity_extras,
+                          teacher_free=bool(ps) or bool(_teacher_cache_files(ex)))
+            (todo if any(need) else done).append((l, n, s, sp, ps, ex, tag, need))
 
-        for l, n, s, sp, ps, tag, _ in done:
-            print(f"  [건너뜀] {_cond_txt(l, n, sp, ps)} seed {s}   {tag}")
-        for l, n, s, sp, ps, tag, need in todo:
+        for l, n, s, sp, ps, ex, tag, _ in done:
+            print(f"  [건너뜀] {_cond_txt(l, n, sp, ps, ex)} seed {s}   {tag}")
+        for l, n, s, sp, ps, ex, tag, need in todo:
             # [H1] 무엇을 다시 돌리는지 단계까지 보여준다.
             steps = "·".join(nm for nm, f in
                              zip(["학습", "val", "test"], need) if f)
-            print(f"  [실행]   {_cond_txt(l, n, sp, ps)} seed {s}   {tag}   ({steps})")
+            print(f"  [실행]   {_cond_txt(l, n, sp, ps, ex)} seed {s}   {tag}   ({steps})")
         print(f"\n 완료 {len(done)}개 / 남은 {len(todo)}개")
+
+        # [2026-10-22 / 최신 판 확인] 돌릴 회차가 읽을 결합기 CSV·교사 캐시가 지금 교사의 최신 판인지 학습 전에 전부 대조한다.
+        # 어긋나면 학습을 시작하지 않는다(--dry_run 은 알리기만 한다).
+        import label_freshness
+        _fresh_err = []
+        for c in sorted({_pseudo_csv_name(ps, l, s) for (l, n, s, sp, ps, ex, tag, need) in todo if ps and need[0]}):
+            try:
+                label_freshness.check_pseudo_csv(os.path.join(PROJECT_ROOT, c))
+            except label_freshness.StaleFileError as e:
+                _fresh_err.append(str(e))
+        for sc in sorted({_teacher_cache_files(ex)[0] for (l, n, s, sp, ps, ex, tag, need) in todo if _teacher_cache_files(ex) and need[0]}):
+            try:
+                label_freshness.check_scores(os.path.join(PROJECT_ROOT, sc))
+                label_freshness.check_features(os.path.join(PROJECT_ROOT, _teacher_cache_files("--teacher_cache " + sc)[1]),
+                                               os.path.join(PROJECT_ROOT, sc))
+            except label_freshness.StaleFileError as e:
+                _fresh_err.append(str(e))
+        if _fresh_err:
+            print("\n[STALE] 옛 판 파일이 있습니다:")
+            for e in _fresh_err[:20]:
+                print("   " + e)
+            if not args.dry_run:
+                print(" model/make_teacher_scores.py → model/make_combiner_labels.py 를 지금 교사로 다시 돌린 뒤 실행하십시오.")
+                sys.exit(1)
+        elif todo:
+            print(" [FRESH] 읽을 가짜 정답 CSV·교사 캐시가 모두 지금 교사의 최신 판입니다.")
 
         if args.dry_run:
             print("\n--dry_run 이므로 여기서 끝냅니다.")
@@ -578,7 +659,7 @@ def main():
                 return None
             return os.path.join(LOG_DIR, f"{tag}__{stage}.log")
 
-        for i, (l, n, s, sp, ps, tag, need) in enumerate(todo, 1):
+        for i, (l, n, s, sp, ps, ex, tag, need) in enumerate(todo, 1):
             need_train, need_val, need_test = need
             print("\n" + "=" * 78)
             print(f" [{i}/{len(todo)}] labeled={'전량' if l is None else l} · " + ("천장" if n == "ceil" else f"unlabeled={n}")
@@ -592,14 +673,15 @@ def main():
 
             _lab = ["--labeled_n", str(l)] if l is not None else []      # [2026-09-17] labeled 축
             _sp = ["--spill_labeled"] if sp else []
-            _ps = ["--pseudo_csv", PSEUDO_CSV_FMT.format(ps=ps, l=l, s=s), "--pseudo_source", ps] if ps else []
+            _ps = ["--pseudo_csv", _pseudo_csv_name(ps, l, s), "--pseudo_source", ps] if ps else []
+            _ex_tokens = _combo_extra[ex][0]                            # [2026-10-22] 공통 + 회차별 플래그
             if n == "ceil":
                 # 천장: 학습은 CSV 경로를, 평가는 --ceiling 플래그를 받아 같은 태그(_ceil_s<k>)를 만든다.
-                common = ["--mark_version", args.mark_version, "--seed", str(s)] + _lab + _lr_args + _extra_tokens   # [LR·extra] train·eval 둘 다
+                common = ["--mark_version", args.mark_version, "--seed", str(s)] + _lab + _lr_args + _ex_tokens   # [LR·extra] train·eval 둘 다
                 train_args = common + ["--ceiling_csv", args.ceiling_csv]
                 eval_args = common + ["--ceiling"]
             else:
-                common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)] + _lab + _lr_args + _extra_tokens
+                common = ["--mark_version", args.mark_version, "--seed", str(s), "--unlabeled_n", str(n)] + _lab + _lr_args + _ex_tokens
                 train_args = common + _sp + _ps
                 eval_args = common + _sp + (["--pseudo_source", ps] if ps else [])
             eval_args = eval_args + ["--plain_output"]

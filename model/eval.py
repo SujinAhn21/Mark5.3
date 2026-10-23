@@ -64,7 +64,8 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
              no_feature_kd=False, pl_min_gap=None, no_distill_branch=False, clip_input=False, linear_head=False,
              segment_input=False, head_pretrained_hidden=False, lp_epochs=None, hard_weight=None,
              others_from_reject=None, neg_pl=None, teacher_seg_mean=False, teacher_clean_view=False,
-             bg_weight=None, student_raw_wave=False, joint_forward=False, plain_output=True):
+             bg_weight=None, student_raw_wave=False, joint_forward=False, plain_output=True,
+             no_two_candidate=False, teacher_cache=None):
     """[확장 2026-08-30 / Mark5_EXP] seed_value·unlabeled_n 을 받는다.
     [이식 2026-09-29 / Mark5.2] ablation(A1~A4·H)·격차 대응 묶음(PH·LP·HW·OR·NEG) 플래그도 받는다 — 학습 때와 같은 값을 줘야
     run_tag 가 맞고, PH·H·clip/segment 는 헤드·입력 구조까지 바꾸므로 이름 맞추기 이상의 뜻이 있다.
@@ -103,7 +104,9 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
                                         others_from_reject=others_from_reject, neg_pl=neg_pl,
                                         teacher_seg_mean=teacher_seg_mean, teacher_clean_view=teacher_clean_view,
                                         bg_weight=bg_weight, student_raw_wave=student_raw_wave,
-                                        joint_forward=joint_forward)   # [2026-10-08 / JF] 평가에선 이름(_JF) 맞추기만
+                                        joint_forward=joint_forward,   # [2026-10-08 / JF] 평가에선 이름(_JF) 맞추기만
+                                        no_two_candidate=no_two_candidate,   # [2026-10-22] 이름(_noTWO) 맞추기만
+                                        teacher_cache=teacher_cache)         # [2026-10-22] 이름(_TC)·증류 갈래 구조(960) 맞추기
     if _lr_txt:
         print(f"[LR] 명령줄 학습률: {_lr_txt} (체크포인트 이름 맞추기용) · run_tag {config.run_tag}")
     if _ab_txt:
@@ -161,6 +164,7 @@ def evaluate(mark_version: str, split: str = "test", seed_value=None, unlabeled_
         config.embedding_dim,
         distill_final_relu=getattr(config, "distill_branch_final_relu", False),
         supervised_identity=bool(getattr(config, "head_pretrained_hidden", False)),   # [PH 2026-09-29 밤] 학습과 같은 구조
+        distill_dim=getattr(config, "distill_dim", None),                            # [2026-10-22 / _TC] 학습과 같은 구조
     ).to(device)
     # [수정 2026-08-17] resolve_state_dict 는 아는 키가 하나도 없으면 KeyError 를 던지므로,
     # 아래 else 의 경고는 도달할 수 없는 코드였다(구버전 .pth 를 넣으면 경고 대신 죽었다).
@@ -506,6 +510,8 @@ if __name__ == "__main__":
     parser.add_argument("--bg_weight", type=float, default=None, help="[BG] 학습 때 준 값(run_tag _BG<값>)")
     parser.add_argument("--student_raw_wave", action="store_true", help="[RW] 학습 때 줬으면 같이(run_tag _RW · 평가 입력도 원본 진폭)")
     parser.add_argument("--joint_forward", action="store_true", help="[Mark5.3 JF] 학습 때 줬으면 같이(run_tag _JF, 평가 동작은 같다)")
+    parser.add_argument("--no_two_candidate", action="store_true", help="[2026-10-22] 학습 때 줬으면 같이(run_tag _noTWO, 평가 동작은 같다)")
+    parser.add_argument("--teacher_cache", type=str, default=None, help="[2026-10-22] 학습 때 준 값 그대로(run_tag _TC · 증류 갈래 구조)")
     args = parser.parse_args()
     # [신설 2026-09-26] logFiles/<run_tag>__eval_<split>.log 에도 남긴다.
     from run_logger import RunLogger
@@ -521,7 +527,8 @@ if __name__ == "__main__":
                    hard_weight=args.hard_weight, others_from_reject=args.others_from_reject, neg_pl=args.neg_pl,
                    teacher_seg_mean=args.teacher_seg_mean, teacher_clean_view=args.teacher_clean_view,
                    bg_weight=args.bg_weight, student_raw_wave=args.student_raw_wave,
-                   joint_forward=args.joint_forward)
+                   joint_forward=args.joint_forward, no_two_candidate=args.no_two_candidate,
+                   teacher_cache=args.teacher_cache)
     _c.apply_cli_ablation(no_feature_kd=args.no_feature_kd, pl_min_gap=args.pl_min_gap, no_distill_branch=args.no_distill_branch,
                           clip_input=args.clip_input, linear_head=args.linear_head, **_bundle)
     with RunLogger(PROJECT_ROOT, _c.run_tag, f"eval_{args.split}" + ("_plain" if args.plain_output else "")):

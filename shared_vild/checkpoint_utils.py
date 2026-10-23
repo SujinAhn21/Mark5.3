@@ -41,6 +41,9 @@ _CONFIG_KEYS = [
     "distill_branch_classify",
     "classification_policy",
     "joint_forward",
+    "no_two_candidate",        # [2026-10-22 / 두 후보 라벨 끔] provenance 용(run_tag _noTWO 와 같은 정보)
+    "teacher_cache",           # [2026-10-22 / 옛 교사 경로 복원] provenance 용(run_tag _TC) — 어느 교사 캐시로 학습했나
+    "distill_dim",             #   증류 갈래 출력 길이(None = embedding_dim). eval 은 --teacher_cache 로 같은 구조를 만든다
     "student_clip_input",      # [ablation A3 2026-09-29] provenance 용 — student 가 클립 3초 통째(True)로 학습됐나. run_tag _noSEG 와 같은 정보.
     "student_head",            # [헤드 진단 H 2026-09-29] provenance 용 — "text_anchor"(본 모델) / "linear"(nn.Linear 진단). run_tag _LIN 과 같은 정보.
     # [2026-09-29 밤 / 격차 분석 대응 묶음] provenance 용 6키 — 어느 묶음으로 만든 student 파일인지. run_tag 표식(_PH·_LP·_HW·_OR·_NEG)과 같은 정보.
@@ -69,7 +72,7 @@ _PROVENANCE_ONLY_KEYS = {"learning_rate", "encoder_learning_rate", "use_feature_
                          "others_from_reject_tau", "neg_pl_tau", "neg_pl_beta", "teacher_clip_input", "clip_input", "clip_frames",
                          "clip_merge_rule", "spec_augment_teacher_view",   # [2026-09-30 밤 / 가짜 정답 재료] 기록만(teacher 파일에 있어도 student 설정을 안 바꾼다)
                          "background_embedding_weight", "student_wave_normalize",   # [2026-10-01 / 지도만 격차 진단] 기록만
-                         "joint_forward",
+                         "joint_forward", "no_two_candidate", "teacher_cache", "distill_dim",   # [2026-10-22] 기록만
                          "optimizer_name"}   # [Prodigy 2026-10-22] 기록만(teacher 파일에 있어도 student 의 옵티마이저·run_tag 를 안 바꾼다)
 
 

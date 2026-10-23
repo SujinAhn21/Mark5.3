@@ -45,7 +45,11 @@ audit 이 FAIL 없이 통과해야 학습으로 넘어간다.**
                            R2 Mark5.2 train·unlabeled ∩ Mark5.2 val·test·data_eval = 0, val ∩ test = 0   FAIL
                            R3 전문가 자기 train ∩ val·test = 0, val ∩ test = 0 (녹음 단위)   FAIL
                            R4 전문가 val·test ∩ Mark5.2 train·unlabeled              허용 — 개수만 보고
-                         mark4.k 로 돌리면 그 전문가의 R1·R3·R4, mark5.2 로 돌리면 R2 와 전문가 8개의 R1·R3 요약.
+                           R5 전문가 train ∩ Mark5.2 train·unlabeled = 0               FAIL  <- [추가 2026-10-23]
+                              (교사가 이미 들은 녹음에 가짜 정답을 붙이면 그 가짜 정답이 실제보다 좋아 보인다)
+                           R6 전문가 val·test ∩ Mark5.2 val·test·data_eval = 0         FAIL  <- [추가 2026-10-23]
+                              (교사를 고르는 val 이 학생 평가 녹음을 보면 안 된다)
+                         mark4.k 로 돌리면 그 전문가의 R1·R3~R6, mark5.2 로 돌리면 R2 와 전문가 8개의 R1·R3·R5·R6 요약.
 
 ■ 세션이란
 
@@ -101,7 +105,13 @@ def rec_key(row):
         return ("A", str(f)) if pd.notna(f) else None
     if src == "fsd50k":
         f = row.get("fsd50k_fname")
-        return ("F", str(f)) if pd.notna(f) else None
+        return ("F", str(int(float(f)))) if pd.notna(f) else None      # [10-23] 236196.0 → 236196 (Clotho 의 Freesound ID 와 맞춘다)
+    if src == "clotho":                                                  # [10-23] 외부 출처 — aihub_src_file 에 원본 ID
+        f = row.get("aihub_src_file")
+        return ("F", str(int(float(f)))) if pd.notna(f) else None      # Clotho 는 Freesound 클립 → FSD50K 와 같은 이름공간
+    if src in ("bbc", "bedavin", "snu_b36_50e", "voices"):            # voices: rm4 tele 한 녹음(마이크 10개 동시) → 키 하나
+        f = row.get("aihub_src_file")
+        return ("X", f"{src}:{f}") if pd.notna(f) else None
     if src == "sins":
         m = re.search(r"ex(\d+)", str(row.get("aihub_src_file", "")))
         return ("S", "sins:ex" + m.group(1)) if m else None
@@ -398,7 +408,18 @@ def main():
             if verbose:
                 n_r4 = len(rows_in(mv, ["val", "test"], m52_train))
                 report("OK", f"⑨R4 {mv}", f"val·test 가 Mark5.2 train·unlabeled 녹음을 {n_r4}클립 씀 (허용 — teacher 평가쪽이 학생 학습쪽과 겹치는 것은 통로가 아님)")
-            return n_r1, n_r3
+            # [추가 2026-10-23] R5·R6
+            out = {}
+            for tag, splits, keyset, what in (("R5", ["train"], m52_train, "train 이 Mark5.2 train·unlabeled 녹음을"),
+                                              ("R6", ["val", "test"], m52_eval, "val·test 가 Mark5.2 val·test·data_eval 녹음을")):
+                hit = rows_in(mv, splits, keyset)
+                out[tag] = len(hit)
+                if len(hit):
+                    by = Counter(zip(hit["target_class"], hit["source"]))
+                    report("FAIL", f"⑨{tag} {mv}", f"{what} {len(hit)}클립 씀 [{', '.join(f'{c}/{s} {v}' for (c, s), v in by.most_common(5))}]")
+                elif verbose:
+                    report("OK", f"⑨{tag} {mv}", f"{what} 쓰지 않음")
+            return n_r1, n_r3, out["R5"], out["R6"]
         if str(args.mark_version).startswith("mark4."):
             check_expert(args.mark_version, verbose=True)
         elif args.mark_version == "mark5.2":
@@ -406,14 +427,14 @@ def main():
             report("FAIL" if n_r2 else "OK", "⑨R2 mark5.2",
                    (f"train·unlabeled 이 val·test·data_eval 녹음을 {n_r2}클립 씀" if n_r2 else
                     f"train·unlabeled ∩ val·test·data_eval 0, val∩test 0 (녹음 학습쪽 {len(m52_train)} / 평가쪽 {len(m52_eval)})"))
-            tot1 = tot3 = 0
+            tot1 = tot3 = tot5 = tot6 = 0
             for mv in experts:
-                a1, a3 = check_expert(mv, verbose=False)
-                tot1 += a1; tot3 += a3
-            if not tot1 and not tot3:
-                report("OK", "⑨R1·R3 전문가 8", f"전문가 {len(experts)}개 모두 train ∩ Mark5.2 평가쪽 0, 자기 train∩val·test 0")
+                a1, a3, a5, a6 = check_expert(mv, verbose=False)
+                tot1 += a1; tot3 += a3; tot5 += a5; tot6 += a6
+            if not (tot1 or tot3 or tot5 or tot6):
+                report("OK", "⑨R1·R3·R5·R6 전문가 8", f"전문가 {len(experts)}개 모두 train ∩ Mark5.2 전체 0, val·test ∩ Mark5.2 평가쪽 0, 자기 train∩val·test 0")
             else:
-                report("FAIL", "⑨합계", f"R1 {tot1}클립(증강본 포함) · R3 {tot3}클립 (위 저장소별 줄 참조)")
+                report("FAIL", "⑨합계", f"R1 {tot1} · R3 {tot3} · R5 {tot5} · R6 {tot6}클립(증강본 포함, 위 저장소별 줄 참조)")
         else:
             report("OK", "⑨", f"{args.mark_version} 은 교차 검사 대상 아님(mark4.k / mark5.2 만)")
     else:

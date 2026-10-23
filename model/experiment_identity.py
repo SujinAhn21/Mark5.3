@@ -69,7 +69,9 @@ def teacher_release_identity():
     return hashlib.sha256(canonical).hexdigest()
 
 
-def current_experiment_identity(run_tag, extra_files=None):
+def current_experiment_identity(run_tag, extra_files=None, teacher_free=False):
+    """[2026-10-22 / 검증 결합기] teacher_free=True(--pseudo_csv 회차)는 학습 중에 교사를 쓰지 않으므로 resources/ 교사 파일을
+    신원에 넣지 않는다. 가짜 정답 CSV 자체가 extra_files 로 들어가고, 그 CSV 를 만든 교사는 plots/combiner/*.json 의 점수 캐시 해시에 남는다."""
     data = {}
     for name in ("dataset_labeled.csv", "dataset_val.csv", "dataset_unlabeled.csv"):
         path = os.path.join(PROJECT_ROOT, name)
@@ -79,7 +81,8 @@ def current_experiment_identity(run_tag, extra_files=None):
         if path and not os.path.isabs(path):
             path = os.path.join(PROJECT_ROOT, path)
         if path and os.path.isfile(path):
-            data[os.path.basename(path)] = dataset_identity(path)
+            # [2026-10-22] CSV 가 아닌 재료(교사 특징 캐시 .pt)는 파일 해시로 신원을 잡는다.
+            data[os.path.basename(path)] = dataset_identity(path) if path.endswith(".csv") else sha256_file(path)
     code = {}
     # [2026-10-22 / Prodigy] 옵티마이저 코드(utils/prodigy_optim.py · third_party/prodigy)도 학습 결과를 바꾸므로 신원에 넣는다.
     for rel in ("model/train_mark5.py", "vild/vild_config.py", "vild/teacher_fusion.py",
@@ -88,7 +91,7 @@ def current_experiment_identity(run_tag, extra_files=None):
         code[rel] = sha256_file(path)
     payload = {
         "run_tag": run_tag,
-        "teacher_release_sha256": teacher_release_identity(),
+        "teacher_release_sha256": None if teacher_free else teacher_release_identity(),
         "training_data": data,
         "code": code,
     }

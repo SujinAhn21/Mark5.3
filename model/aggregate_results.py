@@ -950,11 +950,15 @@ def plsource_table(df_ps):
     return summary, (pd.concat(tests, ignore_index=True) if tests else pd.DataFrame())
 
 
-def baseline_paired(df_le, baseline_csvs):
+# [2026-10-23 / preset cmb] 본표의 가짜 정답 출처 → 비교모델 쪽 짝 조건. 결합기(cmb) 본실험의 짝은 비교모델 plc(같은 결합기의 한 라벨).
+PL_COUNTERPART = {"consensus": "pl", "cmb": "plc"}
+
+
+def baseline_paired(df_le, baseline_csvs, pl_cond="pl"):
     """Mark5.2 대 비교모델 짝지은 검정. 비교모델 원자료(aggregate_baseline.py 의 plots/aggregate_raw_<model>_<split>.csv,
     열: model, cond(sup|pl|ceil), seed[, labeled], 지표)를 seed 로 짝지어 같은 labeled 수준·같은 역할끼리 비교한다.
       supervised : Mark5.2 u0        vs 비교모델 sup
-      ours       : Mark5.2 u<max>    vs 비교모델 pl(+합의 라벨)
+      ours       : Mark5.2 u<max>    vs 비교모델 pl(+합의 라벨) — [2026-10-23] pl_cond 로 바꾼다(preset cmb 는 plc)
       upper      : Mark5.2 ceil      vs 비교모델 ceil
     비교모델 CSV 에 labeled 열이 없으면 전량으로 본다."""
     rows = []
@@ -974,7 +978,7 @@ def baseline_paired(df_le, baseline_csvs):
             bb = b[b["labeled"].astype(int) == lab]
             umax = int(ours.loc[ours["cond"] == "ssl", "unlabeled"].max()) if (ours["cond"] == "ssl").any() else 0
             pairs = [("supervised", ours[(ours["cond"] == "ssl") & (ours["unlabeled"] == 0)], bb[bb["cond"] == "sup"]),
-                     ("ours", ours[(ours["cond"] == "ssl") & (ours["unlabeled"] == umax)], bb[bb["cond"] == "pl"]),
+                     ("ours", ours[(ours["cond"] == "ssl") & (ours["unlabeled"] == umax)], bb[bb["cond"] == pl_cond]),
                      ("upper", ours[ours["cond"] == "ceil"], bb[bb["cond"] == "ceil"])]
             for role, a, c in pairs:
                 if a.empty or c.empty or (role == "ours" and umax == 0):
@@ -999,6 +1003,9 @@ def main():
     # [신설 2026-09-17 / 8절] 비교모델 원자료(aggregate_baseline.py 산출)로 seed 짝지은 검정.
     ap.add_argument("--baseline_raw", type=str, nargs="*", default=[],
                     help="비교모델 plots/aggregate_raw_<model>_<split>.csv 경로들. 주면 Mark5.2 대 비교모델 짝지은 검정을 낸다.")
+    ap.add_argument("--main_pseudo_source", type=str, default="consensus",
+                    help="[2026-10-23] 본표·라벨 효율 표에 넣을 가짜 정답 출처(run_tag 의 _ps<이름>, 없으면 consensus). preset cmb 결과는 cmb — "
+                         "지도만(u0) 회차는 출처가 없으므로 함께 들어가고, 비교모델 짝은 PL_COUNTERPART(cmb → plc)")
     args = ap.parse_args()
 
     if not args.latency_only:
@@ -1011,8 +1018,10 @@ def main():
         # [2026-09-06] 천장 행은 따로 떼어 둔다. 아래 기존 흐름(요약·검정·곡선)은 반지도 조건(ssl)만 본다.
         # [2026-09-17 / 8절] 기존 파이프라인(표 1·곡선·천장·검정)은 "labeled 전량 · 풀 확장 없음 · 합의" 회차만 본다.
         # 라벨 효율 표는 _l<n> 회차까지, pseudo 출처 표는 _sp 회차만 따로 모은다.
-        _main = (df_all["labeled"] == _full_labeled_count()) & (~df_all["spill"]) & (df_all["pseudo_source"] == "consensus")
-        df_le_all = df_all[(~df_all["spill"]) & (df_all["pseudo_source"] == "consensus")].reset_index(drop=True)
+        # [2026-10-23] 출처는 --main_pseudo_source(기본 consensus = 예전과 같음). 지도만(u0) 회차는 출처가 없으니 늘 넣는다.
+        _ps_ok = (df_all["pseudo_source"] == args.main_pseudo_source) | (df_all["unlabeled"] == 0)
+        _main = (df_all["labeled"] == _full_labeled_count()) & (~df_all["spill"]) & _ps_ok
+        df_le_all = df_all[(~df_all["spill"]) & _ps_ok].reset_index(drop=True)
         df_ps_all = df_all[df_all["spill"]].reset_index(drop=True)
         df_all = df_all[_main].reset_index(drop=True)
         if df_all.empty:
@@ -1228,7 +1237,7 @@ def main():
                 print(f"[INFO] 출처 비교 검정: {ps_t_csv}")
         # ---- [2026-09-17 / 8절] 비교모델 짝지은 검정 ----
         if args.baseline_raw and not args.no_tests:
-            bt = baseline_paired(df_le_all, args.baseline_raw)
+            bt = baseline_paired(df_le_all, args.baseline_raw, PL_COUNTERPART.get(args.main_pseudo_source, "pl"))
             if bt.empty:
                 print("\n[WARN] 비교모델 짝지은 검정: 짝지을 회차가 없습니다(labeled 수준·cond·seed 가 맞는지 확인).")
             else:

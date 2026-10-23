@@ -97,13 +97,18 @@ def _category_map(index_csv):
     return out
 
 
-def _discover(model_root, plot_subdir="plots", pattern=None):
-    """prediction_details_<tag>_eval_far_heldout.csv 가 있는 tag 목록(둘 중 하나라도 있으면 포함)."""
+# [2026-10-23] 이 저장소(Mark5.3) eval.py 는 --plain_output(기본 켬)이라 산출물 이름 끝에 _plain 이 붙는다(10-22 단일 분류기 판부터).
+# 비교모델 산출물에는 없다. 그래서 폴더마다 꼬리를 따로 준다(전에는 Mark5.3 결과를 못 찾았다).
+OURS_SFX = "_plain"
+
+
+def _discover(model_root, plot_subdir="plots", pattern=None, sfx=""):
+    """prediction_details_<tag>_eval_far_heldout<sfx>.csv 가 있는 tag 목록(둘 중 하나라도 있으면 포함)."""
     pdir = os.path.join(model_root, plot_subdir)
     tags = set()
     for s in EVAL_SETS:
-        for p in glob.glob(os.path.join(pdir, f"prediction_details_*_eval_{s}.csv")):
-            tag = os.path.basename(p)[len("prediction_details_"):-len(f"_eval_{s}.csv")]
+        for p in glob.glob(os.path.join(pdir, f"prediction_details_*_eval_{s}{sfx}.csv")):
+            tag = os.path.basename(p)[len("prediction_details_"):-len(f"_eval_{s}{sfx}.csv")]
             if "_limit" in tag or "_smoke" in tag:                         # 동작 확인용 산출물(_limitN·_smoke)은 표에 안 넣는다
                 continue
             if pattern and not any(fnmatch.fnmatch(tag, p) for p in ((pattern,) if isinstance(pattern, str) else pattern)):
@@ -112,7 +117,7 @@ def _discover(model_root, plot_subdir="plots", pattern=None):
     return sorted(tags)
 
 
-def evaluate_tag(model_root, tag, label):
+def evaluate_tag(model_root, tag, label, sfx=""):
     """한 회차의 ①·②와 test 4지표. 없는 파일은 nan 으로 두고 어떤 파일이 없었는지 note 에 적는다."""
     pdir = os.path.join(model_root, "plots")
     m = _SEED_RE.match(tag)
@@ -120,7 +125,7 @@ def evaluate_tag(model_root, tag, label):
            "group": m.group("group") if m else tag, "seed": int(m.group("seed")) if m else None}
     notes, per_cat = [], {}
     for s in EVAL_SETS:
-        p = os.path.join(pdir, f"prediction_details_{tag}_eval_{s}.csv")
+        p = os.path.join(pdir, f"prediction_details_{tag}_eval_{s}{sfx}.csv")
         key = "far" if s == "far_heldout" else "bnd"
         if not os.path.isfile(p):
             row[f"n_{key}"], row[f"{key}_to_others"] = 0, float("nan"); notes.append(f"{s} 없음"); continue
@@ -138,7 +143,7 @@ def evaluate_tag(model_root, tag, label):
             per_cat[s] = pd.DataFrame({"category": cats, "to_others": pred_others.astype(float)}) \
                 .groupby("category")["to_others"].agg(["count", "mean"]).reset_index()
     # ② 정규 test
-    p = os.path.join(pdir, f"prediction_details_{tag}.csv")
+    p = os.path.join(pdir, f"prediction_details_{tag}{sfx}.csv")
     if os.path.isfile(p):
         df = _read_pred(p)
         pred_others = df["Predicted Label"].astype(str).eq("others")
@@ -149,7 +154,7 @@ def evaluate_tag(model_root, tag, label):
     else:
         row.update({"n_target": 0, "target_to_others": float("nan"), "n_others_test": 0, "others_recall_test": float("nan")})
         notes.append("test 없음")
-    summ = os.path.join(pdir, f"performance_summary_{tag}.csv")
+    summ = os.path.join(pdir, f"performance_summary_{tag}{sfx}.csv")
     metrics = _read_summary(summ) if os.path.isfile(summ) else {}
     for k in ("Accuracy", "Macro Precision", "Macro Recall", "Macro F1"):
         row[k] = metrics.get(k, float("nan"))
@@ -230,12 +235,12 @@ def main():
     ap.add_argument("--ours_pattern", type=str, default=None, help="이 저장소 태그 glob (예: mark5.2_PL_SA_u2000_s*). 기본: 평가 세트 산출물이 있는 전부")
     ap.add_argument("--ours_label", type=str, default="Mark5.2 (ours)")
     ap.add_argument("--baseline_dirs", type=str, nargs="*", default=None, help="비교모델 폴더들. 기본: 옆의 Baseline_* 3개 중 있는 것")
-    ap.add_argument("--baseline_cond", type=str, default=None, help="비교모델 조건만 고를 때 (sup | pl | ceil). 기본: 전부")
+    ap.add_argument("--baseline_cond", type=str, default=None, help="비교모델 조건만 고를 때 (sup | pl | plc | ceil). 기본: 전부")
     ap.add_argument("--no_baselines", action="store_true")
     ap.add_argument("--out_dir", type=str, default=PLOT_DIR)
     args = ap.parse_args()
 
-    jobs = [(PROJECT_ROOT, args.ours_label, args.ours_pattern)]
+    jobs = [(PROJECT_ROOT, args.ours_label, args.ours_pattern, OURS_SFX)]
     if not args.no_baselines:
         dirs = args.baseline_dirs
         if dirs is None:
@@ -247,16 +252,16 @@ def main():
                 continue
             # [2026-10-22 / Prodigy] 학습률 자리가 _lr<값>(Adam 시절) 또는 _pd(Prodigy) — 둘 다 찾는다(묶음은 태그별로 갈린다).
             pat = (f"*_{args.baseline_cond}_lr*", f"*_{args.baseline_cond}_pd*") if args.baseline_cond else None
-            jobs.append((d, os.path.basename(d).replace("Baseline_", ""), pat))
+            jobs.append((d, os.path.basename(d).replace("Baseline_", ""), pat, ""))
 
     raw_rows, per_cat_all = [], {s: [] for s in EVAL_SETS}
-    for root, label, pat in jobs:
-        tags = _discover(root, pattern=pat)
+    for root, label, pat, sfx in jobs:
+        tags = _discover(root, pattern=pat, sfx=sfx)
         if not tags:
             print(f"[WARN] {label}: 평가 세트 산출물(prediction_details_*_eval_*.csv)이 없습니다 — eval.py --split eval_far_heldout / eval_boundary_B 를 먼저.")
             continue
         for tag in tags:
-            row, per_cat = evaluate_tag(root, tag, label)
+            row, per_cat = evaluate_tag(root, tag, label, sfx)
             raw_rows.append(row)
             for s, dfc in per_cat.items():
                 dfc = dfc.copy(); dfc.insert(0, "group", row["group"]); dfc.insert(0, "model", label); dfc["seed"] = row["seed"]

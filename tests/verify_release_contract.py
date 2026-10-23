@@ -1,10 +1,8 @@
-"""Check removal, inference profiling, notebook execution, and deployment integrity."""
+"""Check removal, inference profiling, the cmb Colab notebooks, and deployment integrity."""
 import ast
 import json
-import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 from unittest.mock import patch
 
@@ -14,9 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "model"))
 import profile_efficiency as profile
 import run_experiments as runner
-import select_lr
-import aggregate_results as aggregate
-import output_policy
 from verify_release import verify
 
 
@@ -57,58 +52,42 @@ def main():
     assert measurement['total_parameters'] < measurement['training_parameters']
     assert measurement['gmacs_per_segment'] > 0 and measurement['cpu_latency_ms_per_clip'] > 0
 
-    # Execute every default cell, keeping verification and the dry-run real.
-    # Capture the training launch so this contract test cannot run a full experiment.
-    notebook = json.loads((ROOT / 'notebooks/Mark5.3 제안모델 실험.ipynb').read_text(encoding='utf-8'))
-    scope = {'display': lambda obj: None}
-    previous_cwd = Path.cwd()
-    previous_root = os.environ.get('MARK_ROOT')
-    os.environ['MARK_ROOT'] = str(ROOT)
-    real_run = subprocess.run
-    training_commands = []
-    def notebook_run(command, *args, **kwargs):
-        if 'model/run_experiments.py' in command and '--dry_run' not in command:
-            assert '--skip_test' in command
-            assert kwargs.get('check') is True
-            training_commands.append(list(command))
-            return subprocess.CompletedProcess(command, 0)
-        return real_run(command, *args, **kwargs)
-    try:
-        with patch.object(subprocess, 'run', side_effect=notebook_run):
-            for i, cell in enumerate(notebook['cells']):
-                if cell['cell_type'] == 'code':
-                    assert not cell['outputs'] and cell['execution_count'] is None
-                    exec(compile(''.join(cell['source']), f'notebook-cell-{i}', 'exec'), scope)
-    finally:
-        os.chdir(previous_cwd)
-        if previous_root is None:
-            os.environ.pop('MARK_ROOT', None)
-        else:
-            os.environ['MARK_ROOT'] = previous_root
-    assert len(scope['SELECTED_TAGS']) == 1
-    assert scope['RUN_TRAINING'] and not scope['EVALUATE_TEST'] and not scope['RUN_PROFILE']
-    assert training_commands == [scope['COMMAND'] + ['--skip_test']]
-    assert '--m53' not in scope['BUNDLE'] and '--plain_output' not in scope['BUNDLE']
-    # Exercise the notebook result cell with real smoke outputs, not just the empty-results path.
-    fixture = ROOT / 'verification/joint'
-    displayed = []
-    fixture_scope = dict(scope, ROOT=fixture, LABELED=[0], UNLABELED=[7], SEEDS=[1], display=displayed.append)
-    with patch.object(aggregate, 'PROJECT_ROOT', str(fixture)), patch.object(aggregate, 'PLOT_DIR', str(fixture / 'plots')), \
-            patch.object(aggregate, '_FULL_LABELED', None), patch.object(output_policy, 'dataset_identity', return_value=None):
-        exec(compile(''.join(notebook['cells'][6]['source']), 'notebook-results-fixture', 'exec'), fixture_scope)
-    assert len(displayed) == 1 and len(displayed[0]) == 1
-    # Ensure retained LR tooling can find the new val outputs if explicitly invoked.
-    reports = json.loads((ROOT / 'verification/verification.json').read_text())
-    for run in reports['runs']:
-        run_root = ROOT / 'verification' / run['path']
-        with patch.object(select_lr, 'PROJECT_ROOT', str(run_root)), patch.object(select_lr, 'PLOT_DIR', str(run_root / 'plots')), \
-                patch.object(output_policy, 'dataset_identity', return_value=None):
-            assert select_lr._needs(run['run_tag'], False) == (False, False)
+    # [2026-10-23] Colab notebooks of the cmb plan. The old single-run notebook and its Adam-era result fixture
+    # (verification/joint, run_tag _elr) were replaced, so the checks are static plus the real run-tag builder;
+    # nothing trains here. select_lr is not checked any more: Prodigy runs never select a learning rate.
+    nb_dir = ROOT / 'notebooks'
+    names = ['1 교사 점수·채택 관문.ipynb', '2 Mark5.3 본실험 70회.ipynb', '3 비교모델 결합기 조건 24회.ipynb']
+    assert sorted(p.name for p in nb_dir.glob('*.ipynb')) == sorted(names), sorted(p.name for p in nb_dir.glob('*.ipynb'))
+    sources = {}
+    for name in names:
+        notebook = json.loads((nb_dir / name).read_text(encoding='utf-8'))
+        code_cells = [c for c in notebook['cells'] if c['cell_type'] == 'code']
+        cells = [''.join(c['source']) for c in code_cells]
+        assert all(not c['outputs'] and c['execution_count'] is None for c in code_cells), name
+        for src in cells:   # IPython '!' lines are not Python; replace them before parsing
+            ast.parse('\n'.join(('pass  # ' + line) if line.lstrip().startswith('!') else line for line in src.splitlines()))
+        assert 'Blackwell' in cells[0] and 'raise SystemExit' in cells[0], name             # L4 rule: stop only on sm_100/120
+        text = '\n'.join(cells)
+        assert '--step_timeout_min' not in text and 'WAIT_MAX' not in text, name           # no time limits (CPU runtime allowed)
+        assert '--m53' not in text and '"--lr"' not in text and '--encoder_lr' not in text, name
+        sources[name] = text
+    gate_nb, main_nb, base_nb = (sources[n] for n in names)
+    assert '"--kind", kind' in gate_nb and '("mn10", "segment")' in gate_nb and 'teacher_gate_report.py' in gate_nb
+    assert 'teacher_gate_mn10_vs_segment.json' in gate_nb and 'teacher_gate_mn10_vs_segment.json' in main_nb
+    assert '--preset cmb --seeds 1 2 3 4 5' in main_nb and '"--main_pseudo_source", "cmb"' in main_nb
+    assert '"--baseline_cond", "plc"' in main_nb and 'label_freshness' in main_nb
+    assert '--preset cmb --data_root' in base_nb and '--conds sup --labeled_ns 0 1000 500 200 --seeds 1' in base_nb
+    # The 70-run plan the notebook launches: 14 combos x seeds 1-5, all Prodigy (_PD), no duplicate run tags.
+    tags = []
+    for (labeled, unlabeled, pseudo, extra) in runner.CMB_PLAN:
+        kw = runner._parse_runner_extra((runner.CMB_BASE_EXTRA + ' ' + extra).strip())[1]
+        tags += [runner._run_tag('mark5.2', s, unlabeled, labeled_n=labeled, ps=pseudo, ablation_kw=kw) for s in (1, 2, 3, 4, 5)]
+    assert len(runner.CMB_PLAN) == 14 and len(tags) == 70 and len(set(tags)) == 70, (len(runner.CMB_PLAN), len(set(tags)))
+    assert all('_PD' in t for t in tags)
     report = {'status': 'passed', 'release_files_checked': checked,
               'six_component_code_absent': True, 'removed_cli_rejected': True,
-              'profile_adapter_unused': True, 'notebook_default_cells_executed': True,
-              'notebook_training_default': True, 'notebook_training_launch_captured': True,
-              'lr_tool_new_output_compatible': True, 'deployment_parameters': measurement['total_parameters'],
+              'profile_adapter_unused': True, 'cmb_notebooks_checked': names, 'cmb_plan_tags': len(tags),
+              'deployment_parameters': measurement['total_parameters'],
               'training_parameters': measurement['training_parameters']}
     (output / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps(report, indent=2))

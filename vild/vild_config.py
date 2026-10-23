@@ -17,6 +17,10 @@ from prompt_bank import get_class_synonyms, get_prompt_templates, get_prompt_tex
 
 
 
+
+# [신설 2026-10-22] mn10 교사의 분류 직전 특징 길이(teacher_mn10/model_def.py embed() 와 같은 값).
+MN10_FEATURE_DIM = 960
+
 class AudioViLDConfig:
     def __init__(self, mark_version="mark5.0"):
         self.mark_version = mark_version
@@ -493,6 +497,12 @@ class AudioViLDConfig:
 
         # Joint forward keeps labeled/unlabeled clips in the same BatchNorm batch.
         self.joint_forward = False
+        # [신설 2026-10-22 / 두 후보 라벨] True 면 결합기 가짜 정답 CSV 의 두 후보 행(mode=two)을 버린다(아블레이션 '두 후보 끔', run_tag _noTWO).
+        self.no_two_candidate = False
+        # [신설 2026-10-22 / 옛 교사 경로 복원] 교사 점수·특징 캐시(make_teacher_scores.py --teacher_kind mn10)로 옛 교사 경로(고정 규칙 + 특징 정렬
+        # + 전원 거절 + 부정 라벨)를 돌린다. 학습 중에 교사를 부르지 않는다. 경로를 주면 run_tag 에 _TC, 학생 증류 갈래 출력이 mn10 특징 길이(960).
+        self.teacher_cache = None
+        self.distill_dim = None        # None = embedding_dim(384, 옛 조각 교사). 캐시 경로는 MN10_FEATURE_DIM
 
         # === 내부 캐시 ===
         self._text_emb = None
@@ -683,7 +693,8 @@ class AudioViLDConfig:
                            linear_head=False, segment_input=False, head_pretrained_hidden=False, lp_epochs=None,
                            hard_weight=None, others_from_reject=None, neg_pl=None,
                            teacher_seg_mean=False, teacher_clean_view=False,
-                           bg_weight=None, student_raw_wave=False, joint_forward=False) -> str:
+                           bg_weight=None, student_raw_wave=False, joint_forward=False,
+                           no_two_candidate=False, teacher_cache=None) -> str:
         """[신설 2026-09-28 / ablation A1·A2·A4] 명령줄 --no_feature_kd / --pl_min_gap / --no_distill_branch 를 config 에 넣는다.
         EfficientAT-pl(같은 백본·같은 라벨)과의 2%p 차이가 우리가 얹은 부품 중 어디서 나는지 하나씩 빼 보는 실험용.
           A1 no_feature_kd     : use_feature_kd=False — teacher 특징을 따라가는 손실(feature_kd_weight 0.3)을 뺀다.
@@ -794,6 +805,17 @@ class AudioViLDConfig:
                 raise ValueError("--joint_forward requires a clip-input mn10 student.")
             self.joint_forward = True
             changed.append("JF labeled and unlabeled clips share one encoder forward")
+        if no_two_candidate:
+            # [신설 2026-10-22 / 두 후보 라벨] 결합기 가짜 정답 중 한 라벨만 쓴다(두 후보 행은 침묵으로). --pseudo_csv 경로에서만 뜻이 있다.
+            self.no_two_candidate = True
+            changed.append("두 후보 라벨 끔(결합기 가짜 정답 중 한 라벨만 — 아블레이션)")
+        if teacher_cache:
+            # [신설 2026-10-22 / 옛 교사 경로 복원] 교사 캐시 경로. 증류 갈래를 mn10 특징 길이로 바꾼다(변환 층 Linear 384→960 + LayerNorm).
+            if not self.student_clip_input:
+                raise ValueError("--teacher_cache 는 클립 입력 student 에서만 씁니다(캐시가 클립 단위).")
+            self.teacher_cache = str(teacher_cache)
+            self.distill_dim = MN10_FEATURE_DIM
+            changed.append(f"교사 캐시 경로({self.teacher_cache}) — 옛 교사 경로를 캐시로, 증류 갈래 {self.embedding_dim}→{MN10_FEATURE_DIM}")
         return " / ".join(changed)
 
     @property
@@ -842,6 +864,10 @@ class AudioViLDConfig:
             out += "_RW"
         if self.joint_forward:
             out += "_JF"
+        if getattr(self, "no_two_candidate", False):
+            out += "_noTWO"   # [2026-10-22 / 두 후보 라벨 끔]
+        if getattr(self, "teacher_cache", None):
+            out += "_TC"      # [2026-10-22 / 옛 교사 경로 복원 — 교사 캐시]
         return out + "_SINGLE"
 
     @property

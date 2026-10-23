@@ -39,8 +39,11 @@ class DualBranchStudentHead(nn.Module):
     두 갈래를 한꺼번에 바꾸면 1차 결과와 비교할 수 있는 축이 하나도 안 남는다.
     """
 
-    def __init__(self, embedding_dim, distill_final_relu=False, supervised_identity=False):
+    def __init__(self, embedding_dim, distill_final_relu=False, supervised_identity=False, distill_dim=None):
         super().__init__()
+        # [신설 2026-10-22 / 옛 교사 경로 복원] distill_dim 을 주면 증류 갈래가 embedding_dim → distill_dim 변환 층이 된다
+        # (mn10 교사 특징 960 에 맞춘다). None 이면 옛 구조(embedding_dim → embedding_dim) 그대로라 기존 체크포인트와 같다.
+        distill_dim = int(distill_dim or embedding_dim)
         # [신설 2026-09-29 밤 / PH] supervised_identity=True 면 지도 갈래를 항등으로 둔다 — 인코더 투영(Linear 960→384) 출력이 바로
         # 텍스트 앵커와 만난다. 위 docstring 의 코사인 상한(비음수 벡터 0.69~0.72) 문제와 "무작위 층 둘 + 병목" 을 함께 없앤다.
         # 증류 갈래는 그대로(feature KD 가 teacher 384 차원을 맞춰야 하므로 Linear+LN 이 필요).
@@ -53,8 +56,8 @@ class DualBranchStudentHead(nn.Module):
                 nn.ReLU(inplace=True),
             )
         distill_layers = [
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.LayerNorm(embedding_dim),
+            nn.Linear(embedding_dim, distill_dim),
+            nn.LayerNorm(distill_dim),
         ]
         if distill_final_relu:
             distill_layers.append(nn.ReLU(inplace=True))
