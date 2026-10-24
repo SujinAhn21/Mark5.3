@@ -17,7 +17,8 @@
 
 산출물 (--out 기본 plots/teacher_scores_<kind>.csv)
     path, split, label(정답이 있는 split 만), p_<클래스> 8열(heavy_impact … dog_bark 순서)
-    같은 이름 .json : 교사 종류 · 파일별 SHA-256 · release 해시 · split 별 클립 수 · 만든 시각
+    같은 이름 .json : 교사 종류 · 파일별 SHA-256 · release 해시 · split 별 클립 수 · Mark5.3 오디오 해시(mark53_audio_sha256,
+                      2026-10-25 추가 — 데이터 목록의 경로·라벨·오디오 SHA-256 묶음) · 만든 시각
     plots/teacher_feats_mn10.pt (mn10 만) : unlabeled 클립의 융합 특징 [N, 960] — 아블레이션 '옛 교사 경로 복원'의 특징 정렬 목표.
         융합 = 교사별 특징을 단위 벡터로 만든 뒤 자기 클래스 확률로 가중 평균(vild/teacher_fusion.py 와 같은 식).
         scores_sha256 에 같은 실행의 점수 캐시 해시를 넣어 짝을 고정한다(model/label_freshness.check_features).
@@ -27,7 +28,6 @@ import csv
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 
@@ -40,10 +40,9 @@ for p in (PROJECT_ROOT, os.path.join(PROJECT_ROOT, "utils"), os.path.join(PROJEC
     if p not in sys.path:
         sys.path.append(p)
 
-SPLIT_CSV = {"labeled": "dataset_labeled.csv", "unlabeled": "dataset_unlabeled.csv",
-             "val": "dataset_val.csv", "test": "dataset_test.csv"}
-SOURCE_ALIAS = {"data_labeled": "data_source_labeled", "data_unlabeled": "data_source_unlabeled",
-                "data_val": "data_source_val", "data_test": "data_source_test"}
+# [2026-10-25] 경로 찾기(localize)와 데이터 목록 이름은 label_freshness 와 같은 것을 쓴다 — 점수 캐시 json 의 오디오 해시를
+#              만드는 쪽(여기)과 대조하는 쪽(label_freshness.check_scores)이 같은 파일을 읽어야 하기 때문이다.
+from label_freshness import SPLIT_CSV, SOURCE_ALIAS, audio_manifest, localize   # noqa: E402,F401
 TEACHER_VERSIONS = [f"mark4.{i}" for i in range(1, 9)]
 
 
@@ -53,22 +52,6 @@ def sha256_file(path):
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
-
-
-def localize(path):
-    """CSV 의 코랩 경로 → 지금 환경의 파일. 코랩에서는 그대로 있다. 로컬(USB)에서는 형제 저장소 Mark5.2 의
-    data_* 또는 data_source_* 폴더에서 찾는다."""
-    p = str(path).replace("\\", "/")
-    if os.path.isfile(p):
-        return p
-    m = re.search(r"/(Mark5\.2|Mark5\.3|Mark5_EXP2?)/(data_[a-z]+)/(.+)$", p)
-    if m:
-        root = os.path.join(os.path.dirname(PROJECT_ROOT), m.group(1))
-        for folder in (m.group(2), SOURCE_ALIAS.get(m.group(2), m.group(2))):
-            c = os.path.join(root, folder, *m.group(3).split("/"))
-            if os.path.isfile(c):
-                return c
-    raise FileNotFoundError(f"[ERROR] 오디오 파일이 없습니다: {path}")
 
 
 def read_split(split):
@@ -203,6 +186,7 @@ def main():
     os.replace(tmp, out)
     meta = {"teacher_kind": args.teacher_kind, "classes": classes, "teacher_files": scorer.files,
             "teacher_release_sha256": release, "split_counts": counts, "limit": args.limit,
+            "mark53_audio_sha256": audio_manifest(tuple(counts), args.limit),   # [2026-10-25] 점수를 낸 오디오(label_freshness 가 대조)
             "scores_sha256": sha256_file(out), "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     if feat_rows:
         fpath = os.path.join(os.path.dirname(os.path.abspath(out)),

@@ -1,0 +1,352 @@
+{
+ "content_thresholds": {
+  "talking": {
+   "mode": "present",
+   "n_ref": 430,
+   "target": 0.03940369114279748,
+   "margin": -0.6452148914337158,
+   "target_median": 0.7627429962158203
+  },
+  "others_house_sins": {
+   "mode": "absent",
+   "n_ref": 32,
+   "targetlike_max": 0.12464272417128086,
+   "targetlike_median": 0.0265741478651762
+  },
+  "others_human": {
+   "mode": "absent",
+   "n_ref": 32,
+   "targetlike_max": 0.12464272417128086,
+   "targetlike_median": 0.0265741478651762
+  }
+ },
+ "tagger_weights": "Mark5.3/weights/mn10_as_mAP_471.pt",
+ "tagger_weights_sha256": "0bd7dc2443af498c289a2e739f02ebb515d6aa3fd3ab9db539c86123ae368a4e",
+ "ref_percentile": 5,
+ "content": {
+  "water_toilet": {
+   "labels": [
+    "Water",
+    "Water tap, faucet",
+    "Toilet flush",
+    "Bathtub (filling or washing)",
+    "Sink (filling or washing)",
+    "Liquid",
+    "Drip",
+    "Pour",
+    "Trickle, dribble",
+    "Gush",
+    "Splash, splatter",
+    "Fill (with liquid)",
+    "Stream",
+    "Gurgling",
+    "Slosh",
+    "Rain",
+    "Raindrop",
+    "Rain on surface",
+    "Waterfall"
+   ],
+   "ref": [
+    "mark4.6",
+    "water_toilet",
+    [
+     "aihub"
+    ],
+    [
+     "train"
+    ]
+   ],
+   "mode": "present"
+  },
+  "water_shower": {
+   "labels": [
+    "Water",
+    "Water tap, faucet",
+    "Toilet flush",
+    "Bathtub (filling or washing)",
+    "Sink (filling or washing)",
+    "Liquid",
+    "Drip",
+    "Pour",
+    "Trickle, dribble",
+    "Gush",
+    "Splash, splatter",
+    "Fill (with liquid)",
+    "Stream",
+    "Gurgling",
+    "Slosh",
+    "Rain",
+    "Raindrop",
+    "Rain on surface",
+    "Waterfall"
+   ],
+   "ref": [
+    "mark4.7",
+    "water_shower",
+    [
+     "aihub"
+    ],
+    [
+     "train"
+    ]
+   ],
+   "mode": "present"
+  },
+  "dog_bark": {
+   "labels": [
+    "Dog",
+    "Bark",
+    "Yip",
+    "Howl",
+    "Bow-wow",
+    "Growling",
+    "Whimper (dog)",
+    "Domestic animals, pets",
+    "Animal"
+   ],
+   "ref": [
+    "mark4.8",
+    "dog_bark",
+    [
+     "aihub"
+    ],
+    [
+     "train"
+    ]
+   ],
+   "mode": "present"
+  },
+  "talking": {
+   "labels": [
+    "Speech",
+    "Male speech, man speaking",
+    "Female speech, woman speaking",
+    "Child speech, kid speaking",
+    "Conversation",
+    "Narration, monologue",
+    "Babbling",
+    "Chatter",
+    "Hubbub, speech noise, speech babble",
+    "Television",
+    "Radio"
+   ],
+   "ref": [
+    "mark4.5",
+    "talking",
+    [
+     "sins",
+     "chime_home"
+    ],
+    [
+     "val",
+     "test"
+    ]
+   ],
+   "mode": "present"
+  },
+  "others_house": {
+   "labels": [
+    "Water",
+    "Water tap, faucet",
+    "Toilet flush",
+    "Bathtub (filling or washing)",
+    "Sink (filling or washing)",
+    "Liquid",
+    "Drip",
+    "Pour",
+    "Trickle, dribble",
+    "Gush",
+    "Splash, splatter",
+    "Fill (with liquid)",
+    "Stream",
+    "Gurgling",
+    "Slosh",
+    "Rain",
+    "Raindrop",
+    "Rain on surface",
+    "Waterfall",
+    "Dog",
+    "Bark",
+    "Yip",
+    "Howl",
+    "Bow-wow",
+    "Growling",
+    "Whimper (dog)",
+    "Domestic animals, pets",
+    "Animal",
+    "Speech",
+    "Male speech, man speaking",
+    "Female speech, woman speaking",
+    "Child speech, kid speaking",
+    "Conversation",
+    "Narration, monologue",
+    "Babbling",
+    "Chatter",
+    "Hubbub, speech noise, speech babble",
+    "Music",
+    "Vehicle",
+    "Car",
+    "Drill",
+    "Hammer",
+    "Power tool",
+    "Jackhammer",
+    "Sawing",
+    "Thump, thud",
+    "Knock",
+    "Door",
+    "Slam",
+    "Walk, footsteps",
+    "Run"
+   ],
+   "ref": [
+    "mark4.1",
+    "others",
+    [
+     "sins"
+    ],
+    [
+     "train",
+     "val",
+     "test"
+    ]
+   ],
+   "mode": "absent"
+  },
+  "others_house_sins": {
+   "labels": [
+    "Water",
+    "Water tap, faucet",
+    "Toilet flush",
+    "Bathtub (filling or washing)",
+    "Sink (filling or washing)",
+    "Liquid",
+    "Drip",
+    "Pour",
+    "Trickle, dribble",
+    "Gush",
+    "Splash, splatter",
+    "Fill (with liquid)",
+    "Stream",
+    "Gurgling",
+    "Slosh",
+    "Rain",
+    "Raindrop",
+    "Rain on surface",
+    "Waterfall",
+    "Dog",
+    "Bark",
+    "Yip",
+    "Howl",
+    "Bow-wow",
+    "Growling",
+    "Whimper (dog)",
+    "Domestic animals, pets",
+    "Animal",
+    "Speech",
+    "Male speech, man speaking",
+    "Female speech, woman speaking",
+    "Child speech, kid speaking",
+    "Conversation",
+    "Narration, monologue",
+    "Babbling",
+    "Chatter",
+    "Hubbub, speech noise, speech babble",
+    "Music",
+    "Vehicle",
+    "Car",
+    "Drill",
+    "Hammer",
+    "Power tool",
+    "Jackhammer",
+    "Sawing",
+    "Thump, thud",
+    "Knock",
+    "Door",
+    "Slam",
+    "Walk, footsteps",
+    "Run"
+   ],
+   "ref": [
+    "mark4.1",
+    "others",
+    [
+     "sins"
+    ],
+    [
+     "train",
+     "val",
+     "test"
+    ]
+   ],
+   "mode": "absent"
+  },
+  "others_human": {
+   "labels": [
+    "Water",
+    "Water tap, faucet",
+    "Toilet flush",
+    "Bathtub (filling or washing)",
+    "Sink (filling or washing)",
+    "Liquid",
+    "Drip",
+    "Pour",
+    "Trickle, dribble",
+    "Gush",
+    "Splash, splatter",
+    "Fill (with liquid)",
+    "Stream",
+    "Gurgling",
+    "Slosh",
+    "Rain",
+    "Raindrop",
+    "Rain on surface",
+    "Waterfall",
+    "Dog",
+    "Bark",
+    "Yip",
+    "Howl",
+    "Bow-wow",
+    "Growling",
+    "Whimper (dog)",
+    "Domestic animals, pets",
+    "Animal",
+    "Speech",
+    "Male speech, man speaking",
+    "Female speech, woman speaking",
+    "Child speech, kid speaking",
+    "Conversation",
+    "Narration, monologue",
+    "Babbling",
+    "Chatter",
+    "Hubbub, speech noise, speech babble",
+    "Music",
+    "Vehicle",
+    "Car",
+    "Drill",
+    "Hammer",
+    "Power tool",
+    "Jackhammer",
+    "Sawing",
+    "Thump, thud",
+    "Knock",
+    "Door",
+    "Slam",
+    "Walk, footsteps",
+    "Run"
+   ],
+   "ref": [
+    "mark4.1",
+    "others",
+    [
+     "sins"
+    ],
+    [
+     "train",
+     "val",
+     "test"
+    ]
+   ],
+   "mode": "absent"
+  }
+ }
+}

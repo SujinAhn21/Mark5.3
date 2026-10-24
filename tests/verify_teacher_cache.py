@@ -4,7 +4,7 @@
     python tests/verify_teacher_cache.py --source-root . --audio-root ../Mark5.2 --scores-csv <teacher_scores_*.csv(labeled·unlabeled 포함)>
 
 1. 최신 판 확인: 가짜 교사 파일 8개로 점수 캐시 json 을 만들고 결합기를 돌린 뒤, 그대로면 통과 · 교사 파일 하나를 바꾸면 멈춤 ·
-   가짜 정답 CSV 를 바꾸면 멈춤 · 점수 캐시를 바꾸면 멈춤.
+   가짜 정답 CSV 를 바꾸면 멈춤 · 점수 캐시를 바꾸면 멈춤 · [2026-10-25] json 의 Mark5.3 오디오 해시가 지금과 다르면 멈춤.
 2. 교사 캐시 경로 1에폭 CPU 학습: 라벨 없는 7클립의 교사 점수를 손으로 정해 둔다.
      확실 3클립(1등 0.9 · 2등 0.1) → 고정 규칙 채택 3
      전원 낮음 2클립(전부 0.05)     → 전원 거절로 others 2
@@ -63,8 +63,12 @@ def fake_release(root):
     return files
 
 
-def write_scores_meta(scores_csv, files):
+def write_scores_meta(scores_csv, files, audio_sha=None):
+    # [2026-10-25] 점수 캐시 json 의 Mark5.3 오디오 해시 — 진짜 데이터 목록(label_freshness.DATA_ROOT)의 labeled·unlabeled 로 계산
+    splits = {'labeled': 2000, 'unlabeled': 2000}
     meta = {'teacher_kind': 'mn10', 'teacher_files': files, 'teacher_release_sha256': 'test',
+            'split_counts': splits, 'limit': 0,
+            'mark53_audio_sha256': audio_sha or label_freshness.audio_manifest(tuple(splits), 0),
             'scores_sha256': sha(scores_csv)}
     Path(str(scores_csv).replace('.csv', '.json')).write_text(json.dumps(meta), encoding='utf-8')
 
@@ -121,7 +125,12 @@ def main():
     expect_stale(lambda: label_freshness.check_pseudo_csv(cmb), '점수 캐시를 다시 만들었는데 옛 가짜 정답 CSV')
     scores.write_bytes(s_raw)
     label_freshness.check_pseudo_csv(cmb)
-    freshness_report = {'pass': True, 'checks': ['그대로 통과', '교사 파일 바뀜 → 멈춤', 'CSV 바뀜 → 멈춤', '점수 캐시 바뀜 → 멈춤']}
+    write_scores_meta(scores, files, audio_sha='0' * 64)          # [2026-10-25] 다른 오디오로 만든 점수 캐시
+    expect_stale(lambda: label_freshness.check_scores(scores), 'Mark5.3 오디오가 바뀌었는데 옛 점수 캐시')
+    write_scores_meta(scores, files)
+    label_freshness.check_scores(scores)
+    freshness_report = {'pass': True, 'checks': ['그대로 통과', '교사 파일 바뀜 → 멈춤', 'CSV 바뀜 → 멈춤', '점수 캐시 바뀜 → 멈춤',
+                                                 'Mark5.3 오디오 바뀜 → 멈춤']}
 
     # 2. 교사 캐시 경로 1에폭 ----------------------------------------------------------
     BaseConfig = train.AudioViLDConfig

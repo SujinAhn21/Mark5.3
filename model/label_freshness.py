@@ -11,6 +11,8 @@
     python model/label_freshness.py --csv pseudo_labels_cmb_l200_s1.csv
 """
 import argparse
+import csv
+import functools
 import glob
 import hashlib
 import json
@@ -20,6 +22,12 @@ import re
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
 _CMB_RE = re.compile(r"^pseudo_labels_(cmb|cmbone|fix)_l(\d+|all)_s(\d+)\.csv$")
+# [2026-10-25] 데이터 목록·오디오는 늘 이 저장소 기준이다(시험이 PROJECT_ROOT 를 임시 폴더로 바꿔도 그대로).
+DATA_ROOT = PROJECT_ROOT
+SPLIT_CSV = {"labeled": "dataset_labeled.csv", "unlabeled": "dataset_unlabeled.csv",
+             "val": "dataset_val.csv", "test": "dataset_test.csv"}
+SOURCE_ALIAS = {"data_labeled": "data_source_labeled", "data_unlabeled": "data_source_unlabeled",
+                "data_val": "data_source_val", "data_test": "data_source_test"}
 
 
 class StaleFileError(RuntimeError):
@@ -38,6 +46,38 @@ def _abs(path, root):
     return path if os.path.isabs(path) else os.path.join(root, path)
 
 
+def localize(path, root=None):
+    """CSV 의 코랩 경로 → 지금 환경의 파일. 코랩에서는 그대로 있다. 로컬(USB)에서는 형제 저장소 Mark5.2 의
+    data_* 또는 data_source_* 폴더에서 찾는다."""
+    p = str(path).replace("\\", "/")
+    if os.path.isfile(p):
+        return p
+    m = re.search(r"/(Mark5\.2|Mark5\.3|Mark5_EXP2?)/(data_[a-z]+)/(.+)$", p)
+    if m:
+        base = os.path.join(os.path.dirname(root or DATA_ROOT), m.group(1))
+        for folder in (m.group(2), SOURCE_ALIAS.get(m.group(2), m.group(2))):
+            c = os.path.join(base, folder, *m.group(3).split("/"))
+            if os.path.isfile(c):
+                return c
+    raise FileNotFoundError(f"[ERROR] 오디오 파일이 없습니다: {path}")
+
+
+@functools.lru_cache(maxsize=8)
+def audio_manifest(splits, limit=0, root=None):
+    """[2026-10-25] 점수 캐시를 만든 Mark5.3 오디오의 신원 — split 마다 지금 데이터 목록의 (split, path, label, 오디오 SHA-256)를
+    모아 해시한다. 파일 이름은 그대로 두고 내용만 바꾼 클립(10-25 talking 아이 말소리 129클립 교체)이 옛 점수 캐시로 통과하지 않게 한다.
+    splits 는 튜플(make_teacher_scores 가 점수를 낸 순서), limit 은 split 마다 앞에서 N개(0 = 전부). 한 프로세스에서 한 번만 계산한다."""
+    root = root or DATA_ROOT
+    entries = []
+    for split in splits:
+        with open(os.path.join(root, SPLIT_CSV[split]), newline="", encoding="utf-8-sig") as f:
+            rows = list(csv.DictReader(f))
+        if limit:
+            rows = rows[:limit]
+        entries += [[split, r["path"], r.get("label", ""), sha256_file(localize(r["path"], root))] for r in rows]
+    return hashlib.sha256(json.dumps(entries, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def _teacher_file_name(entry):
     """점수 캐시 json 의 teacher_files 항목 → resources/ 파일 이름. mn10 은 file 키, 조각 교사(B0)는 class·kind 로 만든다."""
     if entry.get("file"):
@@ -49,7 +89,8 @@ def _teacher_file_name(entry):
 
 
 def check_scores(scores_csv, root=PROJECT_ROOT, resources_dir=None):
-    """점수 캐시 CSV 가 그 json 과 짝이고, json 에 적힌 교사 파일이 지금 resources/ 의 파일과 같은지. 돌려주는 값: json(meta)."""
+    """점수 캐시 CSV 가 그 json 과 짝이고, json 에 적힌 교사 파일이 지금 resources/ 의 파일과 같으며, [2026-10-25] 그 캐시를 만든
+    Mark5.3 데이터 목록·오디오가 지금과 같은지. 돌려주는 값: json(meta)."""
     scores_csv = _abs(scores_csv, root)
     meta_path = os.path.splitext(scores_csv)[0] + ".json"
     if not os.path.isfile(scores_csv) or not os.path.isfile(meta_path):
@@ -66,6 +107,13 @@ def check_scores(scores_csv, root=PROJECT_ROOT, resources_dir=None):
         if sha256_file(path) != entry["sha256"]:
             raise StaleFileError(f"[STALE] resources/ 의 교사가 점수 캐시를 만든 교사와 다릅니다(교사를 다시 학습·반입한 뒤 "
                                  f"make_teacher_scores.py 를 다시 돌리지 않음): {path}")
+    want = meta.get("mark53_audio_sha256")       # [2026-10-25] 교사가 같아도 Mark5.3 데이터 목록·오디오가 바뀌면 옛 캐시다
+    if want is None:
+        raise StaleFileError(f"[STALE] 점수 캐시 json 에 Mark5.3 오디오 해시가 없습니다(2026-10-25 이전 판 make_teacher_scores.py "
+                             f"산출물): {scores_csv}")
+    if audio_manifest(tuple(meta.get("split_counts") or {}), int(meta.get("limit") or 0)) != want:
+        raise StaleFileError(f"[STALE] 지금 Mark5.3 데이터 목록·오디오가 점수 캐시를 만든 판과 다릅니다(오디오를 바꾼 뒤 "
+                             f"make_teacher_scores.py 를 다시 돌리지 않음): {scores_csv}")
     return meta
 
 
