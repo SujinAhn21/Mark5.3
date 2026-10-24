@@ -40,10 +40,11 @@ NEW_SOURCE_FILES = [
     "teacher_mn10/model_def.py", "teacher_mn10/train_loop.py", "teacher_mn10/train_teacher.py",
     "tests/verify_two_candidate.py", "tests/verify_teacher_cache.py", "tests/verify_teacher_gate.py",
     "tests/verify_import_mn10.py", "tests/verify_cmb_aggregation.py",
-    "notebooks/1 교사 점수·채택 관문.ipynb", "notebooks/2 Mark5.3 본실험 70회.ipynb", "notebooks/3 비교모델 결합기 조건 24회.ipynb",
+    "notebooks/1 교사 점수·채택 관문.ipynb", "notebooks/2 Mark5.3 본실험 80회.ipynb", "notebooks/3 비교모델 결합기 조건 24회.ipynb",
 ]
 # 일부러 없앤 파일만 여기 적는다(목록에 없는데 사라진 파일은 그대로 오류). 10-23: 한 조건 노트북 → 위 세 노트북으로 바뀜.
-RETIRED_SOURCE_FILES = ["notebooks/Mark5.3 제안모델 실험.ipynb"]
+# 10-25: 본실험 노트북 70회 → 80회(지도만 정답 1,000·500 추가)로 이름이 바뀜.
+RETIRED_SOURCE_FILES = ["notebooks/Mark5.3 제안모델 실험.ipynb", "notebooks/2 Mark5.3 본실험 70회.ipynb"]
 
 
 def refresh_source(root=ROOT):

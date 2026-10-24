@@ -257,6 +257,9 @@ PLSOURCE_PLAN = [(200, 2000, True, None), (200, 2000, True, "self"), (200, 2000,
 PL4_PLAN = [(None, 2000), (1000, 2000), (500, 2000), (200, 2000)]
 PSEUDO_CSV_FMT = "pseudo_labels_{ps}_l{l}_s{s}.csv"   # 프로젝트 루트. self·gen = model/make_pseudo_labels.py, cmb·fix = model/make_combiner_labels.py 산출물
 # [신설 2026-10-22 / 검증 결합기] 설계 문서 '실험 계획' 의 Mark5.3 70회(조합 14개 × seed 5). 가짜 정답 CSV 는 model/make_combiner_labels.py 산출물
+# [2026-10-25] 80회(조합 16개 × seed 5)로 늘림: 지도만에 정답 1,000·500 × 라벨 없는 0 을 더했다. 70회 판은 지도만이 정답 전량·200 에만 있어
+#   논문 표 4(라벨 효율)의 1,000·500 줄에 지도만 행이 없었고(비교모델은 4개 수준 모두 sup 이 있음), 그 두 수준의 u0 대 u2000 검정도 빠졌다.
+#   10-07 판은 그 칸을 D0(Mark5_EXP2)에서 가져왔지만, D0 는 10-25 아이 말소리 교체 전 데이터로 학습해 쓸 수 없다.
 # (cmb = 한 라벨 + 두 후보, fix = 고정 규칙). 원소 = (labeled_n, unlabeled_n, pseudo_source, 이 회차에만 더할 플래그).
 # 공통 플래그는 CMB_BASE_EXTRA(10-22 까지의 Mark5.3 묶음에서 OR·NEG 를 뺀 것 — CSV 경로는 교사 확신도가 없어 OR·NEG 를 받지 않는다).
 CMB_BASE_EXTRA = ("--linear_head --head_pretrained_hidden --hard_weight 1.0 --teacher_seg_mean --teacher_clean_view "
@@ -270,8 +273,8 @@ CMB_PLAN = [
     (None, 2000, "cmb", ""), (1000, 2000, "cmb", ""), (500, 2000, "cmb", ""), (200, 2000, "cmb", ""),
     # 라벨 없는 양 곡선(정답 200) 15회 — u2000 은 본실험 회차와 같다
     (200, 0, None, ""), (200, 500, "cmb", ""), (200, 1000, "cmb", ""),
-    # 지도만(정답 2,000) 5회
-    (None, 0, None, ""),
+    # 지도만 15회: 정답 2,000·1,000·500 (정답 200 의 지도만은 위 곡선의 u0 회차)
+    (None, 0, None, ""), (1000, 0, None, ""), (500, 0, None, ""),
     # 아블레이션 30회: 두 후보 끔 · 옛 교사 경로 복원 · 고정 규칙 가짜 정답
     (200, 2000, "cmb", "--no_two_candidate"), (None, 2000, "cmb", "--no_two_candidate"),
     (200, 2000, None, CMB_OLD_PATH_EXTRA), (None, 2000, None, CMB_OLD_PATH_EXTRA),
@@ -564,7 +567,7 @@ def main():
         elif args.preset == "pl4":
             print(f" 조건     : PL4_PLAN {len(PL4_PLAN)}개 (labeled 전량·1000·500·200 x u2000) — Mark5.3 본표 pl 행")
         elif args.preset == "cmb":
-            print(f" 조건     : CMB_PLAN {len(CMB_PLAN)}개 (본실험 4 · 곡선 3 · 지도만 1 · 아블레이션 6) — 검증 결합기 설계")
+            print(f" 조건     : CMB_PLAN {len(CMB_PLAN)}개 (본실험 4 · 곡선 3 · 지도만 3 · 아블레이션 6) — 검증 결합기 설계")
         elif args.preset == "plsource":
             print(f" 조건     : PLSOURCE_PLAN {len(PLSOURCE_PLAN)}개 (labeled 200 + unlabeled 3,800 · 합의/self/gen)")
         elif args.ceiling:

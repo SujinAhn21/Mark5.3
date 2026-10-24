@@ -1,10 +1,11 @@
-"""--main_pseudo_source(집계·논문 표) 점검 — preset cmb 70회 태그로 만든 가짜 결과로 고르기·짝 검정이 맞는지 본다 (2026-10-23).
+"""--main_pseudo_source(집계·논문 표) 점검 — preset cmb 80회 태그로 만든 가짜 결과로 고르기·짝 검정이 맞는지 본다 (2026-10-23, 10-25 80회).
 
 aggregate_results.collect 만 가짜 표로 바꾸고(체크포인트·출력 정책 대조를 건너뛰려고), 그 뒤의 main()·baseline_paired·
 make_paper_tables.main_slice·label_eff_rows 는 실제 코드를 돌린다. 산출물은 임시 폴더(PLOT_DIR 를 바꿈)에만 쓴다.
-기대값(손 계산, 본실험 설정 묶음 = 본실험 4 + 곡선 2(u500·u1000) + 지도만 2 + 고정 규칙 2 조합, seed 5)
-    cmb       본표(정답 전량) = u2000 cmb 5 + u0 5 = 10행 · 라벨 효율 = (cmb 6 + 지도만 2) × 5 = 40행 · fix 0행
-    consensus 본표 = u0 5행 · 라벨 효율 = 지도만 2 × 5 = 10행
+기대값(손 계산, 본실험 설정 묶음 = 본실험 4 + 곡선 2(u500·u1000) + 지도만 4(정답 200·전량·1,000·500 × u0) + 고정 규칙 2 조합 = 12, seed 5 → 60행)
+    cmb       본표(정답 전량) = u2000 cmb 5 + u0 5 = 10행 · 라벨 효율 = (cmb 6 + 지도만 4) × 5 = 50행 · fix 0행
+    cmb       표 4 / 라벨 효율 검정: 정답 2,000·1,000·500·200 네 수준 모두 supervised(u0) 행(N=5)과 u0 vs u2000 검정이 있다
+    consensus 본표 = u0 5행 · 라벨 효율 = 지도만 4 × 5 = 20행
     짝 검정(정답 200, 비교모델 sup·pl·plc seed 1~5): cmb → 'ours' 짝 = plc 5 · consensus → u0 만 있어 'ours' 짝 없음
 """
 import os
@@ -58,11 +59,22 @@ def run_main(df, ps, out_dir):
 def main():
     df = fake_df()
     full = AG._full_labeled_count()
-    require(len(df) == 10 * 5 and set(df["pseudo_source"]) == {"cmb", "fix", "consensus"}, f"가짜 결과 {len(df)}행(본 설정 10조합 × 5)")
+    require(len(df) == 12 * 5 and set(df["pseudo_source"]) == {"cmb", "fix", "consensus"}, f"가짜 결과 {len(df)}행(본 설정 12조합 × 5)")
     with tempfile.TemporaryDirectory() as d:
         raw, raw_all = run_main(df, "cmb", d)
         require(len(raw) == 10 and set(raw["unlabeled"]) == {0, 2000} and (raw["labeled"] == full).all(), f"cmb 본표 {len(raw)}행(기대 10)")
-        require(len(raw_all) == 40 and "fix" not in set(raw_all["pseudo_source"]), f"cmb 라벨 효율 원자료 {len(raw_all)}행(기대 40) · fix 없음")
+        require(len(raw_all) == 50 and "fix" not in set(raw_all["pseudo_source"]), f"cmb 라벨 효율 원자료 {len(raw_all)}행(기대 50) · fix 없음")
+        # [2026-10-25] 표 4 의 정답 1,000·500 줄에 지도만 행이 없던 결함(70회 판) — 네 수준 모두 supervised N=5 와 u0 vs u2000 검정
+        le_tab = pd.read_csv(os.path.join(d, "paper_table_label_eff_mark5.2_test_plain.csv"), encoding="utf-8-sig")
+        sup = le_tab[le_tab["condition"] == "supervised"]
+        require(sorted(sup["labeled"]) == [200, 500, 1000, full] and (sup["N"] == 5).all(),
+                f"라벨 효율 표: supervised 행 수준 {sorted(sup['labeled'])} · N {sorted(sup['N'])}(기대 200·500·1000·{full}, 각 5)")
+        _, le_tests = AG.label_efficiency(raw_all)
+        require(sorted(set(le_tests["labeled"])) == [200, 500, 1000, full] if not le_tests.empty else False,
+                f"라벨 효율 검정(u0 vs u2000) 수준 {sorted(set(le_tests['labeled'])) if not le_tests.empty else []}")
+        rows4 = MP.label_eff_rows(le_tab, None, full, "plc")
+        sup4 = sorted(r[0] for r in rows4 if r[1].startswith("Proposed") and r[2] == "supervised")
+        require(sup4 == [200, 500, 1000, full], f"표 4(make_paper_tables) Proposed supervised 행 {sup4}")
         ms = MP.main_slice(raw_all, "cmb")
         require(len(ms) == 10, f"make_paper_tables.main_slice(cmb) {len(ms)}행(기대 10)")
         # 표 생성기 main 을 같은 임시 폴더에서 끝까지(집계 _plain 산출물을 읽어야 한다 — 10-23 이전에는 이름이 달라 멈췄다)
@@ -73,7 +85,7 @@ def main():
         require(len(md) == 1, f"make_paper_tables 산출물 {md}")
         text = open(os.path.join(d, md[0]), encoding="utf-8").read()
         require("자료 없음 — aggregate_results.py 가 만든 paper_table_label_eff" not in text, "표 4(라벨 효율)가 집계 산출물을 읽음")
-        # [2026-10-23] 노트북 '2 Mark5.3 본실험 70회' 마지막 셀과 같은 인자: 비교모델 원자료(sup·plc × 정답 전량·1,000·500·200 × seed 1)
+        # [2026-10-23] 노트북 '2 Mark5.3 본실험 80회' 마지막 셀과 같은 인자: 비교모델 원자료(sup·plc × 정답 전량·1,000·500·200 × seed 1)
         bdir = os.path.join(d, "base"); os.makedirs(bdir)
         braw = []
         for mt in ("efficientat_mn10", "panns_cnn6", "ced_tiny"):
@@ -89,7 +101,7 @@ def main():
     with tempfile.TemporaryDirectory() as d:
         raw, raw_all = run_main(df, None, d)
         require(len(raw) == 5 and set(raw["unlabeled"]) == {0}, f"consensus(기본) 본표 {len(raw)}행(기대 5, u0)")
-        require(len(raw_all) == 10, f"consensus(기본) 라벨 효율 원자료 {len(raw_all)}행(기대 10)")
+        require(len(raw_all) == 20, f"consensus(기본) 라벨 효율 원자료 {len(raw_all)}행(기대 20)")
 
     # 비교모델 짝 검정: 정답 200, sup·pl·plc seed 1~5
     le = df[(df["pseudo_source"] != "fix")].copy()

@@ -4,7 +4,7 @@
 `--m53`은 더 이상 받지 않는다. 기존 Mark4.x 전문가 8명의 인코더·분류기 체크포인트
 16개는 그대로 teacher로 사용한다.
 
-## 2026-10-23 판: 검증 결합기 설계 (`--preset cmb`, 70회)
+## 2026-10-23 판: 검증 결합기 설계 (`--preset cmb`, 80회)
 
 설계 문서 "Mark5.3 개선 설계: 검증된 교사 신호와 mn10 교사"를 따른다. 학습 중에 교사를 부르지 않고, 교사 점수 캐시 →
 검증 결합기 → 가짜 정답 CSV 를 미리 만든 뒤 학생이 그 CSV 를 읽는다. 학생 헤드는 선형 헤드(`--linear_head`)라 제로샷은 없다.
@@ -17,7 +17,7 @@
 | 3 | `python model/teacher_gate_report.py --candidate plots/teacher_scores_mn10.csv --reference plots/teacher_scores_segment.csv` | 채택 관문(9클래스 4지표 · 결합기 5겹 교차검증 · 손들기 행렬) → `plots/teacher_gate_*.json` |
 | 4 | `python model/make_combiner_labels.py --scores plots/teacher_scores_<채택>.csv` | `pseudo_labels_{cmb,cmbone,fix}_l<n\|all>_s<seed>.csv` + `plots/combiner/*.json` |
 | 5 | `python model/label_freshness.py` | 교사 → 점수 캐시 → 결합기 CSV 해시 사슬 대조(어긋나면 멈춤) |
-| 6 | `python model/run_experiments.py --mark_version mark5.2 --preset cmb --seeds 1 2 3 4 5` | 14조합 × 5 = 70회(본실험 4 · 곡선 3 · 지도만 1 · 아블레이션 6) |
+| 6 | `python model/run_experiments.py --mark_version mark5.2 --preset cmb --seeds 1 2 3 4 5` | 16조합 × 5 = 80회(본실험 4 · 곡선 3 · 지도만 3 · 아블레이션 6). 10-25 에 지도만 정답 1,000·500 을 더해 표 4 의 네 수준 모두 지도만 행이 있다(정답 200 의 지도만은 곡선의 u0) |
 | 7 | `python model/aggregate_results.py --split test --main_pseudo_source cmb --bases <본실험 설정>` | 본표·라벨 효율 표(지도만 u0 회차 포함). 비교모델 짝은 `plc` |
 | 8 | `python model/make_paper_tables.py --split test --main_pseudo_source cmb --baseline_raw ...` | 논문 표 |
 
@@ -76,11 +76,11 @@ Mark4.1~4.8 교사는 Adam 1e-4 그대로다 — 교사는 비교 대상이 아�
 | --- | --- |
 | `../Mark4.X/notebooks/Mark4.X 교사 학습(B+·B0).ipynb` × 8 | 교사마다 B+(mn10)·B0(조각, `--recipe run3`) 학습. 지금 데이터 인덱스로 끝난 판은 건너뜀 |
 | `notebooks/1 교사 점수·채택 관문.ipynb` | 교사 16개 대기 → 반입(`--kind mn10`·`segment`) → 점수 캐시 → 관문(후보 B+ · 기준 B0) |
-| `notebooks/2 Mark5.3 본실험 70회.ipynb` | 관문 '채택(B+)' 이면 결합기 가짜 정답 → 70회(학습·val·test) → 집계 → 비교모델 24회를 기다려 논문 표. 아니면 멈춤 |
+| `notebooks/2 Mark5.3 본실험 80회.ipynb` | 관문 '채택(B+)' 이면 결합기 가짜 정답 → 80회(학습·val·test) → 집계 → 비교모델 24회를 기다려 논문 표. 아니면 멈춤 |
 | `notebooks/3 비교모델 결합기 조건 24회.ipynb` | 비교모델 3개 × (지도만 4 · 결합기 한 라벨 4), seed 1. plc 는 Mark5.3 결합기 CSV 를 기다림 |
 
 - 비교모델은 seed 1 하나라 Mark5.3 과의 seed 짝 검정은 노트북에서 돌리지 않는다(검정 방식 미정).
-- `tests/verify_release_contract.py` 가 세 노트북의 셀 문법·L4 규칙·시간 제한 없음·70회 태그를 확인한다.
+- `tests/verify_release_contract.py` 가 세 노트북의 셀 문법·L4 규칙·시간 제한 없음·80회 태그·네 수준 지도만을 확인한다.
 
 ## 파일과 환경
 
