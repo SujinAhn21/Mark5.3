@@ -109,9 +109,12 @@ def rec_key(row):
     if src == "clotho":                                                  # [10-23] 외부 출처 — aihub_src_file 에 원본 ID
         f = row.get("aihub_src_file")
         return ("F", str(int(float(f)))) if pd.notna(f) else None      # Clotho 는 Freesound 클립 → FSD50K 와 같은 이름공간
-    if src in ("bbc", "bedavin", "snu_b36_50e", "voices"):            # voices: rm4 tele 한 녹음(마이크 10개 동시) → 키 하나
-        f = row.get("aihub_src_file")
+    if src in ("bbc", "bedavin", "snu_b36_50e", "voices", "chime6"):  # voices: rm4 tele 한 녹음(마이크 10개 동시) → 키 하나
+        f = row.get("aihub_src_file")                                    # [10-24] chime6: aihub_src_file 에 세션(S02 등) — 배열이 달라도 한 녹음
         return ("X", f"{src}:{f}") if pd.notna(f) else None
+    if src == "sins_eval":                                               # [10-24] SINS 평가 세트(DCASE2018 T5 eval) — 개발 세트와 세션 번호 체계가
+        m = re.search(r"ex(\d+)", str(row.get("aihub_src_file", "")))   # 달라 키를 따로 둔다(EvalNode*_ex<세션>_<구간>.wav)
+        return ("S", "sins_eval:ex" + m.group(1)) if m else None
     if src == "sins":
         m = re.search(r"ex(\d+)", str(row.get("aihub_src_file", "")))
         return ("S", "sins:ex" + m.group(1)) if m else None
