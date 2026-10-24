@@ -1,327 +1,119 @@
 {
-  "generated_at": "2026-10-06 22:58:09",
-  "src_root": "/content/drive/MyDrive/NewProject/codes/experiments",
-  "run_subdir": "_run3_20260923",
-  "teachers": {
-    "mark4.1": {
-      "encoder": {
-        "file": "best_teacher_encoder_mark4.1.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.1/model/_run3_20260923/best_teacher_encoder_mark4.1.pth",
-        "bytes": 1974195,
-        "sha1": "ff60d9e8351cb7afe842e50039c911c44386fe7d",
-        "sha256": "5020edf7835f7d105a073a4a3f9d785e76a732000e7105db73def1226cb8cb78",
-        "mtime": "2026-09-23 12:46:24",
-        "target_threshold_json": "Mark4.1/plots/_run3_20260923/target_threshold_mark4.1.json",
-        "target_threshold": 0.5,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9813953488372092,
-          "val_macro_precision": 0.9815620333701227,
-          "val_macro_recall": 0.9813953488372094,
-          "val_macro_f1": 0.9813937387767464,
-          "val_others_fpr": 0.027906976744186046
-        },
-        "threshold_selected_at": "2026-09-23 13:11:07",
-        "resources_status": "동일(덮어쓰지 않음)"
-      },
-      "classifier": {
-        "file": "best_teacher_classifier_mark4.1.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.1/model/_run3_20260923/best_teacher_classifier_mark4.1.pth",
-        "bytes": 5457,
-        "sha1": "2ed38266bdd50c8169cf6a23f7a359c5f5a71096",
-        "sha256": "c9b631e31d8353718fbe6b208a4ac6b3da4c3617ad669afd6acc5d0926c017ff",
-        "mtime": "2026-09-23 12:46:24",
-        "target_threshold_json": "Mark4.1/plots/_run3_20260923/target_threshold_mark4.1.json",
-        "target_threshold": 0.5,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9813953488372092,
-          "val_macro_precision": 0.9815620333701227,
-          "val_macro_recall": 0.9813953488372094,
-          "val_macro_f1": 0.9813937387767464,
-          "val_others_fpr": 0.027906976744186046
-        },
-        "threshold_selected_at": "2026-09-23 13:11:07",
-        "resources_status": "동일(덮어쓰지 않음)"
-      }
+  "schema_version": 1,
+  "kind": "segment",
+  "teacher_release_sha256": "bf4daf097e44268074ac818b98d8b3a88d8a9303f48b5a9f7eec205a485006d3",
+  "files": [
+    {
+      "file": "best_teacher_encoder_mark4.1.pth",
+      "sha256": "adb246587f4654eef4d28377cbcae95604c7b9f0191357d4277135abca479fe4",
+      "bytes": 1974907,
+      "run_id": "347b9fc0-cf03-48c8-9f25-92a2aecda67e",
+      "target_class": "heavy_impact"
     },
-    "mark4.2": {
-      "encoder": {
-        "file": "best_teacher_encoder_mark4.2.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.2/model/_run3_20260923/best_teacher_encoder_mark4.2.pth",
-        "bytes": 1974195,
-        "sha1": "2e97ce86c11fbae8df016ff5b8a1f8ac9968c1d6",
-        "sha256": "c1931e6ea634a8deb37e3567041ba836d23e864698e64be1049c1d707d3b3ce9",
-        "mtime": "2026-09-23 12:56:41",
-        "target_threshold_json": "Mark4.2/plots/_run3_20260923/target_threshold_mark4.2.json",
-        "target_threshold": 0.5156,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9186046511627907,
-          "val_macro_precision": 0.9193394590846047,
-          "val_macro_recall": 0.9186046511627907,
-          "val_macro_f1": 0.9185689782976859,
-          "val_others_fpr": 0.10232558139534884
-        },
-        "threshold_selected_at": "2026-09-23 13:15:15",
-        "resources_status": "동일(덮어쓰지 않음)"
-      },
-      "classifier": {
-        "file": "best_teacher_classifier_mark4.2.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.2/model/_run3_20260923/best_teacher_classifier_mark4.2.pth",
-        "bytes": 5457,
-        "sha1": "9fc48b20b70d52911bdf728e86e3dcc5873c3ec4",
-        "sha256": "33b1074f7508864a7893ae6bd1dd8c7f6e297439ee559c4211737eab9ca99d2b",
-        "mtime": "2026-09-23 12:56:41",
-        "target_threshold_json": "Mark4.2/plots/_run3_20260923/target_threshold_mark4.2.json",
-        "target_threshold": 0.5156,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9186046511627907,
-          "val_macro_precision": 0.9193394590846047,
-          "val_macro_recall": 0.9186046511627907,
-          "val_macro_f1": 0.9185689782976859,
-          "val_others_fpr": 0.10232558139534884
-        },
-        "threshold_selected_at": "2026-09-23 13:15:15",
-        "resources_status": "동일(덮어쓰지 않음)"
-      }
+    {
+      "file": "best_teacher_classifier_mark4.1.pth",
+      "sha256": "2a304c7b8e69ab0e699e5784d0293e7a7f9ef36e2e19a3f29ef28cfe7a7a3a74",
+      "bytes": 6361,
+      "run_id": "347b9fc0-cf03-48c8-9f25-92a2aecda67e",
+      "target_class": "heavy_impact"
     },
-    "mark4.3": {
-      "encoder": {
-        "file": "best_teacher_encoder_mark4.3.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.3/model/_run3_20260923/best_teacher_encoder_mark4.3.pth",
-        "bytes": 1974195,
-        "sha1": "dbb97eebba56f5722a96330634d3a840caf1d14f",
-        "sha256": "c12c7824aad1d32355f65d07003fca6220e97180b515bb684c8a58cc5661c882",
-        "mtime": "2026-09-23 12:56:21",
-        "target_threshold_json": "Mark4.3/plots/_run3_20260923/target_threshold_mark4.3.json",
-        "target_threshold": 0.69,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9627906976744186,
-          "val_macro_precision": 0.9629509402930165,
-          "val_macro_recall": 0.9627906976744186,
-          "val_macro_f1": 0.962787477553493,
-          "val_others_fpr": 0.027906976744186046
-        },
-        "threshold_selected_at": "2026-09-23 13:15:41",
-        "resources_status": "동일(덮어쓰지 않음)"
-      },
-      "classifier": {
-        "file": "best_teacher_classifier_mark4.3.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.3/model/_run3_20260923/best_teacher_classifier_mark4.3.pth",
-        "bytes": 5457,
-        "sha1": "085728cae57d3eeae57e42b6812f2c0863320c2e",
-        "sha256": "cf7f6dc7efd72087d954e9db505e471535dbefb035eae4cc712de8f417e9e885",
-        "mtime": "2026-09-23 12:56:21",
-        "target_threshold_json": "Mark4.3/plots/_run3_20260923/target_threshold_mark4.3.json",
-        "target_threshold": 0.69,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9627906976744186,
-          "val_macro_precision": 0.9629509402930165,
-          "val_macro_recall": 0.9627906976744186,
-          "val_macro_f1": 0.962787477553493,
-          "val_others_fpr": 0.027906976744186046
-        },
-        "threshold_selected_at": "2026-09-23 13:15:41",
-        "resources_status": "동일(덮어쓰지 않음)"
-      }
+    {
+      "file": "best_teacher_encoder_mark4.2.pth",
+      "sha256": "5905b239bac56562a421339dbb2b9862ae58c305d790a4b6c4d62237dfd26756",
+      "bytes": 1974843,
+      "run_id": "b9851e97-67b0-41fb-8f42-ba983ba937bd",
+      "target_class": "dragging"
     },
-    "mark4.4": {
-      "encoder": {
-        "file": "best_teacher_encoder_mark4.4.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.4/model/_run3_20260923/best_teacher_encoder_mark4.4.pth",
-        "bytes": 1974195,
-        "sha1": "f9e22d7bc170ae6e4d85a6fb663cfa2273a9ecdf",
-        "sha256": "5616ad32b6a352379d239a5da923e38c1c29f0b02bd1351858a4b0b3118f4673",
-        "mtime": "2026-09-23 12:47:38",
-        "target_threshold_json": "Mark4.4/plots/_run3_20260923/target_threshold_mark4.4.json",
-        "target_threshold": 0.43,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9162790697674419,
-          "val_macro_precision": 0.9166035203186906,
-          "val_macro_recall": 0.9162790697674419,
-          "val_macro_f1": 0.916262766141596,
-          "val_others_fpr": 0.09767441860465116
-        },
-        "threshold_selected_at": "2026-09-23 12:50:54",
-        "resources_status": "동일(덮어쓰지 않음)"
-      },
-      "classifier": {
-        "file": "best_teacher_classifier_mark4.4.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.4/model/_run3_20260923/best_teacher_classifier_mark4.4.pth",
-        "bytes": 5457,
-        "sha1": "608c9bff5e06511aaca8fd8961a86f11eaa3e2fa",
-        "sha256": "71d9a7eb7a8968daa6860c92202c42d9b76b4cb5a67333e8e1ff99e868267c19",
-        "mtime": "2026-09-23 12:47:38",
-        "target_threshold_json": "Mark4.4/plots/_run3_20260923/target_threshold_mark4.4.json",
-        "target_threshold": 0.43,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9162790697674419,
-          "val_macro_precision": 0.9166035203186906,
-          "val_macro_recall": 0.9162790697674419,
-          "val_macro_f1": 0.916262766141596,
-          "val_others_fpr": 0.09767441860465116
-        },
-        "threshold_selected_at": "2026-09-23 12:50:54",
-        "resources_status": "동일(덮어쓰지 않음)"
-      }
+    {
+      "file": "best_teacher_classifier_mark4.2.pth",
+      "sha256": "d4b6d58f84af74f82c1a4cab000d44539e07a5978519ebbdd347fba2e9ca20ff",
+      "bytes": 6361,
+      "run_id": "b9851e97-67b0-41fb-8f42-ba983ba937bd",
+      "target_class": "dragging"
     },
-    "mark4.5": {
-      "encoder": {
-        "file": "best_teacher_encoder_mark4.5.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.5/model/_run3_20260923/best_teacher_encoder_mark4.5.pth",
-        "bytes": 1974195,
-        "sha1": "95bd559a0cb84fa515236beacf1270dcdf6cf34b",
-        "sha256": "6e2e7e11a2532c4e55f4d33232139e0c9fd4cba1641accd2065f6b7f405cef86",
-        "mtime": "2026-09-23 14:05:11",
-        "target_threshold_json": "Mark4.5/plots/_run3_20260923/target_threshold_mark4.5.json",
-        "target_threshold": 0.54,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9651162790697675,
-          "val_macro_precision": 0.9652068547689112,
-          "val_macro_recall": 0.9651162790697674,
-          "val_macro_f1": 0.9651145810234139,
-          "val_others_fpr": 0.027906976744186046
-        },
-        "threshold_selected_at": "2026-09-23 14:33:06",
-        "resources_status": "동일(덮어쓰지 않음)"
-      },
-      "classifier": {
-        "file": "best_teacher_classifier_mark4.5.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.5/model/_run3_20260923/best_teacher_classifier_mark4.5.pth",
-        "bytes": 5457,
-        "sha1": "9bbf3b2c5112f3a500551b3a30de446fbc619b3b",
-        "sha256": "b94129a8d84628bd2e6c19d48b12627405886f1ad2d0f086d1776773323437e3",
-        "mtime": "2026-09-23 14:05:11",
-        "target_threshold_json": "Mark4.5/plots/_run3_20260923/target_threshold_mark4.5.json",
-        "target_threshold": 0.54,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9651162790697675,
-          "val_macro_precision": 0.9652068547689112,
-          "val_macro_recall": 0.9651162790697674,
-          "val_macro_f1": 0.9651145810234139,
-          "val_others_fpr": 0.027906976744186046
-        },
-        "threshold_selected_at": "2026-09-23 14:33:06",
-        "resources_status": "동일(덮어쓰지 않음)"
-      }
+    {
+      "file": "best_teacher_encoder_mark4.3.pth",
+      "sha256": "4f4dfde476b9c5572f144e65970fd5aa4ad16aedbf7acb292a8954fba0f6ffd3",
+      "bytes": 1974907,
+      "run_id": "ae2d8504-5a4f-485e-a92f-413a6837cf9a",
+      "target_class": "construction"
     },
-    "mark4.6": {
-      "encoder": {
-        "file": "best_teacher_encoder_mark4.6.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.6/model/_run3_20260923/best_teacher_encoder_mark4.6.pth",
-        "bytes": 1974195,
-        "sha1": "9b042b528e42e3b6c627ea9822fe1f014a19efc6",
-        "sha256": "8d133c8c3e2fb780fad95e6887389f87ea4ec6ba80ef8c0c78817dbc85309d7e",
-        "mtime": "2026-09-23 14:07:22",
-        "target_threshold_json": "Mark4.6/plots/_run3_20260923/target_threshold_mark4.6.json",
-        "target_threshold": 0.56,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9697674418604652,
-          "val_macro_precision": 0.9697776047075113,
-          "val_macro_recall": 0.9697674418604652,
-          "val_macro_f1": 0.9697672783519652,
-          "val_others_fpr": 0.03255813953488372
-        },
-        "threshold_selected_at": "2026-09-23 14:38:14",
-        "resources_status": "동일(덮어쓰지 않음)"
-      },
-      "classifier": {
-        "file": "best_teacher_classifier_mark4.6.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.6/model/_run3_20260923/best_teacher_classifier_mark4.6.pth",
-        "bytes": 5457,
-        "sha1": "98abcd02aa7db28ed1d1811b6ba5db352dd38a49",
-        "sha256": "f273331a5ff0b5d76437caa9843812ecc55a32b9e37ea6c21be23cf4b94702d2",
-        "mtime": "2026-09-23 14:07:22",
-        "target_threshold_json": "Mark4.6/plots/_run3_20260923/target_threshold_mark4.6.json",
-        "target_threshold": 0.56,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9697674418604652,
-          "val_macro_precision": 0.9697776047075113,
-          "val_macro_recall": 0.9697674418604652,
-          "val_macro_f1": 0.9697672783519652,
-          "val_others_fpr": 0.03255813953488372
-        },
-        "threshold_selected_at": "2026-09-23 14:38:14",
-        "resources_status": "동일(덮어쓰지 않음)"
-      }
+    {
+      "file": "best_teacher_classifier_mark4.3.pth",
+      "sha256": "046dc0f44fd4d9e5d0250a0ee9e6c44120a1795fd6bf8d0383b9174d09ccb0d2",
+      "bytes": 6361,
+      "run_id": "ae2d8504-5a4f-485e-a92f-413a6837cf9a",
+      "target_class": "construction"
     },
-    "mark4.7": {
-      "encoder": {
-        "file": "best_teacher_encoder_mark4.7.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.7/model/_run3_20260923/best_teacher_encoder_mark4.7.pth",
-        "bytes": 1974195,
-        "sha1": "e778b86ffd0ea5ef4baef4580b03e79b0b180c7b",
-        "sha256": "9eee34119caf5dad322c77a3e34e89e3fd1e5f86833b9acaf02c5fd18573f5ed",
-        "mtime": "2026-09-23 14:04:53",
-        "target_threshold_json": "Mark4.7/plots/_run3_20260923/target_threshold_mark4.7.json",
-        "target_threshold": 0.58,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9930232558139535,
-          "val_macro_precision": 0.9930339217722395,
-          "val_macro_recall": 0.9930232558139536,
-          "val_macro_f1": 0.9930232180812228,
-          "val_others_fpr": 0.004651162790697674
-        },
-        "threshold_selected_at": "2026-09-23 14:31:08",
-        "resources_status": "동일(덮어쓰지 않음)"
-      },
-      "classifier": {
-        "file": "best_teacher_classifier_mark4.7.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.7/model/_run3_20260923/best_teacher_classifier_mark4.7.pth",
-        "bytes": 5457,
-        "sha1": "a1732824ce5ed0c5e69d3b49d8439a780ed013ec",
-        "sha256": "2e9c6b1f2103195aa28c921d11a7b1a150c3800bdc6ce99d2a2715e1340a8ab2",
-        "mtime": "2026-09-23 14:04:53",
-        "target_threshold_json": "Mark4.7/plots/_run3_20260923/target_threshold_mark4.7.json",
-        "target_threshold": 0.58,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9930232558139535,
-          "val_macro_precision": 0.9930339217722395,
-          "val_macro_recall": 0.9930232558139536,
-          "val_macro_f1": 0.9930232180812228,
-          "val_others_fpr": 0.004651162790697674
-        },
-        "threshold_selected_at": "2026-09-23 14:31:08",
-        "resources_status": "동일(덮어쓰지 않음)"
-      }
+    {
+      "file": "best_teacher_encoder_mark4.4.pth",
+      "sha256": "b5d10f1c749edd7462b021ce3c1bdab8cd09852d8aa0b8b8eec4f9b47d2db94b",
+      "bytes": 1974907,
+      "run_id": "c9c38dda-c29d-4351-98a4-a2abf9f125e3",
+      "target_class": "machine_noise"
     },
-    "mark4.8": {
-      "encoder": {
-        "file": "best_teacher_encoder_mark4.8.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.8/model/_run3_20260923/best_teacher_encoder_mark4.8.pth",
-        "bytes": 1974195,
-        "sha1": "84368f57046fcb24aaabd852051b854acad85540",
-        "sha256": "28358a4866809864d75269e1ee6d3ffe257e13e7fc43143d264379eeff4838c3",
-        "mtime": "2026-09-23 14:03:27",
-        "target_threshold_json": "Mark4.8/plots/_run3_20260923/target_threshold_mark4.8.json",
-        "target_threshold": 0.43,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9488372093023256,
-          "val_macro_precision": 0.9488372093023256,
-          "val_macro_recall": 0.9488372093023256,
-          "val_macro_f1": 0.9488372093023256,
-          "val_others_fpr": 0.05116279069767442
-        },
-        "threshold_selected_at": "2026-09-23 14:09:02",
-        "resources_status": "동일(덮어쓰지 않음)"
-      },
-      "classifier": {
-        "file": "best_teacher_classifier_mark4.8.pth",
-        "source": "/content/drive/MyDrive/NewProject/codes/experiments/Mark4.8/model/_run3_20260923/best_teacher_classifier_mark4.8.pth",
-        "bytes": 5457,
-        "sha1": "3728b13fe6d68d03461ef20949227b6e68b7a42f",
-        "sha256": "931527432717f89702a80d2cc627f1fcd8adc337b7e608c21a700c76a540b739",
-        "mtime": "2026-09-23 14:03:27",
-        "target_threshold_json": "Mark4.8/plots/_run3_20260923/target_threshold_mark4.8.json",
-        "target_threshold": 0.43,
-        "student_val_metrics_at_threshold": {
-          "val_accuracy": 0.9488372093023256,
-          "val_macro_precision": 0.9488372093023256,
-          "val_macro_recall": 0.9488372093023256,
-          "val_macro_f1": 0.9488372093023256,
-          "val_others_fpr": 0.05116279069767442
-        },
-        "threshold_selected_at": "2026-09-23 14:09:02",
-        "resources_status": "동일(덮어쓰지 않음)"
-      }
+    {
+      "file": "best_teacher_classifier_mark4.4.pth",
+      "sha256": "476e683eda3c7f5f8ffa48e25a86bc0e023654cbb333a42f9338a2c4568aa513",
+      "bytes": 6361,
+      "run_id": "c9c38dda-c29d-4351-98a4-a2abf9f125e3",
+      "target_class": "machine_noise"
+    },
+    {
+      "file": "best_teacher_encoder_mark4.5.pth",
+      "sha256": "5cc146c2562f508db93fb487182113efcac5d3e0cfcc67e52604636a051f90ff",
+      "bytes": 1974843,
+      "run_id": "9f05a6ed-cd41-4628-818d-07c53ea539fd",
+      "target_class": "talking"
+    },
+    {
+      "file": "best_teacher_classifier_mark4.5.pth",
+      "sha256": "8155859ba709d42e6a9a738dab332b8aec45a90f8c7f63c387af30ee53e49753",
+      "bytes": 6361,
+      "run_id": "9f05a6ed-cd41-4628-818d-07c53ea539fd",
+      "target_class": "talking"
+    },
+    {
+      "file": "best_teacher_encoder_mark4.6.pth",
+      "sha256": "d0aaf9cdeedd6cb1bc5c5f0502cb1a74c17f0c13c7f965aac4d0fa890e96d479",
+      "bytes": 1974907,
+      "run_id": "19f1e1e2-4185-4b31-929f-366062ff744a",
+      "target_class": "water_toilet"
+    },
+    {
+      "file": "best_teacher_classifier_mark4.6.pth",
+      "sha256": "dee6bb52c7d0efa308ccd0795dbf0099bfdd653658236bc2b86f169cc26d728c",
+      "bytes": 6361,
+      "run_id": "19f1e1e2-4185-4b31-929f-366062ff744a",
+      "target_class": "water_toilet"
+    },
+    {
+      "file": "best_teacher_encoder_mark4.7.pth",
+      "sha256": "28c93c52449756eb1980211c35ce8ab7538fd3e0fc814358482c936a0ff20910",
+      "bytes": 1974907,
+      "run_id": "555d4dd8-db50-42e6-9d1a-96830ab1fb87",
+      "target_class": "water_shower"
+    },
+    {
+      "file": "best_teacher_classifier_mark4.7.pth",
+      "sha256": "708be17f6830c01af3de0b2ed5513b46790a2f0be57e44ed05ee5f94fa00ab1e",
+      "bytes": 6361,
+      "run_id": "555d4dd8-db50-42e6-9d1a-96830ab1fb87",
+      "target_class": "water_shower"
+    },
+    {
+      "file": "best_teacher_encoder_mark4.8.pth",
+      "sha256": "c6399cdf140f1b6ab044200649e31f47623293500b210ad6dd229ca2cd3c5210",
+      "bytes": 1974843,
+      "run_id": "e7c08822-5966-4454-86aa-4281b950e958",
+      "target_class": "dog_bark"
+    },
+    {
+      "file": "best_teacher_classifier_mark4.8.pth",
+      "sha256": "1ce362e9baadd030b603cdbaa83319ce6339dd62feeda4a1b8b06585b48af431",
+      "bytes": 6361,
+      "run_id": "e7c08822-5966-4454-86aa-4281b950e958",
+      "target_class": "dog_bark"
     }
-  }
+  ]
 }
