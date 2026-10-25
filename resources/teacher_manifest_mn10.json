@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "kind": "mn10",
+  "teacher_release_sha256": "d07b68675f99e0cde7c1991e2a5e5f5999c62c605a64520fcb8a012a520dd1bb",
+  "files": [
+    {
+      "file": "mn10_teacher_mark4.1.pt",
+      "sha256": "b767ede2447a50e491e295515571be3515e66153689c9b3ee8d272bbee10d37b",
+      "bytes": 17033839,
+      "run_id": "f4914113-43f6-4dfe-a99c-99eb14a78647",
+      "target_class": "heavy_impact"
+    },
+    {
+      "file": "mn10_teacher_mark4.2.pt",
+      "sha256": "232ec785f8c3b925b7b0d0a60b4dc32ea5b997d82f7717d7bb4f37ebeeba31de",
+      "bytes": 17033839,
+      "run_id": "c4ac53a7-45d4-4891-9d6e-90157b3997d4",
+      "target_class": "dragging"
+    },
+    {
+      "file": "mn10_teacher_mark4.3.pt",
+      "sha256": "6d33e144ec5b04d41d8188c748b378e0fa8228eedc93c675565a5e77c944d1c5",
+      "bytes": 17033839,
+      "run_id": "7543d776-26cf-4b0c-9b78-3293b3c15b13",
+      "target_class": "construction"
+    },
+    {
+      "file": "mn10_teacher_mark4.4.pt",
+      "sha256": "466e15ff4089f60a7cc8e3d6c166f531ac575097ce3dba2468d9e25ef2ca1c28",
+      "bytes": 17033839,
+      "run_id": "e9f66490-fda7-4e2e-933c-0f75ea44f061",
+      "target_class": "machine_noise"
+    },
+    {
+      "file": "mn10_teacher_mark4.5.pt",
+      "sha256": "bb50204e4ff481ede4e65e9b8a8cf0710acb0557173becbbc880f33a8532ee4f",
+      "bytes": 17033839,
+      "run_id": "a57917e3-e5f2-4cc6-9efb-aa01cbd7fdb3",
+      "target_class": "talking"
+    },
+    {
+      "file": "mn10_teacher_mark4.6.pt",
+      "sha256": "b3a77cd9246c37dbf00e28a623fd5d6f153791a5ec5c45a2cfcacddc482187f4",
+      "bytes": 17033839,
+      "run_id": "a1b97b2d-1c69-4e9a-a3f3-1282c11fa7f7",
+      "target_class": "water_toilet"
+    },
+    {
+      "file": "mn10_teacher_mark4.7.pt",
+      "sha256": "a1f54c35abca650f69a5212a28a02637df7ea9afbc18ad9a208aede5d4039b84",
+      "bytes": 17033839,
+      "run_id": "873f6136-0626-4d9e-b349-8d4365a6391e",
+      "target_class": "water_shower"
+    },
+    {
+      "file": "mn10_teacher_mark4.8.pt",
+      "sha256": "284927c5467890114bae0aae1d7a3746cd3700dbac1532df65e5e5688e522c59",
+      "bytes": 17033839,
+      "run_id": "38e6545b-4c11-488e-8037-dcf2c59bce4a",
+      "target_class": "dog_bark"
+    }
+  ]
+}
