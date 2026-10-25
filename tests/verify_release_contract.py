@@ -57,7 +57,7 @@ def main():
     # nothing trains here. select_lr is not checked any more: since 2026-10-25 (A안) the learning rates are fixed to the
     # 2026-10-08 selection (Adam, new layers and backbone 1e-4), so no run selects a learning rate.
     nb_dir = ROOT / 'notebooks'
-    names = ['1 교사 점수·채택 관문.ipynb', '2 Mark5.3 본실험 80회.ipynb', '3 비교모델 결합기 조건 24회.ipynb']
+    names = ['1 교사 점수·채택 관문.ipynb', '2 Mark5.3 본실험 40회.ipynb', '3 비교모델 60회.ipynb']   # [2026-10-26] 논문 결과물 4개용
     assert sorted(p.name for p in nb_dir.glob('*.ipynb')) == sorted(names), sorted(p.name for p in nb_dir.glob('*.ipynb'))
     sources = {}
     for name in names:
@@ -75,9 +75,10 @@ def main():
     gate_nb, main_nb, base_nb = (sources[n] for n in names)
     assert '"--kind", kind' in gate_nb and '("mn10", "segment")' in gate_nb and 'teacher_gate_report.py' in gate_nb
     assert 'teacher_gate_mn10_vs_segment.json' in gate_nb and 'teacher_gate_mn10_vs_segment.json' in main_nb
-    assert '--preset cmb --seeds 1 2 3 4 5' in main_nb and '"--main_pseudo_source", "cmb"' in main_nb
-    assert '"--baseline_cond", "plc"' in main_nb and 'label_freshness' in main_nb
-    assert '--preset cmb --data_root' in base_nb and '--conds sup --labeled_ns 0 1000 500 200 --seeds 1' in base_nb
+    # [2026-10-26] 본실험은 8조합(--cmb_paper) 40회, 마지막 셀이 비교모델 60회를 기다려 make_four_results.py. 비교모델은 정답 라벨만(plc 없음) × seed 1~5.
+    assert '--preset cmb --cmb_paper --seeds 1 2 3 4 5' in main_nb and 'make_four_results.py' in main_nb and 'label_freshness' in main_nb
+    assert 'plc' not in main_nb and 'make_paper_tables' not in main_nb
+    assert '--conds sup --labeled_ns 0 1000 500 200 --seeds 1 2 3 4 5' in base_nb and '--preset cmb' not in base_nb and 'plc' not in base_nb
     # The 80-run plan the notebook launches: 16 combos x seeds 1-5, all Adam with the fixed selected rates (_ADAM), no duplicate run tags.
     # [2026-10-25] supervised-only (u0) at every labeled level of table 4 (full, 1000, 500, 200), like the baselines' sup runs.
     tags = []
@@ -88,9 +89,15 @@ def main():
     sup_levels = sorted((l or 0) for (l, n, ps, ex) in runner.CMB_PLAN if n == 0 and not ex)
     assert sup_levels == [0, 200, 500, 1000], sup_levels
     assert all('_ADAM' in t and '_PD' not in t for t in tags)
+    # [2026-10-26] 논문 결과물 4개용 8조합: CMB_PLAN 의 부분집합이라 80회 판에서 끝난 회차와 run_tag 가 같다.
+    paper_tags = []
+    for (labeled, unlabeled, pseudo, extra) in runner.CMB_PAPER_PLAN:
+        kw = runner._parse_runner_extra((runner.CMB_BASE_EXTRA + ' ' + extra).strip())[1]
+        paper_tags += [runner._run_tag('mark5.2', s, unlabeled, labeled_n=labeled, ps=pseudo, ablation_kw=kw) for s in (1, 2, 3, 4, 5)]
+    assert len(runner.CMB_PAPER_PLAN) == 8 and len(set(paper_tags)) == 40 and set(paper_tags) <= set(tags)
     report = {'status': 'passed', 'release_files_checked': checked,
               'six_component_code_absent': True, 'removed_cli_rejected': True,
-              'profile_adapter_unused': True, 'cmb_notebooks_checked': names, 'cmb_plan_tags': len(tags),
+              'profile_adapter_unused': True, 'cmb_notebooks_checked': names, 'cmb_plan_tags': len(tags), 'cmb_paper_tags': len(paper_tags),
               'deployment_parameters': measurement['total_parameters'],
               'training_parameters': measurement['training_parameters']}
     (output / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

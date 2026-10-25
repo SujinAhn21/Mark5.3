@@ -284,6 +284,15 @@ CMB_PLAN = [
     (200, 2000, None, CMB_OLD_PATH_EXTRA), (None, 2000, None, CMB_OLD_PATH_EXTRA),
     (200, 2000, "fix", ""), (None, 2000, "fix", ""),
 ]
+# [신설 2026-10-26] 논문 결과물 4개(① 데이터 효율 곡선 · ② 라벨 없는 클립 수 곡선 · ③ 비교표 · ④ 지식 융합 이득 표)에 쓰는 8조합만.
+#   --preset cmb --cmb_paper 로 고른다. 원소는 CMB_PLAN 과 같은 것이라 run_tag 가 같고, 80회 판에서 끝난 회차는 [건너뜀] 이 된다.
+#   ①·③ 정답 4수준 결합기 · ② 정답 200 의 라벨 없음 0·500·1,000(2,000 은 ①) · ④ 정답 200 고정 규칙(나머지 두 줄은 ②의 0·①의 200).
+CMB_PAPER_PLAN = [
+    (None, 2000, "cmb", ""), (1000, 2000, "cmb", ""), (500, 2000, "cmb", ""), (200, 2000, "cmb", ""),
+    (200, 0, None, ""), (200, 500, "cmb", ""), (200, 1000, "cmb", ""),
+    (200, 2000, "fix", ""),
+]
+assert all(c in CMB_PLAN for c in CMB_PAPER_PLAN)
 
 
 def _teacher_cache_files(ex):
@@ -462,6 +471,8 @@ def main():
     ap.add_argument("--preset", type=str, default=None, choices=["paper", "plsource", "pl4", "cmb"],
                     help="paper: 체크리스트 8절 회차 계획(조합 11개 x seed). plsource: pseudo-label 출처 비교(3 x seed). "
                          "--labeled_ns/--unlabeled_ns/--ceiling 를 무시한다.")
+    ap.add_argument("--cmb_paper", action="store_true",
+                    help="[2026-10-26] preset cmb 중 논문 결과물 4개에 쓰는 8조합(CMB_PAPER_PLAN)만 돌린다")
     ap.add_argument("--dry_run", action="store_true", help="무엇을 돌릴지만 출력하고 끝낸다")
     ap.add_argument("--force", action="store_true", help="이미 끝난 단계도 다시 돌린다")
     ap.add_argument("--skip_test", action="store_true",
@@ -490,6 +501,9 @@ def main():
                 + (["--encoder_lr", repr(float(sel_elr))] if sel_elr is not None else []))   # repr: round-trip 보장(:g 는 6자리)
     if args.preset == "cmb" and args.extra:
         raise SystemExit("[ERROR] preset cmb 는 공통 플래그(CMB_BASE_EXTRA)와 회차별 플래그를 스스로 정합니다. --extra 를 빼고 실행하십시오.")
+    if args.cmb_paper and args.preset != "cmb":
+        raise SystemExit("[ERROR] --cmb_paper 는 --preset cmb 와 함께만 씁니다.")
+    _cmb_plan = CMB_PAPER_PLAN if args.cmb_paper else CMB_PLAN   # [2026-10-26] 논문 결과물 4개용 8조합
     _extra_tokens, _ab_kw = _parse_runner_extra(CMB_BASE_EXTRA if args.preset == "cmb" else args.extra)
 
     if args.ceiling:
@@ -537,8 +551,8 @@ def main():
         elif args.preset == "pl4":
             combos = [(l, n, s, False, None, "") for (l, n) in PL4_PLAN for s in args.seeds]   # [Mark5.3] pl 4행 x seed
         elif args.preset == "cmb":
-            combos = [(l, n, s, False, ps, ex) for (l, n, ps, ex) in CMB_PLAN for s in args.seeds]
-            _missing = sorted({_pseudo_csv_name(ps, l, s) for (l, n, ps, ex) in CMB_PLAN if ps for s in args.seeds
+            combos = [(l, n, s, False, ps, ex) for (l, n, ps, ex) in _cmb_plan for s in args.seeds]
+            _missing = sorted({_pseudo_csv_name(ps, l, s) for (l, n, ps, ex) in _cmb_plan if ps for s in args.seeds
                                if not os.path.isfile(os.path.join(PROJECT_ROOT, _pseudo_csv_name(ps, l, s)))})
             if _missing:
                 print("[ERROR] preset cmb 에 필요한 가짜 정답 CSV 가 없습니다(model/make_combiner_labels.py 로 먼저 만드십시오):")
@@ -571,7 +585,8 @@ def main():
         elif args.preset == "pl4":
             print(f" 조건     : PL4_PLAN {len(PL4_PLAN)}개 (labeled 전량·1000·500·200 x u2000) — Mark5.3 본표 pl 행")
         elif args.preset == "cmb":
-            print(f" 조건     : CMB_PLAN {len(CMB_PLAN)}개 (본실험 4 · 곡선 3 · 지도만 3 · 아블레이션 6) — 검증 결합기 설계")
+            print(f" 조건     : CMB_PAPER_PLAN {len(_cmb_plan)}개 (논문 결과물 4개용: 정답 4수준 결합기 · 정답 200 라벨 없음 0·500·1,000 · 정답 200 고정 규칙)"
+                  if args.cmb_paper else f" 조건     : CMB_PLAN {len(CMB_PLAN)}개 (본실험 4 · 곡선 3 · 지도만 3 · 아블레이션 6) — 검증 결합기 설계")
         elif args.preset == "plsource":
             print(f" 조건     : PLSOURCE_PLAN {len(PLSOURCE_PLAN)}개 (labeled 200 + unlabeled 3,800 · 합의/self/gen)")
         elif args.ceiling:
