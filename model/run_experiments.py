@@ -295,6 +295,20 @@ CMB_PAPER_PLAN = [
 assert all(c in CMB_PLAN for c in CMB_PAPER_PLAN)
 
 
+def select_cmb_plan(preset, cmb_paper, cmb_unlabeled_n):
+    """[2026-10-26] preset cmb 의 조합 목록. cmb_paper 면 CMB_PAPER_PLAN(8조합), 아니면 CMB_PLAN(16조합).
+    cmb_unlabeled_n 을 주면 라벨 없는 개수가 그 값인 조합만 남긴다(노트북 4: --cmb_paper 와 0 → 정답 200·라벨 없음 0 한 조합)."""
+    plan = CMB_PAPER_PLAN if cmb_paper else CMB_PLAN
+    if cmb_unlabeled_n is None:
+        return plan
+    if preset != "cmb":
+        raise SystemExit("[ERROR] --cmb_unlabeled_n 은 --preset cmb 와 함께만 씁니다.")
+    plan = [c for c in plan if c[1] == cmb_unlabeled_n]
+    if not plan:
+        raise SystemExit(f"[ERROR] 라벨 없는 개수 {cmb_unlabeled_n} 인 cmb 조합이 없습니다.")
+    return plan
+
+
 def _teacher_cache_files(ex):
     """[2026-10-22] 회차별 플래그에 --teacher_cache 가 있으면 (점수 캐시, 특징 캐시) 경로. 없으면 []."""
     import shlex
@@ -473,6 +487,9 @@ def main():
                          "--labeled_ns/--unlabeled_ns/--ceiling 를 무시한다.")
     ap.add_argument("--cmb_paper", action="store_true",
                     help="[2026-10-26] preset cmb 중 논문 결과물 4개에 쓰는 8조합(CMB_PAPER_PLAN)만 돌린다")
+    ap.add_argument("--cmb_unlabeled_n", type=int, default=None,
+                    help="[2026-10-26] preset cmb 조합 중 라벨 없는 개수가 이 값인 것만 돌린다. "
+                         "--cmb_paper 와 함께 0 을 주면 정답 200·라벨 없음 0 의 seed 수만큼(5회). --cmb_paper 를 빼면 CMB_PLAN 의 라벨 없음 0 네 조합이 모두 돈다")
     ap.add_argument("--dry_run", action="store_true", help="무엇을 돌릴지만 출력하고 끝낸다")
     ap.add_argument("--force", action="store_true", help="이미 끝난 단계도 다시 돌린다")
     ap.add_argument("--skip_test", action="store_true",
@@ -503,7 +520,7 @@ def main():
         raise SystemExit("[ERROR] preset cmb 는 공통 플래그(CMB_BASE_EXTRA)와 회차별 플래그를 스스로 정합니다. --extra 를 빼고 실행하십시오.")
     if args.cmb_paper and args.preset != "cmb":
         raise SystemExit("[ERROR] --cmb_paper 는 --preset cmb 와 함께만 씁니다.")
-    _cmb_plan = CMB_PAPER_PLAN if args.cmb_paper else CMB_PLAN   # [2026-10-26] 논문 결과물 4개용 8조합
+    _cmb_plan = select_cmb_plan(args.preset, args.cmb_paper, args.cmb_unlabeled_n)   # [2026-10-26] 논문 8조합 · 라벨 없는 개수로 거르기
     _extra_tokens, _ab_kw = _parse_runner_extra(CMB_BASE_EXTRA if args.preset == "cmb" else args.extra)
 
     if args.ceiling:
@@ -585,8 +602,10 @@ def main():
         elif args.preset == "pl4":
             print(f" 조건     : PL4_PLAN {len(PL4_PLAN)}개 (labeled 전량·1000·500·200 x u2000) — Mark5.3 본표 pl 행")
         elif args.preset == "cmb":
-            print(f" 조건     : CMB_PAPER_PLAN {len(_cmb_plan)}개 (논문 결과물 4개용: 정답 4수준 결합기 · 정답 200 라벨 없음 0·500·1,000 · 정답 200 고정 규칙)"
-                  if args.cmb_paper else f" 조건     : CMB_PLAN {len(CMB_PLAN)}개 (본실험 4 · 곡선 3 · 지도만 3 · 아블레이션 6) — 검증 결합기 설계")
+            _picked = (f" 중 라벨 없음 {args.cmb_unlabeled_n} 인 {len(_cmb_plan)}개만(--cmb_unlabeled_n)"
+                       if args.cmb_unlabeled_n is not None else "")   # [2026-10-26] 걸러진 뒤의 개수를 찍는다
+            print(f" 조건     : CMB_PAPER_PLAN {len(CMB_PAPER_PLAN)}개{_picked} (논문 결과물 4개용: 정답 4수준 결합기 · 정답 200 라벨 없음 0·500·1,000 · 정답 200 고정 규칙)"
+                  if args.cmb_paper else f" 조건     : CMB_PLAN {len(CMB_PLAN)}개{_picked} (본실험 4 · 곡선 3 · 지도만 3 · 아블레이션 6) — 검증 결합기 설계")
         elif args.preset == "plsource":
             print(f" 조건     : PLSOURCE_PLAN {len(PLSOURCE_PLAN)}개 (labeled 200 + unlabeled 3,800 · 합의/self/gen)")
         elif args.ceiling:

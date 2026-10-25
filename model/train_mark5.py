@@ -468,8 +468,10 @@ class SemiSupervisedDataset(Dataset):
             preview = "\n".join(errors[:20])
             more = f"\n... 외 {len(errors) - 20}건" if len(errors) > 20 else ""
             raise ValueError(f"[ERROR] 데이터 검증 실패 {len(errors)}건:\n{preview}{more}")
-        if len(self.samples) == 0:
-            raise ValueError(f"[ERROR] 유효한 {'labeled' if is_labeled else 'unlabeled'} 샘플이 0개입니다.")
+        # [2026-10-26] 라벨 없는 쪽이 0개인 것은 정답 200·라벨 없음 0 회차(u0)와 천장 회차의 의도된 조건이라 멈추지 않는다.
+        # 10-22 판이 양쪽 모두 멈추게 바꿔 u0 5회가 시작하자마자 실패했다. 정답 라벨 쪽이 0개일 때만 멈춘다(10-22 이전 동작).
+        if is_labeled and len(self.samples) == 0:
+            raise ValueError("[ERROR] 유효한 labeled 샘플이 0개입니다.")
 
     def __len__(self):
         return len(self.samples)

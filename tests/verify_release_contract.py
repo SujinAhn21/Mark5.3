@@ -1,5 +1,6 @@
 """Check removal, inference profiling, the cmb Colab notebooks, and deployment integrity."""
 import ast
+import csv
 import json
 from pathlib import Path
 import re
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "model"))
 import profile_efficiency as profile
 import run_experiments as runner
+import train_mark5 as train   # [2026-10-26] 빈 라벨 없는 목록 검사
 from verify_release import verify
 
 
@@ -57,7 +59,8 @@ def main():
     # nothing trains here. select_lr is not checked any more: since 2026-10-25 (A안) the learning rates are fixed to the
     # 2026-10-08 selection (Adam, new layers and backbone 1e-4), so no run selects a learning rate.
     nb_dir = ROOT / 'notebooks'
-    names = ['1 교사 점수·채택 관문.ipynb', '2 Mark5.3 본실험 40회.ipynb', '3 비교모델 60회.ipynb']   # [2026-10-26] 논문 결과물 4개용
+    names = ['1 교사 점수·채택 관문.ipynb', '2 Mark5.3 본실험 40회.ipynb', '3 비교모델 60회.ipynb',
+             '4 Mark5.3 라벨 없음 0 5회·결과물 4개.ipynb']   # [2026-10-26] 논문 결과물 4개용 · 라벨 없음 0 5회(노트북 4)
     assert sorted(p.name for p in nb_dir.glob('*.ipynb')) == sorted(names), sorted(p.name for p in nb_dir.glob('*.ipynb'))
     sources = {}
     for name in names:
@@ -72,13 +75,66 @@ def main():
         assert '--step_timeout_min' not in text and 'WAIT_MAX' not in text, name           # no time limits (CPU runtime allowed)
         assert '--m53' not in text and '"--lr"' not in text and '--encoder_lr' not in text, name
         sources[name] = text
-    gate_nb, main_nb, base_nb = (sources[n] for n in names)
+    gate_nb, main_nb, base_nb, u0_nb = (sources[n] for n in names)
     assert '"--kind", kind' in gate_nb and '("mn10", "segment")' in gate_nb and 'teacher_gate_report.py' in gate_nb
     assert 'teacher_gate_mn10_vs_segment.json' in gate_nb and 'teacher_gate_mn10_vs_segment.json' in main_nb
     # [2026-10-26] 본실험은 8조합(--cmb_paper) 40회, 마지막 셀이 비교모델 60회를 기다려 make_four_results.py. 비교모델은 정답 라벨만(plc 없음) × seed 1~5.
     assert '--preset cmb --cmb_paper --seeds 1 2 3 4 5' in main_nb and 'make_four_results.py' in main_nb and 'label_freshness' in main_nb
     assert 'plc' not in main_nb and 'make_paper_tables' not in main_nb
     assert '--conds sup --labeled_ns 0 1000 500 200 --seeds 1 2 3 4 5' in base_nb and '--preset cmb' not in base_nb and 'plc' not in base_nb
+    # [2026-10-26] 노트북 2 는 끝났다 — 라벨 없음 0 수정 판에서는 [셀 7] 이 멈춘다. 노트북 4 는 u0 5회만 돌리고 결과물 4개를 만든다.
+    assert 'if is_labeled and len(self.samples) == 0:' in main_nb and '4 Mark5.3 라벨 없음 0 5회' in main_nb
+    assert '--preset cmb --cmb_paper --cmb_unlabeled_n 0 --seeds 1 2 3 4 5' in u0_nb and 'make_four_results.py' in u0_nb
+    assert 'matches_plain_policy' in u0_nb and '_summary_is_complete' in u0_nb and 'plc' not in u0_nb
+    # [2026-10-26] 정답 라벨 쪽만 0개면 멈추고 라벨 없는 쪽 0개(u0·천장)는 통과 · --cmb_unlabeled_n 0 은 --cmb_paper 에서 u0 한 조합
+    _src = (ROOT / 'model/train_mark5.py').read_text(encoding='utf-8')
+    assert 'if is_labeled and len(self.samples) == 0:' in _src and "'labeled' if is_labeled else 'unlabeled'" not in _src
+    assert runner.select_cmb_plan('cmb', True, 0) == [(200, 0, None, '')]                    # 노트북 4 의 5회
+    assert runner.select_cmb_plan('cmb', True, None) == runner.CMB_PAPER_PLAN
+    assert len(runner.select_cmb_plan('cmb', False, 0)) == 4                                    # --cmb_paper 없이: 라벨 없음 0 네 조합
+    for _bad in (('cmb', True, 7), (None, True, 0), ('paper', False, 0)):
+        try:
+            runner.select_cmb_plan(*_bad)
+            raise AssertionError(f'select_cmb_plan{_bad} 가 멈추지 않음')
+        except SystemExit as _e:
+            assert '[ERROR]' in str(_e), _e
+    # 빈 목록: 라벨 없는 쪽은 통과(0개), 정답 라벨 쪽은 멈춤
+    _cfg = train.AudioViLDConfig(mark_version='mark5.2')
+    assert len(train.SemiSupervisedDataset([], None, _cfg, is_labeled=False)) == 0
+    try:
+        train.SemiSupervisedDataset([], None, _cfg, is_labeled=True)
+        raise AssertionError('빈 정답 라벨 목록이 통과함')
+    except ValueError as _e:
+        assert 'labeled 샘플이 0개' in str(_e), _e
+    assert '_seeds != [1, 2, 3, 4, 5]' in u0_nb and 'pred_missing' in u0_nb and 'def baseline_argmax' in u0_nb
+    # [2026-10-26] 결과물 스크립트: 비교모델도 보정 없는 argmax(PreBias_Prob_*) · 빠진 회차면 멈춤
+    _mfr = (ROOT / 'model/make_four_results.py').read_text(encoding='utf-8')
+    assert 'PreBias_Prob_' in _mfr and 'def baseline_argmax' in _mfr and '--allow_missing' in _mfr
+    import tempfile
+    import make_four_results as mfr
+    with tempfile.TemporaryDirectory() as _td:
+        _td = Path(_td)
+        _cls = list(mfr.CLASSES)
+        _rows = []   # 정답 heavy_impact 2개 · dragging 1개. Predicted Label(보정 뒤)은 셋 다 맞고, 보정 전 argmax 는 셋째만 틀림
+        for _i, (_y, _top) in enumerate([('heavy_impact', 'heavy_impact'), ('heavy_impact', 'heavy_impact'), ('dragging', 'others')]):
+            _p = {c: 0.01 for c in _cls}; _p[_top] = 0.9
+            _rows.append({'Filename': f'f{_i}.wav', 'True Label': _y, 'Predicted Label': _y,
+                          **{f'PreBias_Prob_{c}': _p[c] for c in _cls}})
+        with (_td / 'pred.csv').open('w', newline='', encoding='utf-8') as _h:
+            _w = csv.DictWriter(_h, fieldnames=list(_rows[0])); _w.writeheader(); _w.writerows(_rows)
+        _summ = mfr.four_metrics([r['True Label'] for r in _rows], [r['Predicted Label'] for r in _rows])
+        _arg = mfr.baseline_argmax(str(_td / 'pred.csv'), _summ, 't')
+        assert abs(_summ['Accuracy'] - 1.0) < 1e-12 and abs(_arg['Accuracy'] - 2 / 3) < 1e-12, (_summ, _arg)
+        try:
+            mfr.baseline_argmax(str(_td / 'pred.csv'), dict(_summ, Accuracy=0.5), 't')
+            raise AssertionError('요약과 예측 CSV 가 어긋나도 통과함')
+        except SystemExit as _e:
+            assert '같은 회차의 파일이 아닙니다' in str(_e), _e
+        (_td / 'Mark5.3' / 'plots').mkdir(parents=True)
+        import subprocess as _sp
+        _r = _sp.run([sys.executable, str(ROOT / 'model/make_four_results.py'), '--root', str(_td / 'Mark5.3'),
+                      '--baseline_root', str(_td), '--no_plot'], capture_output=True, text=True)
+        assert _r.returncode == 1 and '아직 없는 회차' in (_r.stdout + _r.stderr) and not any((_td / 'Mark5.3' / 'plots').iterdir()), _r.stdout[-500:]
     # The 80-run plan the notebook launches: 16 combos x seeds 1-5, all Adam with the fixed selected rates (_ADAM), no duplicate run tags.
     # [2026-10-25] supervised-only (u0) at every labeled level of table 4 (full, 1000, 500, 200), like the baselines' sup runs.
     tags = []

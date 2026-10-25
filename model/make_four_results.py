@@ -12,6 +12,12 @@
 비교모델은 지식 융합 구조가 아니므로 우리 가짜 정답을 받은 조건(plc)은 쓰지 않는다(2026-10-26 수진님 확정).
 회차 이름은 실행기(run_experiments._run_tag · preset cmb 공통 플래그)와 비교모델 이름 규칙(common/naming.run_tag)을 그대로 따른다.
 산출물: plots/four_results_{1,2,3,4}_test.csv · plots/four_results_test.md · plots/four_results_{1,2}_test.png
+
+[2026-10-26 / 판정 규칙 통일] 모든 모델의 답 = 9클래스 확률의 argmax(보정 없음). Mark5.3 eval 은 이미 그렇다(성능 요약 그대로).
+비교모델 eval 은 val 에서 고른 클래스 편향·others 규칙을 test 에 걸어 성능 요약에 남기므로, 그 요약 대신 test 예측 CSV 의
+보정 전 확률(PreBias_Prob_*)로 argmax 4지표를 다시 계산한다(재학습·재평가 없음). 같은 회차인지는 예측 CSV 의 Predicted Label 로
+다시 낸 4지표가 성능 요약과 같은지로 확인하고, 다르면 멈춘다. 지표 식은 두 eval 과 같다(sklearn macro, 9클래스, zero_division=0).
+빠진 회차가 있으면 아무것도 쓰지 않고 멈춘다(미리보기만 --allow_missing).
 """
 import argparse
 import csv
@@ -31,6 +37,8 @@ BASELINES = (("Baseline_EfficientAT_mn10", "efficientat_mn10", "EfficientAT"),
              ("Baseline_CED_Tiny", "ced_tiny", "CED-Tiny"),
              ("Baseline_PANNs_CNN6", "panns_cnn6", "PANNs"))
 MODEL = "Mark5.3"
+CLASSES = ("heavy_impact", "dragging", "construction", "machine_noise", "talking",
+           "water_toilet", "water_shower", "dog_bark", "others")   # 두 eval 의 클래스 순서(예측 CSV 열 순서와 같다)
 
 
 def _lab_txt(l):
@@ -66,13 +74,43 @@ def mark53_runs(root, labeled_n, unlabeled_n, ps):
     return got, missing
 
 
+def four_metrics(y_true, y_pred):
+    """두 eval 과 같은 식: accuracy_score · precision_recall_fscore_support(macro, 9클래스, zero_division=0)."""
+    from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+    p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="macro", labels=list(CLASSES), zero_division=0)
+    return dict(zip(METRICS, (float(accuracy_score(y_true, y_pred)), float(p), float(r), float(f1))))
+
+
+def baseline_argmax(pred_csv, summary, tag):
+    """[2026-10-26] 비교모델 test 예측 CSV → 보정 없는 argmax 4지표. 먼저 Predicted Label 로 다시 낸 값이 성능 요약과 같은지 본다."""
+    with open(pred_csv, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    cols = [f"PreBias_Prob_{c}" for c in CLASSES]
+    if not rows or any(c not in rows[0] for c in cols + ["True Label", "Predicted Label"]):
+        raise SystemExit(f"[STOP] {pred_csv}: 보정 전 확률 열(PreBias_Prob_*)·정답·예측 열이 없습니다")
+    y = [r["True Label"] for r in rows]
+    if any(v not in CLASSES for v in y):
+        raise SystemExit(f"[STOP] {pred_csv}: 9클래스 밖 정답 라벨이 있습니다")
+    again = four_metrics(y, [r["Predicted Label"] for r in rows])
+    if any(abs(again[m] - summary[m]) > 1e-6 for m in METRICS):
+        raise SystemExit(f"[STOP] {tag}: 예측 CSV 로 다시 낸 값 {again} 이 성능 요약 {summary} 와 다릅니다 — 같은 회차의 파일이 아닙니다")
+    pred = [max(CLASSES, key=lambda c, r=r: float(r[f"PreBias_Prob_{c}"])) for r in rows]   # 같은 값이면 앞 클래스(np.argmax 와 같음)
+    return four_metrics(y, pred)
+
+
 def baseline_runs(baseline_root, repo, mtag, labeled_n):
-    """비교모델 한 정답 수준의 seed 1~5 test 결과(정답 라벨만, run_tag <model>_sup_adam[_l<n>]_s<seed>)."""
+    """비교모델 한 정답 수준의 seed 1~5 test 결과(정답 라벨만, run_tag <model>_sup_adam[_l<n>]_s<seed>).
+    [2026-10-26] 성능 요약(val 에서 고른 편향·others 규칙 적용) 대신 예측 CSV 의 보정 없는 argmax 값 — Mark5.3 과 같은 판정 규칙."""
     got, missing = [], []
     for s in SEEDS:
         tag = f"{mtag}_sup_adam" + ("" if labeled_n is None else f"_l{labeled_n}") + f"_s{s}"
-        r = read_summary(os.path.join(baseline_root, repo, "plots", f"performance_summary_{tag}.csv"))
-        (got.append((s, r)) if r else missing.append(f"{repo}/{tag}"))
+        plots = os.path.join(baseline_root, repo, "plots")
+        r = read_summary(os.path.join(plots, f"performance_summary_{tag}.csv"))
+        pred_csv = os.path.join(plots, f"prediction_details_{tag}.csv")
+        if r and os.path.isfile(pred_csv):
+            got.append((s, baseline_argmax(pred_csv, r, f"{repo}/{tag}")))
+        else:
+            missing.append(f"{repo}/{tag}")
     return got, missing
 
 
@@ -106,8 +144,9 @@ def _write_csv(path, rows):
             w.writerow([res, row, x, n] + [f"{st[m][0]:.6f}" for m in METRICS] + [f"{st[m][1]:.6f}" for m in METRICS])
 
 
-def _plot(path, xs, lines, xlabel):
-    """lines = [(이름, [stat 또는 None ...])]. 4지표를 2×2 로. 한글 글꼴이 없는 환경을 생각해 그림 글자는 영어."""
+def _plot(path, xs, lines, xlabel, partial=False):
+    """lines = [(이름, [stat 또는 None ...])]. 4지표를 2×2 로. 한글 글꼴이 없는 환경을 생각해 그림 글자는 영어.
+    partial=True(--allow_missing 미리보기에서 빠진 회차가 있을 때)면 그림 위에 PARTIAL 을 적는다."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -125,7 +164,9 @@ def _plot(path, xs, lines, xlabel):
         ax.grid(alpha=0.3)
     handles, labels = axes.flat[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=max(1, len(labels)), fontsize=9, frameon=False)
-    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    if partial:
+        fig.suptitle("PARTIAL (some runs missing, n < 5) - preview only", fontsize=10, color="red")
+    fig.tight_layout(rect=(0, 0.06, 1, 0.96 if partial else 1))
     fig.savefig(path, dpi=200)
     plt.close(fig)
 
@@ -135,6 +176,8 @@ def main():
     ap.add_argument("--baseline_root", required=True, help="비교모델 저장소 3개가 들어 있는 폴더(코랩: …/NewProject/codes/experiments)")
     ap.add_argument("--root", default=PROJECT_ROOT, help="Mark5.3 폴더(기본: 이 저장소). 시험할 때만 바꾼다")
     ap.add_argument("--no_plot", action="store_true", help="그림을 만들지 않는다")
+    ap.add_argument("--allow_missing", action="store_true",
+                    help="[2026-10-26] 빠진 회차가 있어도 만든다(미리보기 전용 — 표에 (n=…)·그림 위에 PARTIAL 표시). 기본은 멈춘다")
     args = ap.parse_args()
     plots = os.path.join(args.root, "plots")
     os.makedirs(plots, exist_ok=True)
@@ -166,6 +209,9 @@ def main():
     ka = [("평범한 구조 (가짜 정답 없음)", unl[0]),
           ("전문가 의사라벨만 (고정 규칙, 결합기 없음)", summarize(fix_runs)),
           ("제안모델 (전문가 + 결합기)", eff[MODEL][0])]
+    if missing and not args.allow_missing:
+        print("\n".join(missing))
+        raise SystemExit(f"[STOP] 아직 없는 회차 {len(missing)}개 — 아무것도 쓰지 않았습니다(미리보기는 --allow_missing)")
 
     models = [MODEL] + [b[2] for b in BASELINES]
     csv_rows1 = [("1_label_efficiency", name, _lab_txt(l), st) for name in models for l, st in zip(LABELED, eff[name])]
@@ -176,7 +222,9 @@ def main():
         _write_csv(os.path.join(plots, f"four_results_{i}_test.csv"), rows)
 
     md = ["# 논문 결과물 4개 — test, seed 1~5 평균 ± 표준편차", "",
-          "비교모델은 정답 라벨만으로 학습한 결과다(지식 융합 구조가 아니므로 우리 가짜 정답을 쓰지 않음).", ""]
+          "비교모델은 정답 라벨만으로 학습한 결과다(지식 융합 구조가 아니므로 우리 가짜 정답을 쓰지 않음).",
+          "판정 규칙은 모든 모델이 같다: 9클래스 확률의 argmax(보정 없음). 비교모델은 test 예측 CSV 의 보정 전 확률"
+          "(PreBias_Prob_*)로 계산했다 — 비교모델 저장소의 성능 요약은 val 에서 고른 클래스 편향·others 규칙을 건 값이라 쓰지 않는다.", ""]
     md += _md("① 데이터 효율 — 정답 라벨 수별 (Accuracy · Macro P · Macro R · Macro F1)",
               ["정답 라벨", "모델"] + list(METRICS),
               [[_lab_txt(l), name] + [_cell(eff[name][i], m) for m in METRICS]
@@ -196,9 +244,9 @@ def main():
 
     if not args.no_plot:
         _plot(os.path.join(plots, "four_results_1_test.png"), [200, 500, 1000, 2000],
-              [(name, eff[name]) for name in models], "Labeled clips")
+              [(name, eff[name]) for name in models], "Labeled clips", partial=bool(missing))
         _plot(os.path.join(plots, "four_results_2_test.png"), list(UNLABELED),
-              [(MODEL + " (labeled 200)", unl)], "Unlabeled clips")
+              [(MODEL + " (labeled 200)", unl)], "Unlabeled clips", partial=bool(missing))
     print("\n".join(md))
     print(f"[OK] {md_path} · four_results_{{1,2,3,4}}_test.csv" + ("" if args.no_plot else " · four_results_{1,2}_test.png"))
     if missing:
