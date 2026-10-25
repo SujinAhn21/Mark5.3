@@ -250,8 +250,8 @@ def main():
             if not os.path.isdir(d):
                 print(f"[WARN] 비교모델 폴더 없음(건너뜀): {d}")
                 continue
-            # [2026-10-22 / Prodigy] 학습률 자리가 _lr<값>(Adam 시절) 또는 _pd(Prodigy) — 둘 다 찾는다(묶음은 태그별로 갈린다).
-            pat = (f"*_{args.baseline_cond}_lr*", f"*_{args.baseline_cond}_pd*") if args.baseline_cond else None
+            # [2026-10-25 / A안] 학습률 자리가 _lr<값>(2026-10-21까지) 또는 _adam(지금 절차) — 둘 다 찾는다(묶음은 태그별로 갈린다). Prodigy(_pd)는 찾지 않는다.
+            pat = (f"*_{args.baseline_cond}_lr*", f"*_{args.baseline_cond}_adam*") if args.baseline_cond else None
             jobs.append((d, os.path.basename(d).replace("Baseline_", ""), pat, ""))
 
     raw_rows, per_cat_all = [], {s: [] for s in EVAL_SETS}

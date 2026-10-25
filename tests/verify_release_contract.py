@@ -54,7 +54,8 @@ def main():
 
     # [2026-10-23] Colab notebooks of the cmb plan. The old single-run notebook and its Adam-era result fixture
     # (verification/joint, run_tag _elr) were replaced, so the checks are static plus the real run-tag builder;
-    # nothing trains here. select_lr is not checked any more: Prodigy runs never select a learning rate.
+    # nothing trains here. select_lr is not checked any more: since 2026-10-25 (A안) the learning rates are fixed to the
+    # 2026-10-08 selection (Adam, new layers and backbone 1e-4), so no run selects a learning rate.
     nb_dir = ROOT / 'notebooks'
     names = ['1 교사 점수·채택 관문.ipynb', '2 Mark5.3 본실험 80회.ipynb', '3 비교모델 결합기 조건 24회.ipynb']
     assert sorted(p.name for p in nb_dir.glob('*.ipynb')) == sorted(names), sorted(p.name for p in nb_dir.glob('*.ipynb'))
@@ -77,7 +78,7 @@ def main():
     assert '--preset cmb --seeds 1 2 3 4 5' in main_nb and '"--main_pseudo_source", "cmb"' in main_nb
     assert '"--baseline_cond", "plc"' in main_nb and 'label_freshness' in main_nb
     assert '--preset cmb --data_root' in base_nb and '--conds sup --labeled_ns 0 1000 500 200 --seeds 1' in base_nb
-    # The 80-run plan the notebook launches: 16 combos x seeds 1-5, all Prodigy (_PD), no duplicate run tags.
+    # The 80-run plan the notebook launches: 16 combos x seeds 1-5, all Adam with the fixed selected rates (_ADAM), no duplicate run tags.
     # [2026-10-25] supervised-only (u0) at every labeled level of table 4 (full, 1000, 500, 200), like the baselines' sup runs.
     tags = []
     for (labeled, unlabeled, pseudo, extra) in runner.CMB_PLAN:
@@ -86,7 +87,7 @@ def main():
     assert len(runner.CMB_PLAN) == 16 and len(tags) == 80 and len(set(tags)) == 80, (len(runner.CMB_PLAN), len(set(tags)))
     sup_levels = sorted((l or 0) for (l, n, ps, ex) in runner.CMB_PLAN if n == 0 and not ex)
     assert sup_levels == [0, 200, 500, 1000], sup_levels
-    assert all('_PD' in t for t in tags)
+    assert all('_ADAM' in t and '_PD' not in t for t in tags)
     report = {'status': 'passed', 'release_files_checked': checked,
               'six_component_code_absent': True, 'removed_cli_rejected': True,
               'profile_adapter_unused': True, 'cmb_notebooks_checked': names, 'cmb_plan_tags': len(tags),

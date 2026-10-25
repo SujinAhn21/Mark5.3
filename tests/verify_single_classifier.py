@@ -163,7 +163,7 @@ def main():
             teachers.append(self)
     train.EnsembleTeacher = CheckedTeacher
 
-    # [2026-10-22 / Prodigy] 자동 학습률이라 lr/encoder_lr 을 넘기지 않는다(vild_config 가 받으면 멈춘다).
+    # [2026-10-25 / A안] 학습률은 선정값 고정(새 층·백본 1e-4)이라 lr/encoder_lr 을 넘기지 않는다(vild_config 가 받으면 멈춘다).
     common = dict(mark_version='mark5.2', seed_value=1, unlabeled_n=7,
                   linear_head=True, head_pretrained_hidden=True, hard_weight=1., others_from_reject=.2,
                   neg_pl=(.1, .3), teacher_seg_mean=True, teacher_clean_view=True, bg_weight=0., student_raw_wave=True)
@@ -189,13 +189,13 @@ def main():
         cfg.unlabeled_n = 7
         cfg.apply_cli_ablation(**{k: v for k, v in args_run.items() if k not in ('mark_version', 'seed_value', 'unlabeled_n', 'lr', 'encoder_lr')})
         require(not cfg.distill_branch_classify and cfg.use_feature_kd and '_SINGLE' in cfg.run_tag, 'Invalid new model configuration')
-        require(cfg.run_tag.endswith('_PD_u7_s1'), f'Prodigy run_tag missing: {cfg.run_tag}')
+        require(cfg.run_tag.endswith('_ADAM_u7_s1'), f'Adam(A안) run_tag missing: {cfg.run_tag}')
         checkpoint_path = run / 'model' / f'student_model_{cfg.run_tag}.pth'
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         require(checkpoint['config_metadata']['classification_policy'] == 'supervised_argmax_v1', 'Checkpoint policy missing')
         require(not checkpoint['config_metadata']['distill_branch_classify'], 'Wrong classification provenance')
-        require(checkpoint['config_metadata'].get('optimizer_name') == 'prodigy' and checkpoint['config_metadata'].get('learning_rate') == 1.0,
-                'Checkpoint optimizer provenance missing')
+        require(checkpoint['config_metadata'].get('optimizer_name') == 'adam' and checkpoint['config_metadata'].get('learning_rate') == 1e-4
+                and checkpoint['config_metadata'].get('encoder_learning_rate') == 1e-4, 'Checkpoint optimizer provenance missing')
         require(not any(k.startswith('m53_') for k in checkpoint['config_metadata']), 'Removed component metadata remains')
         history = list(csv.DictReader((run / 'plots' / f'loss_history_{cfg.run_tag}.csv').open()))
         require(len(history) == 1, 'Smoke run exceeded one epoch')

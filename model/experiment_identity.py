@@ -84,9 +84,8 @@ def current_experiment_identity(run_tag, extra_files=None, teacher_free=False):
             # [2026-10-22] CSV 가 아닌 재료(교사 특징 캐시 .pt)는 파일 해시로 신원을 잡는다.
             data[os.path.basename(path)] = dataset_identity(path) if path.endswith(".csv") else sha256_file(path)
     code = {}
-    # [2026-10-22 / Prodigy] 옵티마이저 코드(utils/prodigy_optim.py · third_party/prodigy)도 학습 결과를 바꾸므로 신원에 넣는다.
-    for rel in ("model/train_mark5.py", "vild/vild_config.py", "vild/teacher_fusion.py",
-                "utils/prodigy_optim.py", "third_party/prodigy/prodigyopt/prodigy.py"):
+    # [2026-10-25 / A안] 2026-10-22~10-25 에 넣었던 Prodigy 코드(utils/prodigy_optim.py · third_party/prodigy)는 걷어내서 신원에서도 뺐다.
+    for rel in ("model/train_mark5.py", "vild/vild_config.py", "vild/teacher_fusion.py"):
         path = os.path.join(PROJECT_ROOT, rel)
         code[rel] = sha256_file(path)
     payload = {

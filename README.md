@@ -58,11 +58,14 @@ python model/run_experiments.py --mark_version mark5.2 \
 
 `--dry_run`을 빼면 선택한 한 조건의 학습과 val 평가가 실행된다. test를 최종 평가할 때만
 `--skip_test`를 뺀 동일 명령을 실행한다. 같은 체크포인트의 학습·val은 재사용하고 test만 추가한다.
-옵티마이저는 2026-10-22부터 자동 학습률 Prodigy다(`utils/prodigy_optim.py`, `third_party/prodigy` 1.1.2 원본).
-lr 배수 1.0, 결합형 L2 weight decay 1e-4, `ReduceLROnPlateau(0.5, 3)`과 early stopping 10은 그대로다.
-학습률을 고르지 않으므로 `--lr`·`--encoder_lr`을 주면 멈추고 `model/select_lr.py`도 실행되지 않는다.
-새 결과의 run_tag에는 `_lr`/`_elr` 대신 `_PD`가 붙어 Adam 시절 결과와 섞이지 않는다.
-비교모델(EfficientAT·PANNs·CED와 표준 반지도 4방법)도 같은 날 같은 Prodigy 설정으로 바꿨다(run_tag `_pd`).
+옵티마이저는 Adam이다(2026-10-25 A안). 학습률은 다시 고르지 않고 `plots/lr_selected.json`(2026-10-08, 후보 1e-4·5e-5·2e-5,
+seed 0, val Macro F1)이 고른 새 층 1e-4 · 백본 1e-4로 고정한다(10-08 최종 모델과 같은 값, `vild/vild_config.py`).
+결합형 L2 weight decay 1e-4, `ReduceLROnPlateau(0.5, 3)`과 early stopping 10은 그대로다.
+`--lr`·`--encoder_lr`을 주면 멈추고 `model/select_lr.py`도 실행되지 않는다.
+새 결과의 run_tag에는 학습률 자리에 `_ADAM`이 붙어, 2026-10-21까지의 결과(`_elr0.0001` 등)와 섞이지 않는다.
+2026-10-22~10-25에는 자동 학습률 Prodigy(run_tag `_PD`)로 바꿨다가 걷어냈다. 보폭이 Adam 학습률의 수십~수백 배로 커져
+같은 mn10 백본의 EfficientAT에서 사전학습 가중치의 60.7%가 0 근처로 줄었고(정답 2,000, Adam 4.5%) test Acc가 6~9%p 낮았다.
+비교모델(EfficientAT·PANNs·CED와 표준 반지도 4방법)도 같은 날 Adam·선정값 고정으로 되돌렸다(run_tag `_adam`).
 Mark4.1~4.8 교사는 Adam 1e-4 그대로다 — 교사는 비교 대상이 아니라 제안모델과 비교모델이 함께 쓰는 재료다.
 
 10-22 판의 한 조건 노트북(`Mark5.3 제안모델 실험.ipynb`)은 2026-10-23 에 아래 Colab 노트북으로 바뀌었다(git 이력에 남아 있다).
@@ -88,7 +91,6 @@ Mark4.1~4.8 교사는 Adam 1e-4 그대로다 — 교사는 비교 대상이 아�
 - `resources/teacher_manifest.json`과 `best_teacher_{encoder,classifier}_mark4.*.pth` 16개: `_run3_20260923` teacher.
 - `weights/mn10_as_mAP_471.pt`: 학생의 AudioSet 사전학습 가중치.
 - `third_party/efficientat/`: vendored mn10 구현.
-- `third_party/prodigy/`: vendored Prodigy 옵티마이저(prodigyopt 1.1.2, MIT, 수정 없음 — `SOURCE.md`에 md5).
 - 텍스트 앵커는 학생 선형 분류기에 불필요하지만 기존 teacher 초기화에는 SentenceTransformer 캐시가 필요하다.
 - 로컬 CPU 검증 환경은 Python 3.8 / PyTorch 2.4.1+cpu이며 `requirements.txt`는 이 환경용이다.
   Colab에서는 CPU 전용 torch 요구사항을 설치하지 않고 노트북의 의존성 셀을 사용한다.

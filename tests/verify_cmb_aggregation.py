@@ -89,8 +89,8 @@ def main():
         bdir = os.path.join(d, "base"); os.makedirs(bdir)
         braw = []
         for mt in ("efficientat_mn10", "panns_cnn6", "ced_tiny"):
-            bb = pd.DataFrame([{"model": mt, "cond": c, "seed": 1, "lr": "prodigy", "labeled": lab, "unlabeled": "",
-                                "run_tag": f"{mt}_{c}_pd_s1", **{m: 0.85 for m in AG.METRICS}}
+            bb = pd.DataFrame([{"model": mt, "cond": c, "seed": 1, "lr": 0.0001, "labeled": lab, "unlabeled": "",   # [2026-10-25 / A안] Adam 선정값 고정
+                                "run_tag": f"{mt}_{c}_adam_s1", **{m: 0.85 for m in AG.METRICS}}
                                for c in ("sup", "plc") for lab in (full, 1000, 500, 200)])
             braw.append(os.path.join(bdir, f"aggregate_raw_{mt}_test.csv")); bb.to_csv(braw[-1], index=False, encoding="utf-8-sig")
         sys.argv = ["make_paper_tables.py", "--split", "test", "--main_pseudo_source", "cmb", "--baseline_cond", "plc", "--baseline_raw", *braw]
