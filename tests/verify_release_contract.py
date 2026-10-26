@@ -60,7 +60,8 @@ def main():
     # 2026-10-08 selection (Adam, new layers and backbone 1e-4), so no run selects a learning rate.
     nb_dir = ROOT / 'notebooks'
     names = ['1 교사 점수·채택 관문.ipynb', '2 Mark5.3 본실험 40회.ipynb', '3 비교모델 60회.ipynb',
-             '4 Mark5.3 라벨 없음 0 5회·결과물 4개.ipynb']   # [2026-10-26] 논문 결과물 4개용 · 라벨 없음 0 5회(노트북 4)
+             '4 Mark5.3 라벨 없음 0 5회·결과물 4개.ipynb',   # [2026-10-26] 논문 결과물 4개용 · 라벨 없음 0 5회(노트북 4)
+             '5 비교모델 평가만 60회(argmax).ipynb']        # [2026-10-26] 비교모델 판정 규칙 = 보정 없는 argmax(평가만 다시)
     assert sorted(p.name for p in nb_dir.glob('*.ipynb')) == sorted(names), sorted(p.name for p in nb_dir.glob('*.ipynb'))
     sources = {}
     for name in names:
@@ -75,7 +76,7 @@ def main():
         assert '--step_timeout_min' not in text and 'WAIT_MAX' not in text, name           # no time limits (CPU runtime allowed)
         assert '--m53' not in text and '"--lr"' not in text and '--encoder_lr' not in text, name
         sources[name] = text
-    gate_nb, main_nb, base_nb, u0_nb = (sources[n] for n in names)
+    gate_nb, main_nb, base_nb, u0_nb, reeval_nb = (sources[n] for n in names)
     assert '"--kind", kind' in gate_nb and '("mn10", "segment")' in gate_nb and 'teacher_gate_report.py' in gate_nb
     assert 'teacher_gate_mn10_vs_segment.json' in gate_nb and 'teacher_gate_mn10_vs_segment.json' in main_nb
     # [2026-10-26] 본실험은 8조합(--cmb_paper) 40회, 마지막 셀이 비교모델 60회를 기다려 make_four_results.py. 비교모델은 정답 라벨만(plc 없음) × seed 1~5.
@@ -86,6 +87,10 @@ def main():
     assert 'if is_labeled and len(self.samples) == 0:' in main_nb and '4 Mark5.3 라벨 없음 0 5회' in main_nb
     assert '--preset cmb --cmb_paper --cmb_unlabeled_n 0 --seeds 1 2 3 4 5' in u0_nb and 'make_four_results.py' in u0_nb
     assert 'matches_plain_policy' in u0_nb and '_summary_is_complete' in u0_nb and 'plc' not in u0_nb
+    # [2026-10-26] 노트북 5: 비교모델 60회 평가만(학습이 끼면 멈춤) · 판정 규칙 argmax_v1 · 성능 요약 = argmax 값
+    assert '--conds sup --labeled_ns 0 1000 500 200 --seeds 1 2 3 4 5' in reeval_nb and '"학습" in r' in reeval_nb
+    assert 'rule_json_is_current' in reeval_nb and 'argmax_v1' in reeval_nb and 'make_argmax_summary.py' in reeval_nb and 'plc' not in reeval_nb
+    assert reeval_nb.count('--eval_only') >= 2 and '"--eval_only"' in reeval_nb and '5 비교모델 평가만 60회' in u0_nb   # [셀 4]·[셀 5] 모두 평가만 · 노트북 4 가 노트북 5 를 기다림
     # [2026-10-26] 정답 라벨 쪽만 0개면 멈추고 라벨 없는 쪽 0개(u0·천장)는 통과 · --cmb_unlabeled_n 0 은 --cmb_paper 에서 u0 한 조합
     _src = (ROOT / 'model/train_mark5.py').read_text(encoding='utf-8')
     assert 'if is_labeled and len(self.samples) == 0:' in _src and "'labeled' if is_labeled else 'unlabeled'" not in _src
