@@ -1,0 +1,5 @@
+result,row,x,n,Accuracy mean,Macro Precision mean,Macro Recall mean,Macro F1 mean,Accuracy sd,Macro Precision sd,Macro Recall sd,Macro F1 sd
+2_unlabeled_curve,Mark5.3,0,5,0.867442,0.873292,0.867563,0.866855,0.024776,0.023968,0.024672,0.023625
+2_unlabeled_curve,Mark5.3,500,5,0.896279,0.898333,0.896375,0.895517,0.013719,0.014913,0.013630,0.013894
+2_unlabeled_curve,Mark5.3,1000,5,0.908372,0.910832,0.908432,0.908281,0.018059,0.019238,0.018026,0.018325
+2_unlabeled_curve,Mark5.3,2000,5,0.931628,0.934095,0.931570,0.931397,0.010217,0.009591,0.010166,0.009760
