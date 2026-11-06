@@ -1,0 +1,493 @@
+{
+  "candidate": {
+    "file": "plots/teacher_scores_mn10.csv",
+    "sha256": "c1781348d73d00d606c8afb1f190c4c90d24bbe60a6c564bcda220ff311ee2b1",
+    "freshness_checked": true,
+    "teacher_release_sha256": "6977b42fa4cb2abaf572274f52e1e0a5089a3110d681e493da016c4229abdc69",
+    "val": {
+      "n": 430,
+      "nine_class": {
+        "Accuracy": 0.8651162790697674,
+        "Macro Precision": 0.8694850486225124,
+        "Macro Recall": 0.8647557131599685,
+        "Macro F1": 0.8632368501094798
+      },
+      "raise": {
+        "heavy_impact": {
+          "heavy_impact": 0.8333333333333334,
+          "dragging": 0.0,
+          "construction": 0.041666666666666664,
+          "machine_noise": 0.10416666666666667,
+          "talking": 0.0,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.06382978723404255
+        },
+        "dragging": {
+          "heavy_impact": 0.0,
+          "dragging": 0.8541666666666666,
+          "construction": 0.020833333333333332,
+          "machine_noise": 0.041666666666666664,
+          "talking": 0.0,
+          "water_toilet": 0.041666666666666664,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.06382978723404255
+        },
+        "construction": {
+          "heavy_impact": 0.0,
+          "dragging": 0.0,
+          "construction": 1.0,
+          "machine_noise": 0.14583333333333334,
+          "talking": 0.020833333333333332,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.06382978723404255
+        },
+        "machine_noise": {
+          "heavy_impact": 0.10416666666666667,
+          "dragging": 0.22916666666666666,
+          "construction": 0.08333333333333333,
+          "machine_noise": 0.9166666666666666,
+          "talking": 0.0,
+          "water_toilet": 0.14583333333333334,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.0425531914893617
+        },
+        "talking": {
+          "heavy_impact": 0.0,
+          "dragging": 0.0,
+          "construction": 0.0,
+          "machine_noise": 0.0,
+          "talking": 0.9375,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.02127659574468085
+        },
+        "water_toilet": {
+          "heavy_impact": 0.0,
+          "dragging": 0.020833333333333332,
+          "construction": 0.0,
+          "machine_noise": 0.020833333333333332,
+          "talking": 0.020833333333333332,
+          "water_toilet": 0.8958333333333334,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.0
+        },
+        "water_shower": {
+          "heavy_impact": 0.041666666666666664,
+          "dragging": 0.0625,
+          "construction": 0.0,
+          "machine_noise": 0.020833333333333332,
+          "talking": 0.125,
+          "water_toilet": 0.08333333333333333,
+          "water_shower": 1.0,
+          "dog_bark": 0.02127659574468085,
+          "others": 0.1702127659574468
+        },
+        "dog_bark": {
+          "heavy_impact": 0.0625,
+          "dragging": 0.08333333333333333,
+          "construction": 0.0,
+          "machine_noise": 0.020833333333333332,
+          "talking": 0.041666666666666664,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 1.0,
+          "others": 0.0851063829787234
+        }
+      },
+      "raise_off_mean": 0.03305075354609929
+    },
+    "labeled": {
+      "n": 2000,
+      "nine_class": {
+        "Accuracy": 0.886,
+        "Macro Precision": 0.8901840572193459,
+        "Macro Recall": 0.8859509733949197,
+        "Macro F1": 0.8837082329769171
+      },
+      "raise": {
+        "heavy_impact": {
+          "heavy_impact": 0.9551569506726457,
+          "dragging": 0.017937219730941704,
+          "construction": 0.036036036036036036,
+          "machine_noise": 0.013513513513513514,
+          "talking": 0.013513513513513514,
+          "water_toilet": 0.0,
+          "water_shower": 0.05405405405405406,
+          "dog_bark": 0.02252252252252252,
+          "others": 0.06756756756756757
+        },
+        "dragging": {
+          "heavy_impact": 0.013452914798206279,
+          "dragging": 0.9327354260089686,
+          "construction": 0.018018018018018018,
+          "machine_noise": 0.013513513513513514,
+          "talking": 0.0045045045045045045,
+          "water_toilet": 0.009009009009009009,
+          "water_shower": 0.013513513513513514,
+          "dog_bark": 0.0,
+          "others": 0.04054054054054054
+        },
+        "construction": {
+          "heavy_impact": 0.0,
+          "dragging": 0.004484304932735426,
+          "construction": 0.9819819819819819,
+          "machine_noise": 0.05855855855855856,
+          "talking": 0.02252252252252252,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.02252252252252252
+        },
+        "machine_noise": {
+          "heavy_impact": 0.017937219730941704,
+          "dragging": 0.06278026905829596,
+          "construction": 0.0945945945945946,
+          "machine_noise": 0.9324324324324325,
+          "talking": 0.0045045045045045045,
+          "water_toilet": 0.04054054054054054,
+          "water_shower": 0.02252252252252252,
+          "dog_bark": 0.0045045045045045045,
+          "others": 0.03153153153153153
+        },
+        "talking": {
+          "heavy_impact": 0.0,
+          "dragging": 0.0,
+          "construction": 0.0,
+          "machine_noise": 0.0,
+          "talking": 0.7387387387387387,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.0045045045045045045
+        },
+        "water_toilet": {
+          "heavy_impact": 0.0,
+          "dragging": 0.004484304932735426,
+          "construction": 0.0,
+          "machine_noise": 0.013513513513513514,
+          "talking": 0.0,
+          "water_toilet": 0.9774774774774775,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.0
+        },
+        "water_shower": {
+          "heavy_impact": 0.008968609865470852,
+          "dragging": 0.017937219730941704,
+          "construction": 0.0,
+          "machine_noise": 0.06756756756756757,
+          "talking": 0.0990990990990991,
+          "water_toilet": 0.018018018018018018,
+          "water_shower": 1.0,
+          "dog_bark": 0.0045045045045045045,
+          "others": 0.16666666666666666
+        },
+        "dog_bark": {
+          "heavy_impact": 0.03587443946188341,
+          "dragging": 0.008968609865470852,
+          "construction": 0.02702702702702703,
+          "machine_noise": 0.009009009009009009,
+          "talking": 0.04504504504504504,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.990990990990991,
+          "others": 0.16216216216216217
+        }
+      },
+      "raise_off_mean": 0.022157036520825762,
+      "fixed_rule": {
+        "adopted": 1730,
+        "correct": 1597,
+        "precision": 0.923121387283237
+      },
+      "combiner_cv": {
+        "one": {
+          "adopted": 1652,
+          "correct": 1619,
+          "precision": 0.9800242130750605
+        },
+        "two": {
+          "adopted": 218,
+          "true_in_top2": 216
+        },
+        "folds": 5,
+        "fold_seed": 0
+      }
+    },
+    "raise_off_mean_val_labeled": 0.024089247591670464
+  },
+  "reference": {
+    "file": "plots/teacher_scores_segment.csv",
+    "sha256": "d28fe4b29644235031115b035264164d7a6841308f3cb808ea39c6e321299c32",
+    "freshness_checked": true,
+    "teacher_release_sha256": "a2c767052375558612e9ac30a30d08e8821390a998073b0776db88cf8d511069",
+    "val": {
+      "n": 430,
+      "nine_class": {
+        "Accuracy": 0.8186046511627907,
+        "Macro Precision": 0.8206394068957601,
+        "Macro Recall": 0.8180161544523248,
+        "Macro F1": 0.8137027525026395
+      },
+      "raise": {
+        "heavy_impact": {
+          "heavy_impact": 0.9166666666666666,
+          "dragging": 0.041666666666666664,
+          "construction": 0.041666666666666664,
+          "machine_noise": 0.0625,
+          "talking": 0.0,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.02127659574468085
+        },
+        "dragging": {
+          "heavy_impact": 0.08333333333333333,
+          "dragging": 0.7708333333333334,
+          "construction": 0.020833333333333332,
+          "machine_noise": 0.0625,
+          "talking": 0.041666666666666664,
+          "water_toilet": 0.2916666666666667,
+          "water_shower": 0.0,
+          "dog_bark": 0.1276595744680851,
+          "others": 0.06382978723404255
+        },
+        "construction": {
+          "heavy_impact": 0.0,
+          "dragging": 0.020833333333333332,
+          "construction": 1.0,
+          "machine_noise": 0.041666666666666664,
+          "talking": 0.125,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.0425531914893617
+        },
+        "machine_noise": {
+          "heavy_impact": 0.041666666666666664,
+          "dragging": 0.4791666666666667,
+          "construction": 0.041666666666666664,
+          "machine_noise": 0.9375,
+          "talking": 0.0625,
+          "water_toilet": 0.3333333333333333,
+          "water_shower": 0.10416666666666667,
+          "dog_bark": 0.0425531914893617,
+          "others": 0.06382978723404255
+        },
+        "talking": {
+          "heavy_impact": 0.0,
+          "dragging": 0.041666666666666664,
+          "construction": 0.0,
+          "machine_noise": 0.0,
+          "talking": 0.8541666666666666,
+          "water_toilet": 0.041666666666666664,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.06382978723404255
+        },
+        "water_toilet": {
+          "heavy_impact": 0.020833333333333332,
+          "dragging": 0.2708333333333333,
+          "construction": 0.0,
+          "machine_noise": 0.020833333333333332,
+          "talking": 0.22916666666666666,
+          "water_toilet": 0.9375,
+          "water_shower": 0.14583333333333334,
+          "dog_bark": 0.02127659574468085,
+          "others": 0.0425531914893617
+        },
+        "water_shower": {
+          "heavy_impact": 0.020833333333333332,
+          "dragging": 0.08333333333333333,
+          "construction": 0.0,
+          "machine_noise": 0.10416666666666667,
+          "talking": 0.020833333333333332,
+          "water_toilet": 0.08333333333333333,
+          "water_shower": 1.0,
+          "dog_bark": 0.0,
+          "others": 0.2127659574468085
+        },
+        "dog_bark": {
+          "heavy_impact": 0.020833333333333332,
+          "dragging": 0.020833333333333332,
+          "construction": 0.0,
+          "machine_noise": 0.0,
+          "talking": 0.0,
+          "water_toilet": 0.0,
+          "water_shower": 0.0,
+          "dog_bark": 0.9574468085106383,
+          "others": 0.06382978723404255
+        }
+      },
+      "raise_off_mean": 0.05916860593971631
+    },
+    "labeled": {
+      "n": 2000,
+      "nine_class": {
+        "Accuracy": 0.8285,
+        "Macro Precision": 0.8247673088668444,
+        "Macro Recall": 0.8284472813620796,
+        "Macro F1": 0.8234363719981712
+      },
+      "raise": {
+        "heavy_impact": {
+          "heavy_impact": 0.9775784753363229,
+          "dragging": 0.08520179372197309,
+          "construction": 0.04054054054054054,
+          "machine_noise": 0.018018018018018018,
+          "talking": 0.0,
+          "water_toilet": 0.0,
+          "water_shower": 0.03153153153153153,
+          "dog_bark": 0.036036036036036036,
+          "others": 0.009009009009009009
+        },
+        "dragging": {
+          "heavy_impact": 0.08520179372197309,
+          "dragging": 0.8968609865470852,
+          "construction": 0.07657657657657657,
+          "machine_noise": 0.18018018018018017,
+          "talking": 0.009009009009009009,
+          "water_toilet": 0.12612612612612611,
+          "water_shower": 0.04954954954954955,
+          "dog_bark": 0.03153153153153153,
+          "others": 0.0945945945945946
+        },
+        "construction": {
+          "heavy_impact": 0.004484304932735426,
+          "dragging": 0.004484304932735426,
+          "construction": 0.972972972972973,
+          "machine_noise": 0.0945945945945946,
+          "talking": 0.16666666666666666,
+          "water_toilet": 0.0045045045045045045,
+          "water_shower": 0.0045045045045045045,
+          "dog_bark": 0.0,
+          "others": 0.05855855855855856
+        },
+        "machine_noise": {
+          "heavy_impact": 0.02242152466367713,
+          "dragging": 0.2556053811659193,
+          "construction": 0.08108108108108109,
+          "machine_noise": 0.8873873873873874,
+          "talking": 0.013513513513513514,
+          "water_toilet": 0.0990990990990991,
+          "water_shower": 0.04954954954954955,
+          "dog_bark": 0.0045045045045045045,
+          "others": 0.05405405405405406
+        },
+        "talking": {
+          "heavy_impact": 0.0,
+          "dragging": 0.05829596412556054,
+          "construction": 0.0,
+          "machine_noise": 0.009009009009009009,
+          "talking": 0.7837837837837838,
+          "water_toilet": 0.018018018018018018,
+          "water_shower": 0.0,
+          "dog_bark": 0.0,
+          "others": 0.09009009009009009
+        },
+        "water_toilet": {
+          "heavy_impact": 0.004484304932735426,
+          "dragging": 0.11659192825112108,
+          "construction": 0.018018018018018018,
+          "machine_noise": 0.04054054054054054,
+          "talking": 0.12162162162162163,
+          "water_toilet": 0.9594594594594594,
+          "water_shower": 0.2072072072072072,
+          "dog_bark": 0.0045045045045045045,
+          "others": 0.018018018018018018
+        },
+        "water_shower": {
+          "heavy_impact": 0.004484304932735426,
+          "dragging": 0.02242152466367713,
+          "construction": 0.02252252252252252,
+          "machine_noise": 0.11261261261261261,
+          "talking": 0.07657657657657657,
+          "water_toilet": 0.02252252252252252,
+          "water_shower": 0.9819819819819819,
+          "dog_bark": 0.0045045045045045045,
+          "others": 0.22522522522522523
+        },
+        "dog_bark": {
+          "heavy_impact": 0.10762331838565023,
+          "dragging": 0.04035874439461883,
+          "construction": 0.0045045045045045045,
+          "machine_noise": 0.0,
+          "talking": 0.013513513513513514,
+          "water_toilet": 0.02702702702702703,
+          "water_shower": 0.0,
+          "dog_bark": 0.972972972972973,
+          "others": 0.06756756756756757
+        }
+      },
+      "raise_off_mean": 0.05075931452753201,
+      "fixed_rule": {
+        "adopted": 1277,
+        "correct": 1176,
+        "precision": 0.9209083790133125
+      },
+      "combiner_cv": {
+        "one": {
+          "adopted": 1317,
+          "correct": 1285,
+          "precision": 0.9757023538344722
+        },
+        "two": {
+          "adopted": 271,
+          "true_in_top2": 261
+        },
+        "folds": 5,
+        "fold_seed": 0
+      }
+    },
+    "raise_off_mean_val_labeled": 0.052247638221425585
+  },
+  "conditions": {
+    "C1_val_macro_f1": true,
+    "C2_labeled_macro_f1": true,
+    "C3_combiner_cv": true,
+    "C4_raise_off_mean": true
+  },
+  "n_satisfied": 4,
+  "verdict": "채택(B+)",
+  "tau1": 0.9,
+  "tau2": 0.95,
+  "raise_tau": 0.5,
+  "run3_reference_2026_10_22": {
+    "val": [
+      0.8744,
+      0.8749,
+      0.8743,
+      0.8719
+    ],
+    "labeled": [
+      0.917,
+      0.9171,
+      0.917,
+      0.9138
+    ],
+    "fixed_rule_labeled": {
+      "correct": 1400,
+      "adopted": 1453
+    }
+  },
+  "classes": [
+    "heavy_impact",
+    "dragging",
+    "construction",
+    "machine_noise",
+    "talking",
+    "water_toilet",
+    "water_shower",
+    "dog_bark",
+    "others"
+  ],
+  "generated_at": "2026-10-24 22:09:41"
+}

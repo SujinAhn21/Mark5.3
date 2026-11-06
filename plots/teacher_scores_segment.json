@@ -1,0 +1,122 @@
+{
+  "teacher_kind": "segment",
+  "classes": [
+    "heavy_impact",
+    "dragging",
+    "construction",
+    "machine_noise",
+    "talking",
+    "water_toilet",
+    "water_shower",
+    "dog_bark"
+  ],
+  "teacher_files": [
+    {
+      "class": "heavy_impact",
+      "kind": "encoder",
+      "sha256": "adb246587f4654eef4d28377cbcae95604c7b9f0191357d4277135abca479fe4",
+      "run_id": "347b9fc0-cf03-48c8-9f25-92a2aecda67e"
+    },
+    {
+      "class": "heavy_impact",
+      "kind": "classifier",
+      "sha256": "2a304c7b8e69ab0e699e5784d0293e7a7f9ef36e2e19a3f29ef28cfe7a7a3a74",
+      "run_id": "347b9fc0-cf03-48c8-9f25-92a2aecda67e"
+    },
+    {
+      "class": "dragging",
+      "kind": "encoder",
+      "sha256": "5905b239bac56562a421339dbb2b9862ae58c305d790a4b6c4d62237dfd26756",
+      "run_id": "b9851e97-67b0-41fb-8f42-ba983ba937bd"
+    },
+    {
+      "class": "dragging",
+      "kind": "classifier",
+      "sha256": "d4b6d58f84af74f82c1a4cab000d44539e07a5978519ebbdd347fba2e9ca20ff",
+      "run_id": "b9851e97-67b0-41fb-8f42-ba983ba937bd"
+    },
+    {
+      "class": "construction",
+      "kind": "encoder",
+      "sha256": "4f4dfde476b9c5572f144e65970fd5aa4ad16aedbf7acb292a8954fba0f6ffd3",
+      "run_id": "ae2d8504-5a4f-485e-a92f-413a6837cf9a"
+    },
+    {
+      "class": "construction",
+      "kind": "classifier",
+      "sha256": "046dc0f44fd4d9e5d0250a0ee9e6c44120a1795fd6bf8d0383b9174d09ccb0d2",
+      "run_id": "ae2d8504-5a4f-485e-a92f-413a6837cf9a"
+    },
+    {
+      "class": "machine_noise",
+      "kind": "encoder",
+      "sha256": "b5d10f1c749edd7462b021ce3c1bdab8cd09852d8aa0b8b8eec4f9b47d2db94b",
+      "run_id": "c9c38dda-c29d-4351-98a4-a2abf9f125e3"
+    },
+    {
+      "class": "machine_noise",
+      "kind": "classifier",
+      "sha256": "476e683eda3c7f5f8ffa48e25a86bc0e023654cbb333a42f9338a2c4568aa513",
+      "run_id": "c9c38dda-c29d-4351-98a4-a2abf9f125e3"
+    },
+    {
+      "class": "talking",
+      "kind": "encoder",
+      "sha256": "5cc146c2562f508db93fb487182113efcac5d3e0cfcc67e52604636a051f90ff",
+      "run_id": "9f05a6ed-cd41-4628-818d-07c53ea539fd"
+    },
+    {
+      "class": "talking",
+      "kind": "classifier",
+      "sha256": "8155859ba709d42e6a9a738dab332b8aec45a90f8c7f63c387af30ee53e49753",
+      "run_id": "9f05a6ed-cd41-4628-818d-07c53ea539fd"
+    },
+    {
+      "class": "water_toilet",
+      "kind": "encoder",
+      "sha256": "d0aaf9cdeedd6cb1bc5c5f0502cb1a74c17f0c13c7f965aac4d0fa890e96d479",
+      "run_id": "19f1e1e2-4185-4b31-929f-366062ff744a"
+    },
+    {
+      "class": "water_toilet",
+      "kind": "classifier",
+      "sha256": "dee6bb52c7d0efa308ccd0795dbf0099bfdd653658236bc2b86f169cc26d728c",
+      "run_id": "19f1e1e2-4185-4b31-929f-366062ff744a"
+    },
+    {
+      "class": "water_shower",
+      "kind": "encoder",
+      "sha256": "28c93c52449756eb1980211c35ce8ab7538fd3e0fc814358482c936a0ff20910",
+      "run_id": "555d4dd8-db50-42e6-9d1a-96830ab1fb87"
+    },
+    {
+      "class": "water_shower",
+      "kind": "classifier",
+      "sha256": "708be17f6830c01af3de0b2ed5513b46790a2f0be57e44ed05ee5f94fa00ab1e",
+      "run_id": "555d4dd8-db50-42e6-9d1a-96830ab1fb87"
+    },
+    {
+      "class": "dog_bark",
+      "kind": "encoder",
+      "sha256": "c6399cdf140f1b6ab044200649e31f47623293500b210ad6dd229ca2cd3c5210",
+      "run_id": "e7c08822-5966-4454-86aa-4281b950e958"
+    },
+    {
+      "class": "dog_bark",
+      "kind": "classifier",
+      "sha256": "1ce362e9baadd030b603cdbaa83319ce6339dd62feeda4a1b8b06585b48af431",
+      "run_id": "e7c08822-5966-4454-86aa-4281b950e958"
+    }
+  ],
+  "teacher_release_sha256": "a2c767052375558612e9ac30a30d08e8821390a998073b0776db88cf8d511069",
+  "split_counts": {
+    "labeled": 2000,
+    "unlabeled": 2000,
+    "val": 430,
+    "test": 430
+  },
+  "limit": 0,
+  "mark53_audio_sha256": "50d0d674753a715ea00def01345d3f63e6c875efae6442538c83dd4b506ed2cf",
+  "scores_sha256": "d28fe4b29644235031115b035264164d7a6841308f3cb808ea39c6e321299c32",
+  "generated_at": "2026-10-24 22:09:25"
+}

@@ -1,0 +1,37 @@
+
+======================================================================
+# /usr/bin/python3 -u model/eval.py --mark_version mark5.2 --seed 5 --unlabeled_n 2000 --labeled_n 200 --linear_head --head_pretrained_hidden --hard_weight 1.0 --teacher_seg_mean --teacher_clean_view --bg_weight 0 --student_raw_wave --joint_forward --pseudo_source cmb --plain_output
+# 시작 2026-10-25 20:49:38
+
+[ABLATION] PH 헤드 단순화(mn10 사전학습 은닉층 유지 → Linear(960→384) 하나 · branch LN+ReLU 제거) / 정답 라벨 CE 가중치 1(옛 (1−α)=0.7 대신) / H 텍스트 앵커 헤드 → 선형 헤드(nn.Linear 384→9, 제로샷 없음 · 2026-10-07 D0 본 레시피) / 조각 평균 합의(전문가별 조각 확신도 평균 → 클립 단위 채택, clip_merge_rule=mean) / teacher 입력 = 원본(SpecAugment 는 student 에만) / BG 보조 손실 끔(background_embedding_weight=0) / student 파형 정규화 끔(원본 진폭 — 비교모델과 같은 입력 · teacher mel 은 정규화 파형 그대로) / JF labeled and unlabeled clips share one encoder forward · run_tag mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u2000_pscmb_s5
+[OUTPUT] 단일 분류 경로: 지도 갈래의 9-class argmax · 증류 변환층 미실행 · 평가 보정 없음
+[A3] 평가 단위 = 클립(파형 48000샘플 통째, 조각 1개 취급 → 조각 가중 평균은 가중치 1)
+[INFO] 평가 대상: split=test · 인덱스=/content/drive/MyDrive/NewProject/codes/experiments/Mark5.3/dataset_test.csv
+/usr/local/lib/python3.13/dist-packages/torchvision/ops/misc.py:121: UserWarning: Don't use ConvNormActivation directly, please use Conv2dNormActivation and Conv3dNormActivation instead.
+  warnings.warn(
+[INFO] student 인코더 Mn10AudioEncoder · 입력 waveform
+[H] 선형 헤드 로드: linear.weight (9, 384) — 텍스트 앵커·AC/LT 미사용(2026-10-07 D0 본 레시피)
+[INFO] 유효 test 샘플: 430개
+               precision    recall  f1-score   support
+
+ heavy_impact     0.9792    0.9792    0.9792        48
+     dragging     0.9412    1.0000    0.9697        48
+ construction     0.8679    0.9583    0.9109        48
+machine_noise     0.9286    0.8125    0.8667        48
+      talking     0.9592    0.9792    0.9691        48
+ water_toilet     0.9792    0.9792    0.9792        48
+ water_shower     0.9057    1.0000    0.9505        48
+     dog_bark     1.0000    1.0000    1.0000        47
+       others     0.9744    0.8085    0.8837        47
+
+     accuracy                         0.9465       430
+    macro avg     0.9484    0.9463    0.9454       430
+ weighted avg     0.9482    0.9465    0.9454       430
+
+Accuracy: 0.9465
+ROC AUC (macro, one-vs-rest): 0.9967
+[others FPR] 실제 others인데 타겟 클래스로 오분류된 비율: 0.1915
+[INFO] 성능 요약 CSV 저장: /content/drive/MyDrive/NewProject/codes/experiments/Mark5.3/plots/performance_summary_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u2000_pscmb_s5_plain.csv
+[INFO] 예측 상세 CSV 저장: /content/drive/MyDrive/NewProject/codes/experiments/Mark5.3/plots/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u2000_pscmb_s5_plain.csv
+
+# 종료 2026-10-25 20:49:56 · 0.3분

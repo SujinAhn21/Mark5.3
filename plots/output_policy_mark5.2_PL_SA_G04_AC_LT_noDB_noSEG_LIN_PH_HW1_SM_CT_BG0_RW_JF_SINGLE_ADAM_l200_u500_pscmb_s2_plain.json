@@ -1,0 +1,18 @@
+{
+  "mode": "plain_output",
+  "rule": "argmax",
+  "threshold": null,
+  "distill_eval_weight": 0.0,
+  "class_bias": {},
+  "checkpoint": {
+    "file": "student_model_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u500_pscmb_s2.pth",
+    "size": 19657136,
+    "mtime": 1792961680.0,
+    "sha256": "14f836c561fdd79023c2a9715e8be8870c1463db1d1c7cdf3b07750966e34219"
+  },
+  "classification_policy": "supervised_argmax_v1",
+  "training_classification_policy": "supervised_argmax_v1",
+  "run_tag": "mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u500_pscmb_s2",
+  "split": "test",
+  "dataset_identity": "e2ed750a6fb13d96a6a7ee9ea97f360575c9dba655cd19b7309bf29c6e1a2457"
+}

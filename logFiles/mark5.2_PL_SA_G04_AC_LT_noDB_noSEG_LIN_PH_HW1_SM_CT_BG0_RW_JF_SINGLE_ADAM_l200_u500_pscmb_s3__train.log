@@ -1,0 +1,126 @@
+
+======================================================================
+# /usr/bin/python3 -u model/train_mark5.py --mark_version mark5.2 --seed 3 --unlabeled_n 500 --labeled_n 200 --linear_head --head_pretrained_hidden --hard_weight 1.0 --teacher_seg_mean --teacher_clean_view --bg_weight 0 --student_raw_wave --joint_forward --pseudo_csv pseudo_labels_cmb_l200_s3.csv --pseudo_source cmb
+# 시작 2026-10-25 20:55:45
+
+[ABLATION] PH 헤드 단순화(mn10 사전학습 은닉층 유지 → Linear(960→384) 하나 · branch LN+ReLU 제거) / 정답 라벨 CE 가중치 1(옛 (1−α)=0.7 대신) / H 텍스트 앵커 헤드 → 선형 헤드(nn.Linear 384→9, 제로샷 없음 · 2026-10-07 D0 본 레시피) / 조각 평균 합의(전문가별 조각 확신도 평균 → 클립 단위 채택, clip_merge_rule=mean) / teacher 입력 = 원본(SpecAugment 는 student 에만) / BG 보조 손실 끔(background_embedding_weight=0) / student 파형 정규화 끔(원본 진폭 — 비교모델과 같은 입력 · teacher mel 은 정규화 파형 그대로) / JF labeled and unlabeled clips share one encoder forward · run_tag mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u500_pscmb_s3
+Global seed set to 3 (cudnn deterministic)
+[AC/LT] anchor_centering=True learnable_logit_scale=True · run_tag mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u500_pscmb_s3
+[H] student 분류 헤드 = 선형(nn.Linear 384→9) — 텍스트 앵커·AC/LT 미사용, 제로샷 불가(2026-10-07 D0 본 레시피). 지도 갈래만 Linear 분류기를 사용하고 증류 갈래는 feature KD 전용이다
+[IDENTITY] experiment=0744f1fd726865e082394a2d9a6fb0429f82dd89d8d79a42700d7d87a415ef6b teacher=None
+[TEACHER] CSV 가짜 정답 회차 — 학습 중 교사 미사용(resources/ 교사 파일을 검사하지 않음)
+[A3] 학습 단위 = 클립(파형 48000샘플 통째). teacher 조각 5개 → [SM] 조각 평균 합의: 전문가별로 조각 확신도를 평균 → 클립 채택 = 평균 확신도 최대 ≥ 0.5 & 1등−2등 차이 ≥ 0.4, 라벨 = 평균 확신도 1등 전문가, 확신도 = 그 평균, 특징 = 조각 융합 특징의 전문가 확신도 합 가중 평균 (merge_segments_to_clip rule='mean')
+[PH] 헤드 단순화: mn10 사전학습 은닉층(960→1280+Hardswish+Dropout) 유지 → Linear(1280→384) 투영 하나 → 앵커. supervised branch = Identity
+[HW] 정답 라벨 CE 가중치 1 (옛 (1−α)=0.7)
+[INFO] CSV 가짜 정답 경로 + 클립 모드: 라벨이 이미 클립 단위라 조각 합치기(merge_segments_to_clip)를 거치지 않는다. teacher 조각은 읽되 쓰지 않음
+[INFO] CSV 가짜 정답 경로: --teacher_seg_mean / --teacher_clean_view 는 이 회차에서 쓰이지 않는다(전문가 출력을 쓰지 않음). run_tag 의 _SM·_CT 는 같은 묶음의 합의 회차와 이름을 맞추려고 그대로 붙는다(_G04 와 같은 규칙).
+[INFO] labeled 서브샘플: 200개 사용 (seed=3, 클래스별 {'heavy_impact': 23, 'dragging': 23, 'construction': 22, 'machine_noise': 22, 'talking': 22, 'water_toilet': 22, 'water_shower': 22, 'dog_bark': 22, 'others': 22})
+[INFO] unlabeled 서브샘플: 500개 사용 (전체 2000개 중, seed=3 기준 누적 추출)
+[INFO] val 을 dataset_val.csv 에서 읽었습니다 — train 200개 / val 430개 (폴더 기반 분리)
+/usr/local/lib/python3.13/dist-packages/torchvision/ops/misc.py:121: UserWarning: Don't use ConvNormActivation directly, please use Conv2dNormActivation and Conv3dNormActivation instead.
+  warnings.warn(
+[INFO] student 인코더: Mn10AudioEncoder (encoder_type=mn10, 입력=waveform, 학습 파라미터 4,693,648, 사전학습 로드)
+[JF] 정답 클립과 라벨 없는 클립을 학생에 한 번에 통과시킨다(BN = 배치 전체). 한쪽만 있는 배치는 그 배치 전체로 통과(옛 경로와 같다).
+[FRESH] pseudo_labels_cmb_l200_s3.csv — 결합기 json·점수 캐시(c1781348d73d)·resources/ 교사와 일치
+[INFO] 결합기 가짜 정답: 한 라벨 398 · 두 후보 66
+[INFO] pseudo-label 출처 = cmb (CSV /content/drive/MyDrive/NewProject/codes/experiments/Mark5.3/pseudo_labels_cmb_l200_s3.csv) — unlabeled 500개 중 464개에 라벨 있음, teacher 8개 미사용, feature KD 없음
+[WARN] CSV 에 없는 unlabeled 클립 36개는 확신도 0 으로 취급돼 학습에서 빠집니다.
+[INFO] 분포 정렬: 미적용
+[INFO] SpecAugment: 적용 (주파수 2x최대8/64칸, 시간 2x최대16/101프레임, teacher view=clean) — 학습에만, val/eval 은 원본
+[INFO] --pseudo_csv 경로: 1등−2등 차이 조건 0.4 은 적용하지 않음(CSV 라벨엔 합의 정보가 없음)
+[INFO] KD 모드: pseudo-label CE | 채택 임계값=0.5, 1등−2등 차이≥0, 확신도 가중=True | alpha=0.3, feature_kd=0.3 | classification=supervised_only (feature KD retained)
+[INFO] 학습률: 백본 0.0001 (4,201,744개) / 새 층(투영·branch·background) 0.0001 (644,361개)
+[INFO] 학습 절차: Adam(새 층 lr 0.0001 · 백본 lr 0.0001), weight_decay=0.0001, ReduceLROnPlateau(factor=0.5, patience=3), early stopping patience=10, best val 체크포인트 저장
+[INFO] 실험 조건: seed=3, unlabeled=500개 (실제 500개), cudnn_deterministic=True, run_tag=mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u500_pscmb_s3
+[INFO] Student training (mark5.2) started on cuda
+[RUNTIME] device cuda · torch 2.11.0+cu130 · CUDA 13.0 · GPU NVIDIA L4 · sm_89 · 드라이버 580.82.07
+[Epoch 1] Total 2.6534 | Hard 2.0494 | Soft 2.0135 | Feat 0.0000 | BG 0.0000 | Val(hard*) 2.0085 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 3.9s
+[EarlyStopping] Val loss inf -> 2.008534. Saving...
+[Epoch 2] Total 2.3435 | Hard 1.8261 | Soft 1.7247 | Feat 0.0000 | BG 0.0000 | Val(hard*) 1.5855 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 2.008534 -> 1.585522. Saving...
+[Epoch 3] Total 1.7379 | Hard 1.3603 | Soft 1.2587 | Feat 0.0000 | BG 0.0000 | Val(hard*) 1.0681 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 1.585522 -> 1.068061. Saving...
+[Epoch 4] Total 0.9608 | Hard 0.7181 | Soft 0.8088 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.7769 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 1.068061 -> 0.776923. Saving...
+[Epoch 5] Total 0.6587 | Hard 0.4762 | Soft 0.6083 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.6389 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 0.776923 -> 0.638940. Saving...
+[Epoch 6] Total 0.5117 | Hard 0.3674 | Soft 0.4809 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.5474 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 0.638940 -> 0.547434. Saving...
+[Epoch 7] Total 0.3831 | Hard 0.2577 | Soft 0.4181 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4949 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 0.547434 -> 0.494931. Saving...
+[Epoch 8] Total 0.3594 | Hard 0.2391 | Soft 0.4012 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4644 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 0.494931 -> 0.464416. Saving...
+[Epoch 9] Total 0.3121 | Hard 0.2103 | Soft 0.3392 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.5183 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 1/10
+[Epoch 10] Total 0.2319 | Hard 0.1344 | Soft 0.3248 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4065 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] Val loss 0.464416 -> 0.406494. Saving...
+[Epoch 11] Total 0.1889 | Hard 0.0921 | Soft 0.3227 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4311 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 1/10
+[Epoch 12] Total 0.1841 | Hard 0.0984 | Soft 0.2857 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4186 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 2/10
+[Epoch 13] Total 0.1119 | Hard 0.0361 | Soft 0.2528 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4094 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 3/10
+[Epoch 14] Total 0.1584 | Hard 0.0737 | Soft 0.2823 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4527 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[LR] 백본 0.0001 -> 5e-05 · 새 층 0.0001 -> 5e-05 (val=0.452701)
+[EarlyStopping] counter: 4/10
+[Epoch 15] Total 0.1344 | Hard 0.0652 | Soft 0.2307 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4174 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 5/10
+[Epoch 16] Total 0.1231 | Hard 0.0385 | Soft 0.2820 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3998 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 0.406494 -> 0.399844. Saving...
+[Epoch 17] Total 0.1230 | Hard 0.0362 | Soft 0.2896 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4253 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 1/10
+[Epoch 18] Total 0.0680 | Hard 0.0177 | Soft 0.1677 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4132 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 2/10
+[Epoch 19] Total 0.0904 | Hard 0.0297 | Soft 0.2022 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4168 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 3/10
+[Epoch 20] Total 0.0902 | Hard 0.0287 | Soft 0.2051 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3905 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.8s
+[EarlyStopping] Val loss 0.399844 -> 0.390457. Saving...
+[Epoch 21] Total 0.1075 | Hard 0.0385 | Soft 0.2301 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4125 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 1/10
+[Epoch 22] Total 0.0834 | Hard 0.0234 | Soft 0.2000 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4174 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 2/10
+[Epoch 23] Total 0.0767 | Hard 0.0335 | Soft 0.1442 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4531 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 3/10
+[Epoch 24] Total 0.0835 | Hard 0.0315 | Soft 0.1732 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4406 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[LR] 백본 5e-05 -> 2.5e-05 · 새 층 5e-05 -> 2.5e-05 (val=0.440576)
+[EarlyStopping] counter: 4/10
+[Epoch 25] Total 0.0945 | Hard 0.0497 | Soft 0.1495 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4068 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 5/10
+[Epoch 26] Total 0.0815 | Hard 0.0283 | Soft 0.1771 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.4017 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 6/10
+[Epoch 27] Total 0.0664 | Hard 0.0227 | Soft 0.1455 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3985 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 7/10
+[Epoch 28] Total 0.0785 | Hard 0.0303 | Soft 0.1605 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3836 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] Val loss 0.390457 -> 0.383614. Saving...
+[Epoch 29] Total 0.0675 | Hard 0.0159 | Soft 0.1719 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3770 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 0.383614 -> 0.377046. Saving...
+[Epoch 30] Total 0.0550 | Hard 0.0109 | Soft 0.1467 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3719 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] Val loss 0.377046 -> 0.371934. Saving...
+[Epoch 31] Total 0.0960 | Hard 0.0481 | Soft 0.1598 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3816 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 1/10
+[Epoch 32] Total 0.0708 | Hard 0.0310 | Soft 0.1327 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3789 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 2/10
+[Epoch 33] Total 0.0494 | Hard 0.0104 | Soft 0.1299 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3848 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 3/10
+[Epoch 34] Total 0.0564 | Hard 0.0190 | Soft 0.1248 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3906 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[LR] 백본 2.5e-05 -> 1.25e-05 · 새 층 2.5e-05 -> 1.25e-05 (val=0.390631)
+[EarlyStopping] counter: 4/10
+[Epoch 35] Total 0.0577 | Hard 0.0093 | Soft 0.1611 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3856 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 5/10
+[Epoch 36] Total 0.0618 | Hard 0.0201 | Soft 0.1392 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3915 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 6/10
+[Epoch 37] Total 0.0700 | Hard 0.0344 | Soft 0.1186 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3878 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 7/10
+[Epoch 38] Total 0.0581 | Hard 0.0239 | Soft 0.1141 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3885 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[LR] 백본 1.25e-05 -> 6.25e-06 · 새 층 1.25e-05 -> 6.25e-06 (val=0.388550)
+[EarlyStopping] counter: 8/10
+[Epoch 39] Total 0.0460 | Hard 0.0201 | Soft 0.0863 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3937 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.6s
+[EarlyStopping] counter: 9/10
+[Epoch 40] Total 0.0438 | Hard 0.0164 | Soft 0.0910 | Feat 0.0000 | BG 0.0000 | Val(hard*) 0.3901 | PL채택 0.928(464/500) conf 0.917 | 두후보 66 | 2.7s
+[EarlyStopping] counter: 10/10
+[INFO] Early stopping. best epoch 30 (val 0.371934)
+Training finished. (early stop, best epoch 30/80, val 0.371934)
+[INFO] 손실곡선 CSV 저장: /content/drive/MyDrive/NewProject/codes/experiments/Mark5.3/plots/loss_history_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u500_pscmb_s3.csv
+[INFO] teacher 캐시 저장: /content/drive/MyDrive/NewProject/codes/experiments/Mark5.3/cache/mark5.2 (마지막 에폭분)
+
+# 종료 2026-10-25 20:58:09 · 2.4분

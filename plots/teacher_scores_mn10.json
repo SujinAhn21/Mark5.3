@@ -1,0 +1,84 @@
+{
+  "teacher_kind": "mn10",
+  "classes": [
+    "heavy_impact",
+    "dragging",
+    "construction",
+    "machine_noise",
+    "talking",
+    "water_toilet",
+    "water_shower",
+    "dog_bark"
+  ],
+  "teacher_files": [
+    {
+      "class": "heavy_impact",
+      "file": "mn10_teacher_mark4.1.pt",
+      "sha256": "b767ede2447a50e491e295515571be3515e66153689c9b3ee8d272bbee10d37b",
+      "run_id": "f4914113-43f6-4dfe-a99c-99eb14a78647",
+      "saved_epoch": 14
+    },
+    {
+      "class": "dragging",
+      "file": "mn10_teacher_mark4.2.pt",
+      "sha256": "232ec785f8c3b925b7b0d0a60b4dc32ea5b997d82f7717d7bb4f37ebeeba31de",
+      "run_id": "c4ac53a7-45d4-4891-9d6e-90157b3997d4",
+      "saved_epoch": 17
+    },
+    {
+      "class": "construction",
+      "file": "mn10_teacher_mark4.3.pt",
+      "sha256": "6d33e144ec5b04d41d8188c748b378e0fa8228eedc93c675565a5e77c944d1c5",
+      "run_id": "7543d776-26cf-4b0c-9b78-3293b3c15b13",
+      "saved_epoch": 19
+    },
+    {
+      "class": "machine_noise",
+      "file": "mn10_teacher_mark4.4.pt",
+      "sha256": "466e15ff4089f60a7cc8e3d6c166f531ac575097ce3dba2468d9e25ef2ca1c28",
+      "run_id": "e9f66490-fda7-4e2e-933c-0f75ea44f061",
+      "saved_epoch": 19
+    },
+    {
+      "class": "talking",
+      "file": "mn10_teacher_mark4.5.pt",
+      "sha256": "bb50204e4ff481ede4e65e9b8a8cf0710acb0557173becbbc880f33a8532ee4f",
+      "run_id": "a57917e3-e5f2-4cc6-9efb-aa01cbd7fdb3",
+      "saved_epoch": 11
+    },
+    {
+      "class": "water_toilet",
+      "file": "mn10_teacher_mark4.6.pt",
+      "sha256": "b3a77cd9246c37dbf00e28a623fd5d6f153791a5ec5c45a2cfcacddc482187f4",
+      "run_id": "a1b97b2d-1c69-4e9a-a3f3-1282c11fa7f7",
+      "saved_epoch": 11
+    },
+    {
+      "class": "water_shower",
+      "file": "mn10_teacher_mark4.7.pt",
+      "sha256": "a1f54c35abca650f69a5212a28a02637df7ea9afbc18ad9a208aede5d4039b84",
+      "run_id": "873f6136-0626-4d9e-b349-8d4365a6391e",
+      "saved_epoch": 17
+    },
+    {
+      "class": "dog_bark",
+      "file": "mn10_teacher_mark4.8.pt",
+      "sha256": "284927c5467890114bae0aae1d7a3746cd3700dbac1532df65e5e5688e522c59",
+      "run_id": "38e6545b-4c11-488e-8037-dcf2c59bce4a",
+      "saved_epoch": 8
+    }
+  ],
+  "teacher_release_sha256": "6977b42fa4cb2abaf572274f52e1e0a5089a3110d681e493da016c4229abdc69",
+  "split_counts": {
+    "labeled": 2000,
+    "unlabeled": 2000,
+    "val": 430,
+    "test": 430
+  },
+  "limit": 0,
+  "mark53_audio_sha256": "50d0d674753a715ea00def01345d3f63e6c875efae6442538c83dd4b506ed2cf",
+  "scores_sha256": "c1781348d73d00d606c8afb1f190c4c90d24bbe60a6c564bcda220ff311ee2b1",
+  "generated_at": "2026-10-24 22:07:28",
+  "features_file": "teacher_feats_mn10.pt",
+  "features_sha256": "b1a7860d1ca0260effab861fcf45cedf43d3e87c53e47f5aaf5fd486bd4579fb"
+}

@@ -1,0 +1,10 @@
+,heavy_impact,dragging,construction,machine_noise,talking,water_toilet,water_shower,dog_bark,others
+heavy_impact,46,0,1,1,0,0,0,0,0
+dragging,0,45,0,2,0,0,0,0,1
+construction,0,2,45,0,0,0,0,0,1
+machine_noise,1,0,6,40,0,0,1,0,0
+talking,0,1,1,0,40,0,3,0,3
+water_toilet,0,0,0,2,0,45,1,0,0
+water_shower,0,0,0,0,0,0,48,0,0
+dog_bark,0,0,0,0,0,0,0,47,0
+others,0,0,1,2,1,0,8,4,31
