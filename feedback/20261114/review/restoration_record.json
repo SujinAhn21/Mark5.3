@@ -1,0 +1,53 @@
+{
+  "date": "2026-11-14",
+  "authorization": "User explicitly requested restoring this one U clip and synchronizing local USB/Google Drive.",
+  "file": "Mark5.2/data_source_unlabeled/unlabeled_1358.wav",
+  "before_sha256": "e51b1f160623cc39d86bbafdbc66bebcae228170a1b74305290a71ac5e1d6f3a",
+  "after_sha256": "f6caae62f7ae06c3e705231a8ec3f69724fcc0ce6f3fea71f82a0da4f1615515",
+  "prepared_drive_input_sha256": "667f1910ac25365ea4c5f6383dec129eb594a98e4545d34ee342515df57eaa69",
+  "before_crop_seconds": [
+    8.0,
+    11.0
+  ],
+  "after_crop_seconds": [
+    5.995,
+    8.995
+  ],
+  "source_recording": "aihub:N-10_221006_A_5_a_16484.wav",
+  "ledger_before_sha256": "953ec32ad7794e6cabda434cee65e196bc971352c0fcaa6731a115295c68feac",
+  "ledger_after_sha256": "b11002016899963baf22fd7d0c644f28ea37d53bf494d9383bf85d0cccbf8492",
+  "archived_excel_row": 32233,
+  "new_active_excel_row": 75273,
+  "unchanged_previous_rows": 75270,
+  "changed_history_fields": [
+    "removed_20260715",
+    "mark52_note"
+  ],
+  "student_split": "unlabeled",
+  "same_recording_active_rows_before": [
+    {
+      "mark_version": "mark5.0",
+      "local_filename": "unlabeled_1580.wav",
+      "assigned_split": "unlabeled",
+      "sha256": "f6caae62f7ae06c3e705231a8ec3f69724fcc0ce6f3fea71f82a0da4f1615515"
+    },
+    {
+      "mark_version": "mark5.2",
+      "local_filename": "unlabeled_1358.wav",
+      "assigned_split": "unlabeled",
+      "sha256": "e51b1f160623cc39d86bbafdbc66bebcae228170a1b74305290a71ac5e1d6f3a"
+    },
+    {
+      "mark_version": "mark4.8",
+      "local_filename": "dog_bark_val_148.wav",
+      "assigned_split": "val",
+      "sha256": "e51b1f160623cc39d86bbafdbc66bebcae228170a1b74305290a71ac5e1d6f3a"
+    }
+  ],
+  "quality_note": "Historical clip has LOW_ACTIVE/LONG_GAP. Restored for experimental-version consistency, not reclassified as higher quality.",
+  "backups": [
+    "unlabeled_1358_crop8-11_before_restore.wav",
+    "data_provenance_before_restore.xlsx"
+  ],
+  "research_training_performed": false
+}

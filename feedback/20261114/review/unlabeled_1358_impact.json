@@ -1,0 +1,1021 @@
+{
+  "filename": "unlabeled_1358.wav",
+  "scope": "Frozen teacher inference and existing pseudo-label inspection only; no student retraining; performed before user-requested source restoration",
+  "source_group": "aihub:N-10_221006_A_5_a_16484.wav",
+  "historical_input_sha256": "667f1910ac25365ea4c5f6383dec129eb594a98e4545d34ee342515df57eaa69",
+  "corrected_pcm16_sha256": "456af9d05ae4207574e35230a3fa5d1a60428f54edf5414573083b7a187c6c0b",
+  "before_source_sha256": "f6caae62f7ae06c3e705231a8ec3f69724fcc0ce6f3fea71f82a0da4f1615515",
+  "old_source_conversion_matches_drive": true,
+  "teacher_files": [
+    {
+      "class": "heavy_impact",
+      "file": "mn10_teacher_mark4.1.pt",
+      "sha256": "b767ede2447a50e491e295515571be3515e66153689c9b3ee8d272bbee10d37b",
+      "run_id": "f4914113-43f6-4dfe-a99c-99eb14a78647",
+      "saved_epoch": 14
+    },
+    {
+      "class": "dragging",
+      "file": "mn10_teacher_mark4.2.pt",
+      "sha256": "232ec785f8c3b925b7b0d0a60b4dc32ea5b997d82f7717d7bb4f37ebeeba31de",
+      "run_id": "c4ac53a7-45d4-4891-9d6e-90157b3997d4",
+      "saved_epoch": 17
+    },
+    {
+      "class": "construction",
+      "file": "mn10_teacher_mark4.3.pt",
+      "sha256": "6d33e144ec5b04d41d8188c748b378e0fa8228eedc93c675565a5e77c944d1c5",
+      "run_id": "7543d776-26cf-4b0c-9b78-3293b3c15b13",
+      "saved_epoch": 19
+    },
+    {
+      "class": "machine_noise",
+      "file": "mn10_teacher_mark4.4.pt",
+      "sha256": "466e15ff4089f60a7cc8e3d6c166f531ac575097ce3dba2468d9e25ef2ca1c28",
+      "run_id": "e9f66490-fda7-4e2e-933c-0f75ea44f061",
+      "saved_epoch": 19
+    },
+    {
+      "class": "talking",
+      "file": "mn10_teacher_mark4.5.pt",
+      "sha256": "bb50204e4ff481ede4e65e9b8a8cf0710acb0557173becbbc880f33a8532ee4f",
+      "run_id": "a57917e3-e5f2-4cc6-9efb-aa01cbd7fdb3",
+      "saved_epoch": 11
+    },
+    {
+      "class": "water_toilet",
+      "file": "mn10_teacher_mark4.6.pt",
+      "sha256": "b3a77cd9246c37dbf00e28a623fd5d6f153791a5ec5c45a2cfcacddc482187f4",
+      "run_id": "a1b97b2d-1c69-4e9a-a3f3-1282c11fa7f7",
+      "saved_epoch": 11
+    },
+    {
+      "class": "water_shower",
+      "file": "mn10_teacher_mark4.7.pt",
+      "sha256": "a1f54c35abca650f69a5212a28a02637df7ea9afbc18ad9a208aede5d4039b84",
+      "run_id": "873f6136-0626-4d9e-b349-8d4365a6391e",
+      "saved_epoch": 17
+    },
+    {
+      "class": "dog_bark",
+      "file": "mn10_teacher_mark4.8.pt",
+      "sha256": "284927c5467890114bae0aae1d7a3746cd3700dbac1532df65e5e5688e522c59",
+      "run_id": "38e6545b-4c11-488e-8037-dcf2c59bce4a",
+      "saved_epoch": 8
+    }
+  ],
+  "classes": [
+    "heavy_impact",
+    "dragging",
+    "construction",
+    "machine_noise",
+    "talking",
+    "water_toilet",
+    "water_shower",
+    "dog_bark",
+    "others"
+  ],
+  "teacher_cached": [
+    0.0180316,
+    0.0076717,
+    0.0243701,
+    0.0015739,
+    7.35e-05,
+    0.0002962,
+    0.0093991,
+    0.4515845
+  ],
+  "teacher_old_cpu": [
+    0.018138304352760315,
+    0.007725461386144161,
+    0.024570897221565247,
+    0.0015688459388911724,
+    7.355590787483379e-05,
+    0.0002989483764395118,
+    0.009382989257574081,
+    0.4526435434818268
+  ],
+  "teacher_corrected_cpu": [
+    0.00028800993459299207,
+    3.968613236793317e-05,
+    2.3449299987987615e-05,
+    5.005843922845088e-05,
+    8.052650082390755e-05,
+    7.01418102835305e-05,
+    0.0001677490072324872,
+    0.9999998807907104
+  ],
+  "max_old_replay_probability_error": 0.0010590434818267824,
+  "historical_selected_runs": 10,
+  "corrected_selected_runs": 20,
+  "changed_targets": 20,
+  "comparisons": [
+    {
+      "n": 200,
+      "seed": 1,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9829970824878178,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9827902329752644,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9897004743267398,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.0004985954904819434,
+        0.0001672996184190673,
+        0.002476046188188046,
+        0.0009964629978352082,
+        0.0005573007247875349,
+        0.0002705724998283677,
+        8.143458084725e-08,
+        0.012036558558061228,
+        0.9829970824878178
+      ],
+      "q_corrected": [
+        8.156236138652297e-10,
+        3.549854808867338e-13,
+        7.481532764627245e-13,
+        2.4363819991379794e-11,
+        9.460947904904123e-09,
+        1.0584417030684292e-09,
+        9.856153956156903e-17,
+        0.9897004743267398,
+        0.010299514312780025
+      ]
+    },
+    {
+      "n": 200,
+      "seed": 2,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9596463500318627,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9596531300100092,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9987203021467019,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.0032128947199389435,
+        5.797673144843511e-05,
+        0.03670272873094205,
+        8.770335169074356e-06,
+        0.00033461652735481556,
+        8.231124088082333e-06,
+        8.93903527445902e-09,
+        2.842286016062928e-05,
+        0.9596463500318627
+      ],
+      "q_corrected": [
+        2.6218472871886895e-09,
+        5.5497614746990326e-11,
+        9.829921608522075e-05,
+        6.0177126787028644e-09,
+        6.36865528850686e-06,
+        1.5185801520265868e-08,
+        1.1273924503088131e-15,
+        0.9987203021467019,
+        0.0011750061010642003
+      ]
+    },
+    {
+      "n": 200,
+      "seed": 3,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9101034862986338,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9091505285967124,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9985305894848191,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.002215948072683419,
+        0.007605540839816726,
+        0.023654203348101054,
+        0.025008356751925576,
+        0.015116223281145829,
+        0.00038419251523611066,
+        1.7472900011080573e-07,
+        0.015911874163457445,
+        0.9101034862986338
+      ],
+      "q_corrected": [
+        5.188888036181675e-11,
+        2.487564249809719e-13,
+        3.287216810708013e-10,
+        7.615892778272577e-08,
+        6.289319630045491e-09,
+        9.284820422615294e-10,
+        1.0643456203957295e-15,
+        0.9985305894848191,
+        0.001469326757590967
+      ]
+    },
+    {
+      "n": 200,
+      "seed": 4,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9689166854381558,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9686160889746286,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9995965905199341,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.0004619078934845651,
+        0.010602780846005624,
+        0.008748533047705963,
+        0.00018109225475326768,
+        0.000421798218021098,
+        0.00014657404816479193,
+        3.4818264756892932e-06,
+        0.010517146427233151,
+        0.9689166854381558
+      ],
+      "q_corrected": [
+        3.52986944936452e-10,
+        8.941907096351399e-10,
+        1.4351031339160331e-11,
+        1.6142573256487802e-09,
+        1.947447926234799e-07,
+        9.763234408099128e-10,
+        1.6481502630844668e-13,
+        0.9995965905199341,
+        0.00040321088299882064
+      ]
+    },
+    {
+      "n": 200,
+      "seed": 5,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9890526593458915,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.014475247140609718,
+        0.0064266136821458635,
+        0.13087627814305677,
+        0.00018081037791228393,
+        0.030902797877382888,
+        0.00022201413419032306,
+        2.6090783749771404e-05,
+        0.0029376131598326145,
+        0.8139525347011197
+      ],
+      "q_corrected": [
+        8.262795354698283e-08,
+        5.1276871784531434e-05,
+        3.269775917310396e-07,
+        2.4862544215550094e-11,
+        2.7948884726801617e-05,
+        8.887982050976729e-08,
+        6.596145640876944e-10,
+        0.9890526593458915,
+        0.01086761572775446
+      ]
+    },
+    {
+      "n": 500,
+      "seed": 1,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9067796526047893,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9064553081072146,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9940353637563261,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.002527555203966348,
+        0.05076018743363212,
+        0.0082928922741738,
+        0.000955771256680609,
+        0.024445185693595762,
+        0.0007648001720137876,
+        3.5351204449260033e-13,
+        0.005473955360794711,
+        0.9067796526047893
+      ],
+      "q_corrected": [
+        1.7235890191526972e-09,
+        1.6405669211407116e-07,
+        2.5344348630329007e-12,
+        2.602632292126605e-10,
+        3.322110258889435e-05,
+        1.5832055585188758e-06,
+        3.084205844923996e-24,
+        0.9940353637563261,
+        0.005929665892447623
+      ]
+    },
+    {
+      "n": 500,
+      "seed": 2,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9419907707834866,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9419565454496868,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9991582979911564,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.00037503346518702284,
+        0.0061648055144644205,
+        0.036680286660780735,
+        4.4306146462905354e-05,
+        0.012537819462682592,
+        5.7493796841096545e-05,
+        1.3206694481074125e-12,
+        0.0021494841687738505,
+        0.9419907707834866
+      ],
+      "q_corrected": [
+        1.2426236353194339e-12,
+        4.060126294806186e-08,
+        1.1723161127432298e-07,
+        9.932299879122158e-14,
+        2.3709414667584445e-05,
+        4.878666263538795e-09,
+        5.121790193536535e-23,
+        0.9991582979911564,
+        0.0008178298812935506
+      ]
+    },
+    {
+      "n": 500,
+      "seed": 3,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9998576006366009,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.0075882487269954115,
+        0.010371559985758056,
+        0.024019338097962813,
+        0.01025468957564469,
+        0.07767459488711162,
+        6.067635690329558e-05,
+        9.925992519001159e-06,
+        0.015732944361203618,
+        0.8542880220159015
+      ],
+      "q_corrected": [
+        1.7174633218530498e-10,
+        6.205149550594914e-14,
+        9.688025242922252e-09,
+        5.5093985802128715e-09,
+        1.1125783480512148e-06,
+        7.828788523112453e-11,
+        1.9289299026503036e-17,
+        0.9998576006366009,
+        0.00014127133753102567
+      ]
+    },
+    {
+      "n": 500,
+      "seed": 4,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9215940713191797,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9209696980729954,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9997702485405146,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.0001428775136769474,
+        0.06429546289744298,
+        0.010015982776004182,
+        6.8356488166600185e-06,
+        3.607054361111758e-05,
+        5.149637226594125e-06,
+        6.335746710120888e-09,
+        0.0039035433282951044,
+        0.9215940713191797
+      ],
+      "q_corrected": [
+        2.615851248311061e-12,
+        1.3205372163210628e-09,
+        2.3009423047717376e-08,
+        1.1581096052563083e-12,
+        2.19464997224739e-09,
+        1.8137749222176238e-11,
+        5.912165373329369e-19,
+        0.9997702485405146,
+        0.00022972491296355472
+      ]
+    },
+    {
+      "n": 500,
+      "seed": 5,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9145176793136989,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9141182744967298,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9999452614632912,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.040029285341543104,
+        0.01648907587443116,
+        0.0005189721845518619,
+        1.7143631336132107e-05,
+        0.027993420075641384,
+        3.42471759991548e-05,
+        3.212224154998226e-07,
+        0.0003998551803828988,
+        0.9145176793136989
+      ],
+      "q_corrected": [
+        9.859349800496953e-10,
+        6.360425765424909e-10,
+        2.591253887963007e-10,
+        4.3696306754639586e-13,
+        6.568370450530258e-07,
+        3.628563447424123e-10,
+        4.510180768926537e-14,
+        0.9999452614632912,
+        5.407945522241768e-05
+      ]
+    },
+    {
+      "n": 1000,
+      "seed": 1,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9019810804915058,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9013154034998019,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9999749896075787,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.05493489744921455,
+        0.0045946098202105205,
+        0.0005849597619834957,
+        1.3173823061576036e-05,
+        0.03255964565028251,
+        2.924902279820672e-05,
+        1.3956122328622611e-09,
+        0.005302382585331056,
+        0.9019810804915058
+      ],
+      "q_corrected": [
+        1.483828563440025e-08,
+        2.73176092779297e-12,
+        5.728940548536488e-17,
+        2.0661199337650344e-18,
+        9.333488016099841e-08,
+        2.6386162727070164e-11,
+        4.3736142815997576e-23,
+        0.9999749896075787,
+        2.4902190137744077e-05
+      ]
+    },
+    {
+      "n": 1000,
+      "seed": 2,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9314639859415534,
+        "accepted": true
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.9312038821654968,
+        "accepted": true
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9989403286544599,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.000392564182207289,
+        0.022638083229847977,
+        0.015428055590691957,
+        0.00016402697350953642,
+        0.02931186606154456,
+        7.689376354336423e-05,
+        3.2356117398808207e-10,
+        0.0005245239335406835,
+        0.9314639859415534
+      ],
+      "q_corrected": [
+        1.7718470149001983e-11,
+        2.9003165482212303e-09,
+        9.512595972661367e-09,
+        1.8291023771261944e-14,
+        8.327536502452329e-06,
+        3.8770296385145984e-11,
+        1.881001866394492e-19,
+        0.9989403286544599,
+        0.001051331339618109
+      ]
+    },
+    {
+      "n": 1000,
+      "seed": 3,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9989635266720251,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.004840945352268165,
+        0.051599470604313594,
+        0.004174135355051122,
+        0.0023032252002372446,
+        0.01671502489520142,
+        7.609109656163744e-06,
+        7.780562465263924e-07,
+        0.09240327823167926,
+        0.8279555331953465
+      ],
+      "q_corrected": [
+        1.2952905681950148e-07,
+        1.8867581800299638e-08,
+        1.9214100896289567e-06,
+        5.338593299662912e-09,
+        4.916003843051318e-06,
+        2.941051485992159e-10,
+        1.809058059146393e-17,
+        0.9989635266720251,
+        0.001029481884704901
+      ]
+    },
+    {
+      "n": 1000,
+      "seed": 4,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9983778357268116,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.018390553126079116,
+        0.028919663893914573,
+        0.0007134886683475362,
+        0.005479693159056836,
+        0.008379470579505421,
+        0.0001047933366350012,
+        4.4281252481942085e-08,
+        0.04008090879990375,
+        0.8979313841553053
+      ],
+      "q_corrected": [
+        5.1441768144803946e-08,
+        1.1084859176459794e-08,
+        1.5130748189207742e-08,
+        9.36371174506424e-10,
+        1.767391624501309e-05,
+        1.6572298971530828e-07,
+        2.774949093807729e-15,
+        0.9983778357268116,
+        0.0016042460402040098
+      ]
+    },
+    {
+      "n": 1000,
+      "seed": 5,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9998885273423861,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.036372338564643274,
+        0.00801402011526961,
+        0.0015364632161845673,
+        0.004985288565230994,
+        0.03264935867218546,
+        0.0006352546890707344,
+        9.792413150337478e-07,
+        0.07126563922660407,
+        0.8445406577094963
+      ],
+      "q_corrected": [
+        1.1024024462587267e-08,
+        9.889473602594382e-10,
+        1.0298319566509019e-08,
+        2.190654187807247e-11,
+        3.3674541914702734e-06,
+        9.014003119254189e-09,
+        3.2439569409337714e-16,
+        0.9998885273423861,
+        0.00010807385622133864
+      ]
+    },
+    {
+      "n": 2000,
+      "seed": 1,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9989189219214482,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.01896719707418014,
+        0.016242396475247556,
+        0.0024052679084299107,
+        0.001821045742836349,
+        0.03045794520664411,
+        0.00011920357199900565,
+        1.8846813208608493e-07,
+        0.08708748501947537,
+        0.8428992705330556
+      ],
+      "q_corrected": [
+        3.271031669305488e-08,
+        4.230023891076961e-09,
+        9.810494136581411e-09,
+        2.1857900691719818e-11,
+        1.1907154282478907e-05,
+        1.0620425908054513e-08,
+        7.114081966700127e-17,
+        0.9989189219214482,
+        0.001069113531150842
+      ]
+    },
+    {
+      "n": 2000,
+      "seed": 2,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9989189219214482,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.01896719707418014,
+        0.016242396475247556,
+        0.0024052679084299107,
+        0.001821045742836349,
+        0.03045794520664411,
+        0.00011920357199900565,
+        1.8846813208608493e-07,
+        0.08708748501947537,
+        0.8428992705330556
+      ],
+      "q_corrected": [
+        3.271031669305488e-08,
+        4.230023891076961e-09,
+        9.810494136581411e-09,
+        2.1857900691719818e-11,
+        1.1907154282478907e-05,
+        1.0620425908054513e-08,
+        7.114081966700127e-17,
+        0.9989189219214482,
+        0.001069113531150842
+      ]
+    },
+    {
+      "n": 2000,
+      "seed": 3,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9989189219214482,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.01896719707418014,
+        0.016242396475247556,
+        0.0024052679084299107,
+        0.001821045742836349,
+        0.03045794520664411,
+        0.00011920357199900565,
+        1.8846813208608493e-07,
+        0.08708748501947537,
+        0.8428992705330556
+      ],
+      "q_corrected": [
+        3.271031669305488e-08,
+        4.230023891076961e-09,
+        9.810494136581411e-09,
+        2.1857900691719818e-11,
+        1.1907154282478907e-05,
+        1.0620425908054513e-08,
+        7.114081966700127e-17,
+        0.9989189219214482,
+        0.001069113531150842
+      ]
+    },
+    {
+      "n": 2000,
+      "seed": 4,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9989189219214482,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.01896719707418014,
+        0.016242396475247556,
+        0.0024052679084299107,
+        0.001821045742836349,
+        0.03045794520664411,
+        0.00011920357199900565,
+        1.8846813208608493e-07,
+        0.08708748501947537,
+        0.8428992705330556
+      ],
+      "q_corrected": [
+        3.271031669305488e-08,
+        4.230023891076961e-09,
+        9.810494136581411e-09,
+        2.1857900691719818e-11,
+        1.1907154282478907e-05,
+        1.0620425908054513e-08,
+        7.114081966700127e-17,
+        0.9989189219214482,
+        0.001069113531150842
+      ]
+    },
+    {
+      "n": 2000,
+      "seed": 5,
+      "historical": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "historical_cpu_replay": {
+        "first": "others",
+        "second": "",
+        "weight": 0.0,
+        "accepted": false
+      },
+      "corrected_inference": {
+        "first": "dog_bark",
+        "second": "",
+        "weight": 0.9989189219214482,
+        "accepted": true
+      },
+      "target_changed": true,
+      "q_historical": [
+        0.01896719707418014,
+        0.016242396475247556,
+        0.0024052679084299107,
+        0.001821045742836349,
+        0.03045794520664411,
+        0.00011920357199900565,
+        1.8846813208608493e-07,
+        0.08708748501947537,
+        0.8428992705330556
+      ],
+      "q_corrected": [
+        3.271031669305488e-08,
+        4.230023891076961e-09,
+        9.810494136581411e-09,
+        2.1857900691719818e-11,
+        1.1907154282478907e-05,
+        1.0620425908054513e-08,
+        7.114081966700127e-17,
+        0.9989189219214482,
+        0.001069113531150842
+      ]
+    }
+  ],
+  "limitations": [
+    "CPU re-inference may differ numerically from historical GPU inference.",
+    "All U clips pass through joint-forward BatchNorm, including clips whose pseudo-label loss is zero.",
+    "Final test-metric counterfactual cannot be established without controlled student retraining.",
+    "The 430 test files and already saved predictions are not modified by this audit."
+  ],
+  "revised_source_sha256_before_restoration": "e51b1f160623cc39d86bbafdbc66bebcae228170a1b74305290a71ac5e1d6f3a"
+}

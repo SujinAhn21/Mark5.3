@@ -1,0 +1,322 @@
+[
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u2000_pscmb_s1_plain.csv",
+    "sha256": "0a4f3b24bc3408de0881e9da3e6032b966fa9ae10f86e105aa21fd2f11d7c9cc",
+    "n": 200,
+    "seed": 1,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u2000_pscmb_s2_plain.csv",
+    "sha256": "ea6e1a1af1e5fff08e2c7f7131d53eca51fe1032e04531e6b75c8a0f9b73c601",
+    "n": 200,
+    "seed": 2,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u2000_pscmb_s3_plain.csv",
+    "sha256": "12af112050feeab2645d2c1ba293bf73b678d8c2bde2a8d2d30a05b9400a15b5",
+    "n": 200,
+    "seed": 3,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u2000_pscmb_s4_plain.csv",
+    "sha256": "d02961e0fd8877f03dc7880ec789bce2867b5182d8696444977fe0b60000e1d0",
+    "n": 200,
+    "seed": 4,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l200_u2000_pscmb_s5_plain.csv",
+    "sha256": "1108eab541dcd7deb872b36bb686ff984e4afd64420c8b86af77bbb419469125",
+    "n": 200,
+    "seed": 5,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l200_s1.csv",
+    "sha256": "c1fc025a9726408c3213f690201a7aa1b814853fd80472147119e646f8f65084",
+    "n": 200,
+    "seed": 1,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l200_s2.csv",
+    "sha256": "563dab92392d4410d44cfbb6e1ab8b9bbf7d677fa60b2f8b951315ba9499e5f7",
+    "n": 200,
+    "seed": 2,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l200_s3.csv",
+    "sha256": "3706e262fa58ed166d86616c15da8c84e0dc9197c261978c97109dd71553fa92",
+    "n": 200,
+    "seed": 3,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l200_s4.csv",
+    "sha256": "6365ab534023c07cb8e8b2fa41b59461b0551aa9be56c4d95a7f86263cf898b8",
+    "n": 200,
+    "seed": 4,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l200_s5.csv",
+    "sha256": "783b490a2d91d8e8518ef9db7576fb300d2e0763376ad213df9165b66b62daab",
+    "n": 200,
+    "seed": 5,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l500_u2000_pscmb_s1_plain.csv",
+    "sha256": "0174704075853f6a45504df13907dec6dcd74f65cd1331391e85bae8008a86a2",
+    "n": 500,
+    "seed": 1,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l500_u2000_pscmb_s2_plain.csv",
+    "sha256": "30f491a78d774db537ebd077115bdf72bcb47cd35760d7543f08f347fc56281c",
+    "n": 500,
+    "seed": 2,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l500_u2000_pscmb_s3_plain.csv",
+    "sha256": "1254c1705dba48dce31d4dfd65c286d994f75b16ec0e9efd7c1da23fe46f9029",
+    "n": 500,
+    "seed": 3,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l500_u2000_pscmb_s4_plain.csv",
+    "sha256": "10747e2a6dc99e80d33f0a380aa6f24bdb81abc9a2b6cae4ec5719d2ebc69ee3",
+    "n": 500,
+    "seed": 4,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l500_u2000_pscmb_s5_plain.csv",
+    "sha256": "1e0c62af985939e880bdc900350581d5e2aa9c5344d54b8a844571ecd7a28f42",
+    "n": 500,
+    "seed": 5,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l500_s1.csv",
+    "sha256": "0e1d11a1211ce73dd498c5e6ad5ff0dbfe67d18a4757e0a7365a9a38589af2d3",
+    "n": 500,
+    "seed": 1,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l500_s2.csv",
+    "sha256": "689493e7229d59f805b7aff2946709eea22be248cbb5d7a1206f22b1d4a764b5",
+    "n": 500,
+    "seed": 2,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l500_s3.csv",
+    "sha256": "54aafe92aa9bdbd534985c773b14671aecc51271760b259dcc27e8f47f65dc51",
+    "n": 500,
+    "seed": 3,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l500_s4.csv",
+    "sha256": "9606f44a1832f1d12a5d4a237279844eff6b4ab448c017003c14da3ef65e6716",
+    "n": 500,
+    "seed": 4,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l500_s5.csv",
+    "sha256": "4862c94a2e2cd5da53f6a3a71dfdc9bc2ecce8537828c8768105e1885673a89a",
+    "n": 500,
+    "seed": 5,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l1000_u2000_pscmb_s1_plain.csv",
+    "sha256": "7e4c55d218e6d5fe8a03f0ae4fe45c7fa472eb0296144129ff389ee21ff33aec",
+    "n": 1000,
+    "seed": 1,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l1000_u2000_pscmb_s2_plain.csv",
+    "sha256": "bc7fb800bdae509804b8bca4b3bdd14079a9138ec71df626b6dacadfb95a2e4e",
+    "n": 1000,
+    "seed": 2,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l1000_u2000_pscmb_s3_plain.csv",
+    "sha256": "0559d9380f56cae0d9338b94e4b5e6b8ff2930f38c009cf0ebc5e6f4b982828d",
+    "n": 1000,
+    "seed": 3,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l1000_u2000_pscmb_s4_plain.csv",
+    "sha256": "6fbd3728adc1ed57009b116ebc25f4822a9ac494f5984c20d97aee2c92dbbfd8",
+    "n": 1000,
+    "seed": 4,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_l1000_u2000_pscmb_s5_plain.csv",
+    "sha256": "9653952a8417ca44e0614cc77e4b67f87ab2d53834ba5f60d7889c5a1a43ae21",
+    "n": 1000,
+    "seed": 5,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l1000_s1.csv",
+    "sha256": "b43b3ddc59615589d370da0768e7acb3c97ddb76f184de2874a5ff1571c3bc94",
+    "n": 1000,
+    "seed": 1,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l1000_s2.csv",
+    "sha256": "e6eaf2d2b78daa602c7c3830840cf6954ca5b2b0d3f32115104eba260782faa6",
+    "n": 1000,
+    "seed": 2,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l1000_s3.csv",
+    "sha256": "a1a7dde7fae15f3639b0182cb7491c83f06c84a3fe3f82875b605ca8965b5851",
+    "n": 1000,
+    "seed": 3,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l1000_s4.csv",
+    "sha256": "6c1ad12cd2f5816a3e70d97d11560f4b1eeb3b304f49a30191ca9466b271ff18",
+    "n": 1000,
+    "seed": 4,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_l1000_s5.csv",
+    "sha256": "12cd087827446f642f84ce350a3266d3def3ad69954badebda82716bb255c618",
+    "n": 1000,
+    "seed": 5,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_u2000_pscmb_s1_plain.csv",
+    "sha256": "7669e41e3e61a78fd4e4c20aef733ebc5c47da3cf30481d5ddec8033c0b695ba",
+    "n": 2000,
+    "seed": 1,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_u2000_pscmb_s2_plain.csv",
+    "sha256": "3599c81a711191b99ae8b30d0b2afacbf54fe3e8d3232c44827c350acda804db",
+    "n": 2000,
+    "seed": 2,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_u2000_pscmb_s3_plain.csv",
+    "sha256": "6e2b7d5c20a6b565267da9f5564a8b785890166ed4634fb13bd817ef94af2467",
+    "n": 2000,
+    "seed": 3,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_u2000_pscmb_s4_plain.csv",
+    "sha256": "50dcd5a7bf3467c705cf252af2af9e00d1e872d9df45ebde866ed4b204ce61f2",
+    "n": 2000,
+    "seed": 4,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/KAMPA/prediction_details_mark5.2_PL_SA_G04_AC_LT_noDB_noSEG_LIN_PH_HW1_SM_CT_BG0_RW_JF_SINGLE_ADAM_u2000_pscmb_s5_plain.csv",
+    "sha256": "37369bbdce9acdcc51f26a20136a4ea64ec1b98c218e805633bca7697ff72b6f",
+    "n": 2000,
+    "seed": 5,
+    "method": "KAMPA",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_s1.csv",
+    "sha256": "9ea158d55eafff0ffb381b22764b67e03f7d3139fb15bb1fdb31c6c9524c7526",
+    "n": 2000,
+    "seed": 1,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_s2.csv",
+    "sha256": "4ac98c68c3294c5a8d0a8ead36260ca7adcf3acd178ec43aa7ccfc7924d4e579",
+    "n": 2000,
+    "seed": 2,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_s3.csv",
+    "sha256": "b7293b23ebe2800d6f3d8222d5b980cfe58a3ffbb5a7512538a792f9b6785c44",
+    "n": 2000,
+    "seed": 3,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_s4.csv",
+    "sha256": "d1eea232d235ef67fa07c0573f45691028331296006e982f738268093e3546fc",
+    "n": 2000,
+    "seed": 4,
+    "method": "EfficientAT",
+    "rows": 430
+  },
+  {
+    "file": "원자료/EfficientAT/prediction_details_efficientat_mn10_sup_adam_s5.csv",
+    "sha256": "1c06337dfed5e4423d410b2d06463bbb28d3126681765e23eb6e8aaf57aeb3d2",
+    "n": 2000,
+    "seed": 5,
+    "method": "EfficientAT",
+    "rows": 430
+  }
+]

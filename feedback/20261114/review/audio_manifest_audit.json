@@ -1,0 +1,57 @@
+{
+  "verified_files": 4860,
+  "current_source_conversions": 4860,
+  "historical_source_conversions": 0,
+  "source_revisions": {},
+  "splits": {
+    "labeled": {
+      "verified": 2000,
+      "mismatches": 0,
+      "sample_counts": {
+        "48000": 1880,
+        "48001": 120
+      },
+      "provider_manifest_sha256": "1df90f926293dc9da0f52b1518b12250e2b52765257c263c2d43ccef87365283"
+    },
+    "unlabeled": {
+      "verified": 2000,
+      "mismatches": 0,
+      "sample_counts": {
+        "48000": 1870,
+        "48001": 130
+      },
+      "provider_manifest_sha256": "455fbcdc908b13a2d50eabaab0e30ff52eabe800785a5b591a3a505a7517f2fa"
+    },
+    "val": {
+      "verified": 430,
+      "mismatches": 0,
+      "sample_counts": {
+        "48000": 406,
+        "48001": 24
+      },
+      "provider_manifest_sha256": "851aa950c405aec69eff6e8af8027507bd2521e5b186b89ff040d89e708e543f"
+    },
+    "test": {
+      "verified": 430,
+      "mismatches": 0,
+      "sample_counts": {
+        "48000": 407,
+        "48001": 23
+      },
+      "provider_manifest_sha256": "2a3fa3ce85a6df4cb693fbaeb5f3602f4a2de59771f66eaff98726de23f72b7a"
+    }
+  },
+  "dataset_identities": {
+    "labeled": "abcf5f6b0bbab1f94708266f5a0dd3b88dc2a35f7de89c7443a55ebc13b44899",
+    "unlabeled": "e9b8752a6aaebf176e9bc6a8600a89cb1e9e243f8e80ebae591cb1dd98a81906",
+    "val": "94373ad86ce0fd3bc800245dd94c0aad51ab90702a55366fd15aee17f9cdbfb2",
+    "test": "e2ed750a6fb13d96a6a7ee9ea97f360575c9dba655cd19b7309bf29c6e1a2457"
+  },
+  "teacher_score_audio_identity": "50d0d674753a715ea00def01345d3f63e6c875efae6442538c83dd4b506ed2cf",
+  "score_metadata_matches": true,
+  "transformation": "mono 16kHz source -> minimum48000 zero pad, no truncation -> WAV PCM_16",
+  "input_manifest_sha256": "c0099de5b7b6be63709ac4bf0d8b3dd7987dd13aa0322dff5a8b072eab298d32",
+  "provenance_sha256": "2680d470f84092e6d20aecd03fa902d9d71af0682bd9d5416fac55afba4e628f",
+  "restored_on": "2026-11-14",
+  "restoration_record": "restoration_record.json"
+}

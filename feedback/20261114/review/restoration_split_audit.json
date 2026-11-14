@@ -1,0 +1,52 @@
+{
+  "date": "2026-11-14",
+  "filename": "unlabeled_1358.wav",
+  "source_group": "aihub:N-10_221006_A_5_a_16484.wav",
+  "split": "unlabeled",
+  "source_sha256": "f6caae62f7ae06c3e705231a8ec3f69724fcc0ce6f3fea71f82a0da4f1615515",
+  "input_sha256": "667f1910ac25365ea4c5f6383dec129eb594a98e4545d34ee342515df57eaa69",
+  "student_source_overlap": {
+    "train__val": 0,
+    "train__test": 0,
+    "unlabeled__val": 0,
+    "unlabeled__test": 0,
+    "val__test": 0
+  },
+  "same_recording_active_rows": [
+    {
+      "version": "mark4.8",
+      "filename": "dog_bark_val_148.wav",
+      "split": "val",
+      "sha256": "e51b1f160623cc39d86bbafdbc66bebcae228170a1b74305290a71ac5e1d6f3a"
+    },
+    {
+      "version": "mark5.2",
+      "filename": "unlabeled_1358.wav",
+      "split": "unlabeled",
+      "sha256": "f6caae62f7ae06c3e705231a8ec3f69724fcc0ce6f3fea71f82a0da4f1615515"
+    }
+  ],
+  "restored_source_changes_group": false,
+  "new_split_conflict": false,
+  "teacher_val_relation": "Existing Mark4.8 val source-group relation; unchanged by restoration.",
+  "new_partitions": {
+    "101": {
+      "train": 0,
+      "val": 0,
+      "test": 0,
+      "unlabeled": 1
+    },
+    "102": {
+      "train": 0,
+      "val": 0,
+      "test": 0,
+      "unlabeled": 1
+    },
+    "103": {
+      "train": 0,
+      "val": 0,
+      "test": 0,
+      "unlabeled": 1
+    }
+  }
+}

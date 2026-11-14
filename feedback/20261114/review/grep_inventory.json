@@ -1,0 +1,45 @@
+{
+  "files": {
+    "src/feedback_core.py": "ecee7a1461a492c64153ca3a919ea4e9249955c897b1ba5b546d6821caf6239b",
+    "src/third_party/efficientat/helpers/utils.py": "9423bd25f8d38e25b463013d44d35f8ff97492ea4999a281e8df18abd57e8f3e",
+    "src/third_party/efficientat/models/mn/attention_pooling.py": "52b6903d5d62b3639ec609166cd08c36342588bd7988fe41ac72f3cfc496ce4f",
+    "src/third_party/efficientat/models/mn/block_types.py": "e13ae49b6885217d6936d9203567aad1b6cb2f1229979d6d1ae77b836f3d1344",
+    "src/third_party/efficientat/models/mn/model.py": "471b2c482248d782b93881c5e834c0edc23c1e7e6f42a437e4c096b9d8ed4c3e",
+    "src/third_party/efficientat/models/mn/utils.py": "deb551bd854f90ca1473d731de1d7586af9449fc95fd2432f4cc9d0ccd38c11b",
+    "src/third_party/efficientat/models/preprocess.py": "f4d5942eab7b916cb67fdda0f7ddfee152a31fa9a90f0f23ad21019d7a1081cf",
+    "src/vendor/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/vendor/vild_head.py": "97ce6dd177bb431082dd47f2e068768a95d57a76717e860d455ed13b89d21d87",
+    "src/vendor/vild_model.py": "4fc93d84434a6fda8a366c1450150e77695b1dbbeedfcfaeca510e06dc2a51b1",
+    "tests/test_protocol.py": "7a3e5b9b1d0cfdf583fd87329359bf1c447561cc56d73ea1b55a23984a577e09",
+    "tests/test_resume_integrity.py": "f2920a806f20695b64a5839ab6d3f42d3de1b41873a3a38f0f56dd33b4b07bb6",
+    "tools/analyze_audio_revision.py": "ba42dc2958708bb6a2bc5f91204fd4f31c239e0e5c6f6945463e27aca3263072",
+    "tools/build_audio_manifest.py": "20de7cf9fb24d77d36a0de1979e2bd49dba21e91776f83f017fa2df575b3de0f",
+    "tools/build_notebooks.py": "48313f720b899c685f8a6bd2ea94db14cf295381e0694ed0cdf347840e8e067e",
+    "tools/build_provenance.py": "ae758b6423c8c35c7d3b9b150ea50cb4cfd32f9a88b0cdffcfcef042e76920a1",
+    "tools/verify_package.py": "34e7576394494cc725fe6a40f14fc4f8938cc71d0fdefb59ba5b74c86463320b"
+  },
+  "decoded_notebooks": 2,
+  "queries": {
+    "device_and_interrupts": {
+      "matching_lines": 17,
+      "exit_code": 0
+    },
+    "input_and_version": {
+      "matching_lines": 81,
+      "exit_code": 0
+    },
+    "completion_and_resume": {
+      "matching_lines": 89,
+      "exit_code": 0
+    },
+    "split_and_label_use": {
+      "matching_lines": 159,
+      "exit_code": 0
+    },
+    "old_paths_and_placeholders": {
+      "matching_lines": 3,
+      "exit_code": 0
+    }
+  },
+  "embedded_source_verification": "tools/verify_package.py"
+}

@@ -1,0 +1,18 @@
+﻿최종 검증 기록 — 2026-11-14
+
+독립 code-reviewer의 최종 결과는 code_review_final.md에 기록한다.
+전체 구현 검사: pytest 13개 통과. 실제 음원 연구 학습 없이 합성 CPU 재개 검사와 모델 forward/backward 검사를 수행했다.
+음원 복원 후 메타데이터·라벨·분할 관련 재검사: 8개 통과, 변경 없는 모델 검사 1개 제외.
+
+ripgrep 전수검색: Python 파일 17개와 노트북 2개에서 추출한 모든 실행 셀을 대상으로 5개 검색군, 총 349개 일치 줄을 확인했다.
+내장 ZIP은 모든 src 파일과 바이트를 대조한다. grep_full_matches.txt와 grep_inventory.json에 검색식·전체 일치 줄·대상 파일 해시를 남겼다.
+- 장치/중단: CUDA 호출은 사용 가능 여부/선택한 장치로 분기한다. CPU 강제중단이나 실행 timeout은 없다. vendor autocast(enabled=False)는 CPU 실행 검사에 포함됐다.
+- 입력/버전: 원본 SHA와 실제 PCM_16 입력 SHA를 분리하고 교사8개, 점수CSV, 모든 입력의 신원을 검사한다.
+- 완료/재개: best_model·history·RNG와 optimizer/scheduler를 하나의 last.pt에 저장한다. 11개 완료 파일 해시를 검사하고 집계에서도 재검사한다.
+- 분할/라벨: U 정답은 비우고, Oracle은 교사 TRAIN 출처 라벨만 사용한다. 새VAL/TEST는 teacher TRAIN/VAL 및 U 출처 그룹과 겹치지 않는다.
+- 옛경로/미구현: 실행 코드에 /mnt/d 하드코딩, AImodels, 옛v1 결과 경로, 삭제된 fresh_teacher_scores 참조, TODO/FIXME가 없다. 검색된 NotImplementedError 3개는 upstream이 지원하지 않는 옵션을 거부하는 분기이며 실제 사용 옵션의 CPU 모델 검사를 통과했다.
+
+복원된1358 원본→PCM_16 해시와 기존 Drive 입력이 일치한다. 교사 점수 입력 신원50d0d674…도 유지된다. 학생 split 및 새3개분할에서 새 출처 중복은 없다. 기존 교사Mark4.8 VAL과 동일원본 관계는 복원 이력에 명시했다.
+5번 통계 재계산은 기존 예측40개를 대상으로 실행했다.
+
+실제 Colab/L4 장시간 추가실험은 아직 실행하지 않았다. 노트북과 코드 검증은 새 연구 성능 결과가 아니다.

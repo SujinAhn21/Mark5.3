@@ -1,0 +1,16 @@
+﻿5번 자료 — 재학습 없이 완료한 통계 계산
+
+먼저 5번_통계검토결과.txt를 읽으면 된다.
+paired_ci_results.csv: 정답 수 4조건 × Accuracy/Macro-F1, 두 모델 평균과 차이, 95% CI.
+paired_seed_metrics.csv: 각 조건의 seed 1~5별 지표.
+원자료/: KAMPA 20개, EfficientAT 20개 시험 예측 CSV와 430개 시험 클립의 출처 그룹.
+input_audit.json: 입력 파일 SHA-256 기록.
+재계산_paired_statistics.py: numpy, pandas, scipy가 설치된 Python에서 실행할 수 있다.
+명령: python 재계산_paired_statistics.py
+
+같은 시험 음원과 출처 그룹을 두 모델에 함께 적용하는 paired cluster bootstrap 10,000회다.
+다섯 학습 모델씩은 고정한다. seed×clip을 독립 2,150개 표본으로 처리하지 않는다.
+이 CI는 새로운 학습 분할 전체의 불확실성이나 새로운 집·기기의 일반화를 나타내지 않는다.
+원고에 결과를 삽입하거나 원고 파일을 변경하는 작업은 아직 하지 않았다.
+
+추가 입력 검증: 시험430개는 실제 Drive 입력의 SHA와 원본→PCM_16 변환이 모두 일치한다. KAMPA 평가 입력신원20개와 연결했다. EfficientAT는 동일 입력경로·실행로그·예측정확도를 대조했으며 당시 음원별 SHA 기록은 없다. 상세 근거는 상위 review/input_encoding_audit.json 및 efficientat_input_provenance.json에 보관한다.
