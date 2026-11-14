@@ -14,7 +14,7 @@
     "tests/test_resume_integrity.py": "f2920a806f20695b64a5839ab6d3f42d3de1b41873a3a38f0f56dd33b4b07bb6",
     "tools/analyze_audio_revision.py": "ba42dc2958708bb6a2bc5f91204fd4f31c239e0e5c6f6945463e27aca3263072",
     "tools/build_audio_manifest.py": "20de7cf9fb24d77d36a0de1979e2bd49dba21e91776f83f017fa2df575b3de0f",
-    "tools/build_notebooks.py": "48313f720b899c685f8a6bd2ea94db14cf295381e0694ed0cdf347840e8e067e",
+    "tools/build_notebooks.py": "ea63858b373138b3ee59e83a8ade83de3ac4aca50942e766d4888381b5db0d05",
     "tools/build_provenance.py": "ae758b6423c8c35c7d3b9b150ea50cb4cfd32f9a88b0cdffcfcef042e76920a1",
     "tools/verify_package.py": "34e7576394494cc725fe6a40f14fc4f8938cc71d0fdefb59ba5b74c86463320b"
   },

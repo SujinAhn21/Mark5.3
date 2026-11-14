@@ -1,0 +1,45 @@
+{
+  "date": "2026-11-14",
+  "change": "User requested changing the default LABEL_BUDGETS in both notebooks to [200,2000].",
+  "verified_by": "Primary agent; configuration verification, not a new independent code-reviewer run.",
+  "notebooks": [
+    {
+      "notebook": "01_피드백1~3_추가실험.ipynb",
+      "sha256": "cf9566144f797e2be2805009dbf97e6f081fda8e2c89392f0f9f13227e83b3ec",
+      "label_budgets": [
+        200,
+        2000
+      ],
+      "runs": 90,
+      "per_budget": {
+        "200": 45,
+        "2000": 45
+      }
+    },
+    {
+      "notebook": "02_피드백4_출처별_재분할검증.ipynb",
+      "sha256": "60fcc4ae555da882ddaf85bc9ce00681ffe0236c1c723cf8599e4b9370484d03",
+      "label_budgets": [
+        200,
+        2000
+      ],
+      "runs": 60,
+      "per_budget": {
+        "200": 30,
+        "2000": 30
+      }
+    }
+  ],
+  "total_runs": 150,
+  "source_zip_unchanged_sha256": "45342d1b0e8cf9f4f8fa946daa6c4e6ef39b4ffbb9225c6f0602ff4281592bf3",
+  "engine_sha256": "ecee7a1461a492c64153ca3a919ea4e9249955c897b1ba5b546d6821caf6239b",
+  "builder_sha256": "ea63858b373138b3ee59e83a8ade83de3ac4aca50942e766d4888381b5db0d05",
+  "checks": [
+    "nbformat validation",
+    "All code cells AST parsed",
+    "Budget literals [200,2000] in both notebooks",
+    "Actual recipe_plan gives 90 and 60",
+    "Embedded ZIP identical to previously reviewed source"
+  ],
+  "research_training_performed": false
+}

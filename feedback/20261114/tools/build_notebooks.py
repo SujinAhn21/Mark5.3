@@ -47,13 +47,13 @@ with zipfile.ZipFile(io.BytesIO(archive)) as z:
 # 매번 묶음에서 복원하므로 이전 실행 코드가 섞이지 않습니다.
 print("실행 코드 준비 완료:", PACKAGE)
 ''')
-        md('## 3. 실행 범위와 저장 위치\n기본은 N=200입니다. N=[200, 2000]으로 확장하면 이미 완료한 N=200 회차는 검증 후 건너뜁니다.')
+        md('## 3. 실행 범위와 저장 위치\n기본은 N=[200, 2000]입니다. 두 라벨 수를 모두 실행하며, 같은 환경과 설정으로 이미 완료한 회차는 검증 후 건너뜁니다.')
         code(f'''PROJECT_ROOT = Path("/content/drive/MyDrive/NewProject/codes/experiments/Mark5.3")
 probe = subprocess.run([sys.executable, "-c", "import json; from feedback_core import runtime_metadata; print(json.dumps(runtime_metadata(),sort_keys=True))"], cwd=PACKAGE, capture_output=True, text=True, check=True)
 RUNTIME = json.loads(probe.stdout)
 RUNTIME_ID = hashlib.sha256(json.dumps(RUNTIME,sort_keys=True).encode()).hexdigest()[:12]
 OUTPUT_ROOT = PROJECT_ROOT.parent / "KAMPA_feedback_20261114_v2" / RUNTIME_ID / "{stage}"
-LABEL_BUDGETS = [200]
+LABEL_BUDGETS = [200, 2000]
 TRAIN_SEEDS = [1, 2, 3, 4, 5]
 SPLIT_SEEDS = {('[101, 102, 103]' if stage=='4' else '[]')}
 CONFIG = dict(root=str(PROJECT_ROOT),output=str(OUTPUT_ROOT),stage="{stage}",
